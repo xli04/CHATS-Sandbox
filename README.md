@@ -2,6 +2,34 @@
 
 General-purpose sandbox plugin for Claude Code. Automatically backs up state before destructive tool calls, enforces safety policies, and logs effect manifests.
 
+## Quick Start
+
+```bash
+# Install
+npm install chats-sandbox
+npx chats-sandbox install
+
+# That's it. CHATS-Sandbox now runs automatically before every Claude Code tool call.
+# It will:
+#   - Block dangerous commands (rm -rf /, fork bombs, etc.)
+#   - Backup state before destructive actions (file edits, pip install, git push, etc.)
+#   - Log what each tool call changed
+
+# See what's been backed up
+npx chats-sandbox status
+
+# Something went wrong? Restore to a previous state
+npx chats-sandbox restore        # list available restore points
+npx chats-sandbox restore 3      # restore to interaction 3
+npx chats-sandbox diff 3         # preview what changed since interaction 3
+
+# Turn it off when you don't need the overhead
+npx chats-sandbox config set enabled false
+
+# Or uninstall entirely
+npx chats-sandbox uninstall
+```
+
 ## How It Works
 
 CHATS-Sandbox hooks into Claude Code's `PreToolUse` and `PostToolUse` lifecycle events. Before any tool call executes, it decides whether to deny, backup, or pass through.
