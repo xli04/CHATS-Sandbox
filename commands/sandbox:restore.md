@@ -1,3 +1,8 @@
+---
+description: Reverse-loop restore to a previous interaction (undo step by step)
+argument-hint: "[interaction_number] [--file <path>]"
+---
+
 Restore the workspace to a previous interaction state using reverse-loop restore.
 
 If no argument is provided, first list available restore points:

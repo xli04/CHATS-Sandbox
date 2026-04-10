@@ -1,3 +1,7 @@
+---
+description: Show CHATS-Sandbox state (enabled, backup mode, interaction count)
+---
+
 Show the current CHATS-Sandbox status. Run this command:
 
 ```bash

@@ -1,3 +1,8 @@
+---
+description: Show or update CHATS-Sandbox configuration
+argument-hint: "[set <key> <value>]"
+---
+
 Show or update CHATS-Sandbox configuration.
 
 To show current config:

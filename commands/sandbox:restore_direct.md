@@ -1,3 +1,8 @@
+---
+description: Direct jump restore to an interaction's snapshot (fast, workspace only)
+argument-hint: "[interaction_number]"
+---
+
 Directly jump to an interaction's snapshot (fast workspace restore).
 
 If no argument is provided, list available restore points:
