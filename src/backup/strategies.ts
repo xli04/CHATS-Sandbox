@@ -23,15 +23,35 @@ import * as path from "node:path";
 import { execSync } from "node:child_process";
 import type { BackupArtifact, HookContext, SandboxConfig } from "../types.js";
 
-// ── Interaction folder management ────────────────────────────────────
+// ── Interaction folder management (LAZY) ─────────────────────────────
 
+// _pendingInteractionId holds the name of the NEXT interaction to create
+// if a backup actually happens. _currentInteractionDir is only populated
+// AFTER we create a real artifact (lazy creation).
+let _pendingInteractionName: string | null = null;
 let _currentInteractionDir: string | null = null;
 let _currentInteractionId: string | null = null;
 
 /**
- * Get or create the interaction folder for this user turn.
+ * Prepare a pending interaction name. The folder is NOT created yet —
+ * it will only be created if a backup artifact is actually produced.
  */
-export function ensureInteractionDir(config: SandboxConfig): string {
+function preparePendingInteraction(config: SandboxConfig): string {
+  if (_pendingInteractionName) return _pendingInteractionName;
+
+  const backupRoot = path.resolve(config.backupDir);
+  const existing = listInteractionDirs(backupRoot);
+  const seq = String(existing.length + 1).padStart(3, "0");
+  const ts = new Date().toISOString().replace(/[-:T]/g, "").slice(0, 14);
+  _pendingInteractionName = `interaction_${seq}_${ts}`;
+  return _pendingInteractionName;
+}
+
+/**
+ * Actually create the interaction folder on disk. Called only when we
+ * know we have something to back up. Idempotent.
+ */
+function materializeInteractionDir(config: SandboxConfig): string {
   if (_currentInteractionDir && fs.existsSync(_currentInteractionDir)) {
     return _currentInteractionDir;
   }
@@ -41,11 +61,7 @@ export function ensureInteractionDir(config: SandboxConfig): string {
     fs.mkdirSync(backupRoot, { recursive: true });
   }
 
-  const existing = listInteractionDirs(backupRoot);
-  const seq = String(existing.length + 1).padStart(3, "0");
-  const ts = new Date().toISOString().replace(/[-:T]/g, "").slice(0, 14);
-
-  const dirName = `interaction_${seq}_${ts}`;
+  const dirName = _pendingInteractionName ?? preparePendingInteraction(config);
   const dirPath = path.join(backupRoot, dirName);
   fs.mkdirSync(dirPath, { recursive: true });
 
@@ -58,6 +74,7 @@ export function ensureInteractionDir(config: SandboxConfig): string {
 }
 
 export function resetInteraction(): void {
+  _pendingInteractionName = null;
   _currentInteractionDir = null;
   _currentInteractionId = null;
 }
@@ -85,6 +102,54 @@ function pruneInteractions(backupRoot: string, max: number): void {
       // best-effort
     }
   }
+}
+
+// ── Shared shadow git repo ───────────────────────────────────────────
+
+/**
+ * Single shared shadow git repo for the whole project. All snapshots
+ * are commits in this one repo, which means:
+ *   - Git deduplication across all interactions (space-efficient)
+ *   - A snapshot is only created if there are actual changes
+ *   - Diffing between any two interactions is a native git diff
+ */
+function getSharedShadowRepo(config: SandboxConfig): string {
+  const backupRoot = path.resolve(config.backupDir);
+  return path.join(path.dirname(backupRoot), "shadow-repo");
+}
+
+function ensureSharedShadowRepo(config: SandboxConfig): string {
+  const shadowDir = getSharedShadowRepo(config);
+  if (fs.existsSync(path.join(shadowDir, "HEAD"))) {
+    return shadowDir;
+  }
+
+  fs.mkdirSync(shadowDir, { recursive: true });
+  const cwd = process.cwd();
+  const env = { ...process.env, GIT_DIR: shadowDir, GIT_WORK_TREE: cwd };
+  const execOpts = { encoding: "utf-8" as const, timeout: 30_000, env, cwd };
+
+  try {
+    execSync("git init", { ...execOpts, stdio: "pipe" });
+    execSync('git config user.email "chats-sandbox@local"', { ...execOpts, stdio: "pipe" });
+    execSync('git config user.name "CHATS-Sandbox"', { ...execOpts, stdio: "pipe" });
+
+    const infoDir = path.join(shadowDir, "info");
+    fs.mkdirSync(infoDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(infoDir, "exclude"),
+      [
+        "node_modules/", ".git/", "dist/", "build/", "__pycache__/",
+        "*.pyc", ".env", ".env.*", ".venv/", "venv/", ".cache/",
+        ".chats-sandbox/",
+      ].join("\n") + "\n",
+      "utf-8"
+    );
+  } catch {
+    // best-effort init
+  }
+
+  return shadowDir;
 }
 
 // ── Shell helper ─────────────────────────────────────────────────────
@@ -243,56 +308,45 @@ function tryTargetedManifest(
 }
 
 // =====================================================================
-// 2nd Level: git add -A snapshot (full workspace, git-compressed)
+// 2nd Level: git add -A snapshot in SHARED shadow repo
 // =====================================================================
 
 /**
- * Full workspace snapshot via shadow git repo.
- * Git's content-addressable storage + zlib compression makes this
- * more space-efficient than raw file copies across multiple snapshots.
+ * Commit to the shared shadow repo only if there are actual changes
+ * since the last commit. Returns null if the workspace is unchanged
+ * (this is how we skip snapshots for read-only actions automatically).
  */
 function gitSnapshotBackup(
-  interactionDir: string,
-  ctx: HookContext
+  ctx: HookContext,
+  config: SandboxConfig
 ): BackupArtifact | null {
-  const shadowDir = path.join(interactionDir, "git_snapshot");
-  fs.mkdirSync(shadowDir, { recursive: true });
-
+  const shadowDir = ensureSharedShadowRepo(config);
   const cwd = process.cwd();
-  const env = {
-    ...process.env,
-    GIT_DIR: shadowDir,
-    GIT_WORK_TREE: cwd,
-  };
+  const env = { ...process.env, GIT_DIR: shadowDir, GIT_WORK_TREE: cwd };
   const execOpts = { encoding: "utf-8" as const, timeout: 30_000, env, cwd };
 
   try {
-    execSync("git init", { ...execOpts, stdio: "pipe" });
-    execSync('git config user.email "chats-sandbox@local"', { ...execOpts, stdio: "pipe" });
-    execSync('git config user.name "CHATS-Sandbox"', { ...execOpts, stdio: "pipe" });
-
-    // Default excludes to skip noise
-    const infoDir = path.join(shadowDir, "info");
-    fs.mkdirSync(infoDir, { recursive: true });
-    fs.writeFileSync(
-      path.join(infoDir, "exclude"),
-      [
-        "node_modules/", ".git/", "dist/", "build/", "__pycache__/",
-        "*.pyc", ".env", ".env.*", ".venv/", "venv/", ".cache/",
-        ".chats-sandbox/",
-      ].join("\n") + "\n",
-      "utf-8"
-    );
-
     execSync("git add -A", { ...execOpts, stdio: "pipe" });
 
-    // Check if there's anything to commit
-    const diffResult = execSync("git diff --cached --quiet || echo CHANGES", {
-      ...execOpts,
-      stdio: "pipe",
-    });
-    if (!diffResult.includes("CHANGES")) {
-      return null; // Nothing to snapshot
+    // Check if there are staged changes vs the previous commit.
+    // If the repo has no commits yet, there's always "changes" to commit.
+    let hasChanges = false;
+    try {
+      execSync("git rev-parse HEAD", { ...execOpts, stdio: "pipe" });
+      // Repo has at least one commit — compare against HEAD
+      const diffResult = execSync(
+        "git diff --cached --quiet || echo CHANGES",
+        { ...execOpts, stdio: "pipe" }
+      );
+      hasChanges = diffResult.includes("CHANGES");
+    } catch {
+      // No HEAD yet (first commit). Check if there's anything staged at all.
+      const status = execSync("git status --porcelain", { ...execOpts, stdio: "pipe" });
+      hasChanges = status.trim().length > 0;
+    }
+
+    if (!hasChanges) {
+      return null; // No change → no snapshot (this is the fix for read-only noise)
     }
 
     const reason = `before ${ctx.tool_name}`;
@@ -416,73 +470,76 @@ export interface BackupResult {
 /**
  * Run backup strategies in priority order:
  *   1st: Targeted manifest (pip freeze, npm list, git tag, env snapshot)
- *   2nd: git add -A (workspace snapshot)
+ *   2nd: git add -A in SHARED shadow repo (only commits if workspace changed)
  *   3rd: Subagent needed — when action touches outside workspace AND
- *        no targeted manifest covered it, OR when both 1st and 2nd failed.
+ *        no targeted manifest covered it.
+ *
+ * Interaction folders are created LAZILY — only if a real artifact is produced.
+ * Read-only actions produce no artifact → no folder → no noise.
  */
 export function runBackup(
   ctx: HookContext,
   config: SandboxConfig
 ): BackupResult {
-  const interactionDir = ensureInteractionDir(config);
+  // Reserve a pending interaction name but don't create the folder yet.
+  preparePendingInteraction(config);
   const result: BackupResult = { artifacts: [], needsSubagent: false };
 
   const outsideWorkspace = touchesOutsideWorkspace(ctx);
 
-  // ── 1st level: targeted manifest ───────────────────────────────
-  const targeted = tryTargetedManifest(ctx, interactionDir);
-  if (targeted) {
-    result.artifacts.push(targeted);
-    writeMetadata(interactionDir, targeted);
-    // Targeted manifest covers the outside-workspace part.
-    // If the action ALSO modifies workspace files, add git add -A too.
-    if (outsideWorkspace) {
-      // Targeted manifest handled the outside part (e.g. pip freeze).
-      // Still snapshot workspace in case files were also modified.
-      const gitSnapshot = gitSnapshotBackup(interactionDir, ctx);
-      if (gitSnapshot) {
-        result.artifacts.push(gitSnapshot);
-        writeMetadata(interactionDir, gitSnapshot);
-      }
-    }
-    return result;
-  }
-
-  // ── 2nd level: git add -A ──────────────────────────────────────
-  const gitSnapshot = gitSnapshotBackup(interactionDir, ctx);
+  // ── 2nd level: git add -A (runs first because it's the cheap check) ──
+  // If the workspace hasn't changed, this returns null and no folder is made.
+  const gitSnapshot = gitSnapshotBackup(ctx, config);
   if (gitSnapshot) {
+    const dir = materializeInteractionDir(config);
     result.artifacts.push(gitSnapshot);
-    writeMetadata(interactionDir, gitSnapshot);
+    writeMetadata(dir, gitSnapshot);
   }
 
-  // If the action touches outside-workspace AND no targeted manifest
-  // covered it → we need the subagent to figure out what to backup.
-  if (outsideWorkspace) {
-    const command = String(ctx.tool_input.command ?? JSON.stringify(ctx.tool_input));
+  // ── 1st level: targeted manifest (runs second, supplements git snapshot) ─
+  // Only relevant for known patterns. Materializes folder only if it fires.
+  const targetedFn = () => {
+    const dir = materializeInteractionDir(config);
+    return tryTargetedManifest(ctx, dir);
+  };
+  const command = String(ctx.tool_input.command ?? "");
+  const hasTargetedPattern =
+    /pip3?\s+(install|uninstall)/i.test(command) ||
+    /npm\s+(install|uninstall|remove)/i.test(command) ||
+    /\b(export|unset|source\s+\.env)/i.test(command) ||
+    /git\s+(push|rebase|reset|commit\s+--amend)/i.test(command);
+
+  if (hasTargetedPattern) {
+    const targeted = targetedFn();
+    if (targeted) {
+      const dir = materializeInteractionDir(config);
+      result.artifacts.push(targeted);
+      writeMetadata(dir, targeted);
+    }
+  }
+
+  // ── 3rd level: need subagent for outside-workspace state ───────
+  if (outsideWorkspace && !hasTargetedPattern) {
+    const cmdStr = String(ctx.tool_input.command ?? JSON.stringify(ctx.tool_input));
     result.needsSubagent = true;
     result.subagentReason =
-      `Action "${ctx.tool_name}(${command.slice(0, 200)})" affects state outside the workspace (${process.cwd()}). ` +
+      `Action "${ctx.tool_name}(${cmdStr.slice(0, 200)})" affects state outside the workspace (${process.cwd()}). ` +
       `No predefined backup strategy matched. ` +
       (gitSnapshot
         ? `Workspace files were captured via git snapshot. `
-        : `git snapshot also failed. `) +
+        : `No workspace changes detected. `) +
       `Please create a minimal recovery artifact for the out-of-workspace state before this action executes.`;
     return result;
   }
 
-  // git add -A succeeded and action is workspace-only → done
-  if (gitSnapshot) {
+  // If we have any artifact, we're done — no subagent needed.
+  if (result.artifacts.length > 0) {
     return result;
   }
 
-  // ── Both failed, no outside-workspace detected ─────────────────
-  // Still call subagent as last resort
-  const command = String(ctx.tool_input.command ?? JSON.stringify(ctx.tool_input));
-  result.needsSubagent = true;
-  result.subagentReason =
-    `No backup strategy worked for: ${ctx.tool_name}(${command.slice(0, 200)}). ` +
-    `Please create a minimal recovery artifact before this action executes.`;
-
+  // No artifact produced and no outside-workspace effect detected →
+  // this was a read-only action. Return empty result silently —
+  // no folder, no noise, no subagent.
   return result;
 }
 
