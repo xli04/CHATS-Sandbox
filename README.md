@@ -5,19 +5,27 @@ General-purpose sandbox plugin for Claude Code. Automatically backs up state bef
 ## Quick Start
 
 ```bash
-npm install chats-sandbox
-npx chats-sandbox install
+# Clone, build, and link globally
+git clone https://github.com/xli04/CHATS-Sandbox.git
+cd CHATS-Sandbox
+npm install
+npm run build
+npm link
+
+# Go to your project and install the hooks
+cd /path/to/your/project
+chats-sandbox install
 
 # Done. Runs automatically on every Claude Code tool call.
 # Blocks dangerous commands, backs up before destructive actions, logs effects.
 
-npx chats-sandbox status             # see what's been backed up
-npx chats-sandbox restore            # list restore points
-npx chats-sandbox restore 3          # reverse-loop restore to interaction 3
-npx chats-sandbox restore_direct 3   # direct jump to interaction 3's snapshot
-npx chats-sandbox diff 3             # preview changes since interaction 3
-npx chats-sandbox config set enabled false  # turn off
-npx chats-sandbox uninstall          # remove hooks entirely
+chats-sandbox status             # see what's been backed up
+chats-sandbox restore            # list restore points
+chats-sandbox restore 3          # reverse-loop restore to interaction 3
+chats-sandbox restore_direct 3   # direct jump to interaction 3's snapshot
+chats-sandbox diff 3             # preview changes since interaction 3
+chats-sandbox config set enabled false  # turn off
+chats-sandbox uninstall          # remove hooks entirely
 ```
 
 ## How It Works
