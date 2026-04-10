@@ -15,6 +15,7 @@ export { evaluate } from "./engine/rules.js";
 export { runBackup } from "./backup/strategies.js";
 export { captureEffect, logEffect } from "./engine/effects.js";
 export { loadManifest, appendToManifest } from "./backup/manifest.js";
+export { restoreArtifact, restoreInteraction, listRestorableInteractions } from "./restore/restore.js";
 export type {
   SandboxConfig,
   BackupArtifact,

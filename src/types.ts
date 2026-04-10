@@ -113,11 +113,15 @@ export interface BackupArtifact {
   /** Human-readable description of what was backed up */
   description: string;
   /** Strategy used */
-  strategy: "file_copy" | "git_tag" | "pip_freeze" | "npm_list" | "env_snapshot" | "git_snapshot";
+  strategy: "file_copy" | "git_tag" | "pip_freeze" | "npm_list" | "env_snapshot" | "git_snapshot" | "subagent";
   /** Where the backup artifact lives */
   artifactPath: string;
   /** Size in bytes (if applicable) */
   sizeBytes?: number;
+  /** Commands the subagent ran to create this backup (tier 3 only) */
+  subagentCommands?: string[];
+  /** The original action that was about to execute (for restore context) */
+  originalAction?: string;
 }
 
 // ── Effect manifest entry ────────────────────────────────────────────

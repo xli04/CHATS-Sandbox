@@ -238,6 +238,134 @@ function listBackups(projectRoot: string): void {
   }
 }
 
+// ── Restore ──────────────────────────────────────────────────────────
+
+function restoreCommand(projectRoot: string, interactionArg?: string, fileArg?: string): void {
+  const { listRestorableInteractions, restoreInteraction } = require("./restore/restore.js");
+  const config = loadConfig(projectRoot);
+
+  // No argument → list all restorable interactions
+  if (!interactionArg) {
+    const interactions = listRestorableInteractions(config) as Array<{
+      name: string;
+      artifacts: Array<{ strategy: string; description: string; timestamp: string }>;
+    }>;
+
+    if (interactions.length === 0) {
+      console.log("No interactions to restore.");
+      return;
+    }
+
+    console.log("Restorable interactions:\n");
+    for (let i = 0; i < interactions.length; i++) {
+      const inter = interactions[i];
+      const strategies = inter.artifacts.map((a) => a.strategy).join(", ");
+      const ts = inter.artifacts[0]?.timestamp?.split("T")[1]?.slice(0, 5) ?? "";
+      console.log(`  ${i + 1}. ${inter.name}  [${strategies}]`);
+      for (const a of inter.artifacts) {
+        const badge = a.strategy === "subagent" ? " (needs subagent)" : "";
+        console.log(`     - ${a.description}${badge}`);
+      }
+    }
+
+    console.log("\nUsage:");
+    console.log("  chats-sandbox restore <N>              Restore interaction N");
+    console.log("  chats-sandbox restore <N> --file <path> Restore single file");
+    return;
+  }
+
+  // Parse interaction number (1-indexed)
+  const interactions = listRestorableInteractions(config) as Array<{
+    name: string;
+    artifacts: Array<{ strategy: string }>;
+  }>;
+  const idx = parseInt(interactionArg, 10) - 1;
+
+  if (isNaN(idx) || idx < 0 || idx >= interactions.length) {
+    console.error(`Invalid interaction number: ${interactionArg}. Use 1-${interactions.length}.`);
+    process.exit(1);
+  }
+
+  const target = interactions[idx];
+  console.log(`Restoring interaction: ${target.name}\n`);
+
+  const results = restoreInteraction(target.name, config, fileArg ? { fileOnly: fileArg } : undefined) as Array<{
+    success: boolean;
+    description: string;
+    subagentPrompt?: string;
+  }>;
+
+  for (const r of results) {
+    const icon = r.success ? "OK" : "FAIL";
+    console.log(`  [${icon}] ${r.description}`);
+
+    if (r.subagentPrompt) {
+      console.log("\n  --- Subagent restore needed ---");
+      console.log("  The following prompt should be sent to a subagent:\n");
+      console.log(r.subagentPrompt.split("\n").map((l) => `    ${l}`).join("\n"));
+      console.log();
+    }
+  }
+}
+
+// ── Diff ─────────────────────────────────────────────────────────────
+
+function diffCommand(projectRoot: string, interactionArg?: string): void {
+  const config = loadConfig(projectRoot);
+  const { listRestorableInteractions } = require("./restore/restore.js");
+  const interactions = listRestorableInteractions(config) as Array<{
+    name: string;
+    artifacts: Array<{ strategy: string; artifactPath: string }>;
+  }>;
+
+  if (!interactionArg) {
+    console.error("Usage: chats-sandbox diff <N>  — diff between interaction N and current state");
+    return;
+  }
+
+  const idx = parseInt(interactionArg, 10) - 1;
+  if (isNaN(idx) || idx < 0 || idx >= interactions.length) {
+    console.error(`Invalid interaction number. Use 1-${interactions.length}.`);
+    return;
+  }
+
+  const target = interactions[idx];
+  const snapshot = target.artifacts.find((a) => a.strategy === "git_snapshot");
+
+  if (!snapshot) {
+    console.log(`No git snapshot in ${target.name} — cannot diff.`);
+    return;
+  }
+
+  const shadowDir = snapshot.artifactPath;
+  const { execSync } = require("node:child_process");
+  const cwd = process.cwd();
+
+  try {
+    // Stage current state in shadow repo to diff against snapshot
+    const env = { ...process.env, GIT_DIR: shadowDir, GIT_WORK_TREE: cwd };
+    const opts = { encoding: "utf-8" as const, timeout: 30_000, env, cwd, stdio: "pipe" as const };
+
+    execSync("git add -A", opts);
+    const diff = execSync("git diff --cached --stat HEAD", opts).trim();
+    const fullDiff = execSync("git diff --cached HEAD --no-color", opts).trim();
+    execSync("git reset HEAD --quiet", opts);
+
+    if (!diff) {
+      console.log(`No changes between ${target.name} and current state.`);
+      return;
+    }
+
+    console.log(`Changes since ${target.name}:\n`);
+    console.log(diff);
+    console.log("\n--- Full diff ---\n");
+    console.log(fullDiff);
+  } catch (e: unknown) {
+    const msg = e instanceof Error ? e.message : String(e);
+    console.error(`Diff failed: ${msg.slice(0, 200)}`);
+  }
+}
+
 // ── Main ─────────────────────────────────────────────────────────────
 
 const args = process.argv.slice(2);
@@ -264,15 +392,28 @@ switch (command) {
   case "backups":
     listBackups(projectRoot);
     break;
+  case "restore": {
+    const fileIdx = args.indexOf("--file");
+    const fileArg = fileIdx !== -1 ? args[fileIdx + 1] : undefined;
+    restoreCommand(projectRoot, args[1], fileArg);
+    break;
+  }
+  case "diff":
+    diffCommand(projectRoot, args[1]);
+    break;
   default:
     console.log("CHATS-Sandbox — General-purpose sandbox for Claude Code\n");
     console.log("Usage: chats-sandbox <command>\n");
     console.log("Commands:");
-    console.log("  install                    Wire hooks into .claude/settings.json");
-    console.log("  uninstall                  Remove hooks");
-    console.log("  config                     Show configuration");
-    console.log("  config set <key> <value>   Set a config value");
-    console.log("  status                     Show sandbox state");
-    console.log("  backups                    List recent backup artifacts");
+    console.log("  install                         Wire hooks into .claude/settings.json");
+    console.log("  uninstall                       Remove hooks");
+    console.log("  config                          Show configuration");
+    console.log("  config set <key> <value>        Set a config value");
+    console.log("  status                          Show sandbox state");
+    console.log("  backups                         List recent backup artifacts");
+    console.log("  restore                         List restorable interactions");
+    console.log("  restore <N>                     Restore interaction N");
+    console.log("  restore <N> --file <path>       Restore single file from interaction N");
+    console.log("  diff <N>                        Diff interaction N vs current state");
     break;
 }
