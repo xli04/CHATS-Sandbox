@@ -42,11 +42,24 @@ Hooks into Claude Code's `PreToolUse` and `PostToolUse` events. Before any tool 
 
 The sandbox inspects tool call arguments to detect if the action affects state outside the current workspace. Only out-of-workspace actions that aren't covered by a targeted manifest trigger the subagent.
 
-## Commands
+## Slash Commands (inside Claude Code)
+
+After install, these are available directly in Claude Code:
+
+```
+/sandbox:status              Show sandbox state
+/sandbox:restore             Reverse-loop restore to a previous interaction
+/sandbox:restore_direct      Direct jump to an interaction's snapshot
+/sandbox:diff                Diff an interaction vs current state
+/sandbox:backups             List backup artifacts
+/sandbox:config              Show/edit configuration
+```
+
+## CLI Commands (terminal)
 
 ```bash
-chats-sandbox install                         # Wire hooks into .claude/settings.json
-chats-sandbox uninstall                       # Remove hooks
+chats-sandbox install                         # Wire hooks + slash commands
+chats-sandbox uninstall                       # Remove hooks + slash commands
 chats-sandbox status                          # Show sandbox state
 chats-sandbox config                          # Show configuration
 chats-sandbox config set <key> <value>        # Set a config value

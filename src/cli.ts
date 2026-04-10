@@ -109,6 +109,20 @@ function install(projectRoot: string): void {
   }
   saveConfig(DEFAULT_CONFIG, projectRoot);
 
+  // Install slash commands into .claude/commands/
+  const commandsSrcDir = path.join(pkgRoot, "..", "commands");
+  const commandsDestDir = path.join(projectRoot, ".claude", "commands");
+  if (fs.existsSync(commandsSrcDir)) {
+    if (!fs.existsSync(commandsDestDir)) {
+      fs.mkdirSync(commandsDestDir, { recursive: true });
+    }
+    const cmdFiles = fs.readdirSync(commandsSrcDir).filter((f: string) => f.endsWith(".md"));
+    for (const f of cmdFiles) {
+      fs.copyFileSync(path.join(commandsSrcDir, f), path.join(commandsDestDir, f));
+    }
+    console.log(`  Slash commands installed: ${cmdFiles.map((f: string) => "/" + f.replace(".md", "")).join(", ")}`);
+  }
+
   // Add .chats-sandbox to .gitignore if not already there
   const gitignorePath = path.join(projectRoot, ".gitignore");
   const gitignoreEntry = ".chats-sandbox/";
@@ -123,6 +137,14 @@ function install(projectRoot: string): void {
   console.log(`  Hooks wired into ${CLAUDE_SETTINGS_PATH}`);
   console.log(`  Config at ${configDir}/config.json`);
   console.log(`  Backups will be stored in ${DEFAULT_CONFIG.backupDir}/`);
+  console.log("");
+  console.log("Slash commands available in Claude Code:");
+  console.log("  /sandbox:status          Show sandbox state");
+  console.log("  /sandbox:restore         Reverse-loop restore");
+  console.log("  /sandbox:restore_direct  Direct jump restore");
+  console.log("  /sandbox:diff            Diff against interaction");
+  console.log("  /sandbox:backups         List backup artifacts");
+  console.log("  /sandbox:config          Show/edit configuration");
   console.log("");
   console.log("To configure: chats-sandbox config");
   console.log("To disable:   chats-sandbox uninstall");
@@ -154,8 +176,20 @@ function uninstall(projectRoot: string): void {
   settings.hooks = hooks;
   saveClaudeSettings(projectRoot, settings);
 
+  // Remove slash commands
+  const commandsDir = path.join(projectRoot, ".claude", "commands");
+  const sandboxCmds = ["sandbox:status.md", "sandbox:restore.md", "sandbox:restore_direct.md",
+    "sandbox:diff.md", "sandbox:backups.md", "sandbox:config.md"];
+  for (const f of sandboxCmds) {
+    const p = path.join(commandsDir, f);
+    if (fs.existsSync(p)) {
+      fs.unlinkSync(p);
+    }
+  }
+
   console.log("CHATS-Sandbox uninstalled.");
   console.log("  Hooks removed from .claude/settings.json");
+  console.log("  Slash commands removed from .claude/commands/");
   console.log("  Config and backups left in .chats-sandbox/ (delete manually if desired)");
 }
 
