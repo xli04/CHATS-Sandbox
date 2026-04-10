@@ -5,34 +5,24 @@ General-purpose sandbox plugin for Claude Code. Automatically backs up state bef
 ## Quick Start
 
 ```bash
-# Install
 npm install chats-sandbox
 npx chats-sandbox install
 
-# That's it. CHATS-Sandbox now runs automatically before every Claude Code tool call.
-# It will:
-#   - Block dangerous commands (rm -rf /, fork bombs, etc.)
-#   - Backup state before destructive actions (file edits, pip install, git push, etc.)
-#   - Log what each tool call changed
+# Done. Runs automatically on every Claude Code tool call.
+# Blocks dangerous commands, backs up before destructive actions, logs effects.
 
-# See what's been backed up
-npx chats-sandbox status
-
-# Something went wrong? Restore to a previous state
-npx chats-sandbox restore        # list available restore points
-npx chats-sandbox restore 3      # restore to interaction 3
-npx chats-sandbox diff 3         # preview what changed since interaction 3
-
-# Turn it off when you don't need the overhead
-npx chats-sandbox config set enabled false
-
-# Or uninstall entirely
-npx chats-sandbox uninstall
+npx chats-sandbox status             # see what's been backed up
+npx chats-sandbox restore            # list restore points
+npx chats-sandbox restore 3          # reverse-loop restore to interaction 3
+npx chats-sandbox restore_direct 3   # direct jump to interaction 3's snapshot
+npx chats-sandbox diff 3             # preview changes since interaction 3
+npx chats-sandbox config set enabled false  # turn off
+npx chats-sandbox uninstall          # remove hooks entirely
 ```
 
 ## How It Works
 
-CHATS-Sandbox hooks into Claude Code's `PreToolUse` and `PostToolUse` lifecycle events. Before any tool call executes, it decides whether to deny, backup, or pass through.
+Hooks into Claude Code's `PreToolUse` and `PostToolUse` events. Before any tool call executes, it decides whether to deny, backup, or pass through.
 
 ### Backup Tiers (cheapest first)
 
@@ -42,41 +32,7 @@ CHATS-Sandbox hooks into Claude Code's `PreToolUse` and `PostToolUse` lifecycle 
 | 2nd | `git add -A` | Full workspace snapshot (git-compressed) | All other workspace-modifying actions |
 | 3rd | Subagent (Haiku) | Out-of-workspace state (remote APIs, system config) | When action touches outside workspace AND tiers 1-2 can't cover it |
 
-### Workspace Scope Detection
-
-The sandbox inspects tool call arguments to detect if the action affects state outside the current workspace (e.g., `pip install` touches `/usr/lib/`, `git push` touches remote, `curl -X POST` calls an API). Only out-of-workspace actions that aren't covered by a targeted manifest trigger the subagent.
-
-### Decision Flow
-
-```
-PreToolUse fires
-  -> 1. Deny rules           -> block (exit 2)
-  -> 2. Precaution field      -> backup (LLM set precaution=true)
-  -> 3. Read-only tool?       -> pass (no backup needed)
-  -> 4. Rule-based checklist   -> backup (known destructive pattern)
-  -> 5. Default                -> backup (safe default for unknown actions)
-
-Backup execution:
-  -> 1st: Targeted manifest   -> done if matched
-  -> 2nd: git add -A          -> done if succeeded
-  -> 3rd: Subagent            -> only if outside-workspace AND 1st+2nd failed
-```
-
-## Install
-
-```bash
-cd your-project
-npm install chats-sandbox
-npx chats-sandbox install
-```
-
-This wires `PreToolUse` + `PostToolUse` + `PostToolUseFailure` hooks into `.claude/settings.json` and creates a `.chats-sandbox/` config directory.
-
-## Uninstall
-
-```bash
-npx chats-sandbox uninstall
-```
+The sandbox inspects tool call arguments to detect if the action affects state outside the current workspace. Only out-of-workspace actions that aren't covered by a targeted manifest trigger the subagent.
 
 ## Commands
 
@@ -88,48 +44,27 @@ chats-sandbox config                          # Show configuration
 chats-sandbox config set <key> <value>        # Set a config value
 chats-sandbox backups                         # List recent backup artifacts
 chats-sandbox restore                         # List restorable interactions
-chats-sandbox restore <N>                     # Restore interaction N
+chats-sandbox restore <N>                     # Reverse-loop restore to interaction N
 chats-sandbox restore <N> --file <path>       # Restore single file from interaction N
+chats-sandbox restore_direct <N>              # Direct jump to interaction N's snapshot
 chats-sandbox diff <N>                        # Diff interaction N vs current state
 ```
 
 ## Restore
 
-Every backup is restorable. The restore engine picks the right strategy based on what was backed up:
+Two restore modes:
+
+- **`restore <N>`** (reverse loop) — Undoes interactions one by one from latest back to N+1. Each step is a small reversal. Safer for non-workspace state (packages, env vars, remote refs).
+- **`restore_direct <N>`** (direct jump) — Restores workspace directly from interaction N's git snapshot. Fast, but only covers workspace files.
 
 | Backup strategy | Restore method | Automatic? |
 |----------------|----------------|------------|
 | `pip_freeze` | `pip install -r <snapshot>` | Yes |
 | `npm_list` | `npm install` from saved JSON | Yes |
-| `env_snapshot` | Re-export from saved file | Yes (provides command) |
+| `env_snapshot` | Re-export from saved file | Yes |
 | `git_tag` | `git reset --hard <tag>` | Yes |
 | `git_snapshot` | `git checkout <hash> -- .` from shadow repo | Yes |
-| `subagent` | Subagent prompt generated with backup context | Needs subagent |
-
-For tier-3 (subagent) backups, the restore CLI outputs a prompt containing the original action, what was backed up, and the commands that were run. This prompt is sent to a subagent to execute the restore.
-
-### Examples
-
-```bash
-# List what can be restored
-chats-sandbox restore
-
-# Output:
-#   1. interaction_001_20260410194611  [pip_freeze, git_snapshot]
-#      - Saved pip freeze snapshot
-#      - git add -A snapshot (e1e0a905)
-#   2. interaction_002_20260410194612  [git_snapshot]
-#      - git add -A snapshot (e1e0a905)
-
-# Restore everything from interaction 1
-chats-sandbox restore 1
-
-# Restore just one file
-chats-sandbox restore 1 --file src/config.py
-
-# See what changed since interaction 1
-chats-sandbox diff 1
-```
+| `subagent` | Prompt generated with backup context | Needs subagent |
 
 ## Configuration
 
@@ -153,24 +88,9 @@ Stored in `.chats-sandbox/config.json`:
     pip_freeze_abc123.txt           # 1st tier: targeted manifest
     git_snapshot/                   # 2nd tier: shadow git repo
     metadata.json                   # Artifact index for this interaction
-  interaction_002_20260410_1912/
-    ...
 ```
 
-Oldest interaction folders are automatically pruned when `maxInteractions` is exceeded (default 50).
-
-## Safety Rules
-
-**Deny rules** block dangerous commands outright (exit code 2):
-- `rm -rf /` (except `/tmp`)
-- `mkfs.*`
-- `dd if=... of=/dev/...`
-- Fork bombs
-
-**Read-only tools** are always passed through without backup:
-- `Read`, `Glob`, `Grep`, `WebSearch`, `WebFetch`
-
-**Everything else** gets backed up. Unknown actions default to backup (safe by default).
+Oldest folders auto-pruned when `maxInteractions` is exceeded.
 
 ## Development
 

@@ -209,10 +209,11 @@ export function restoreArtifact(artifact: BackupArtifact): RestoreResult {
 }
 
 /**
- * Restore all artifacts from an interaction folder.
- * Returns results for each artifact, plus any subagent prompts needed.
+ * Direct restore — jump straight to interaction N's snapshot.
+ * Fast for workspace files (git_snapshot), but only covers what that
+ * single interaction backed up. Use for quick workspace rollback.
  */
-export function restoreInteraction(
+export function restoreInteractionDirect(
   interactionName: string,
   config: SandboxConfig,
   options?: { fileOnly?: string }
@@ -233,7 +234,6 @@ export function restoreInteraction(
   }
 
   if (options?.fileOnly) {
-    // Restore only the git_snapshot tier, targeting a single file
     const snapshot = artifacts.find((a) => a.strategy === "git_snapshot");
     if (!snapshot) {
       return [{ success: false, description: `No git snapshot found in ${interactionName}` }];
@@ -264,9 +264,74 @@ export function restoreInteraction(
     }
   }
 
-  // Restore all artifacts in the interaction
   return artifacts.map((a) => restoreArtifact(a));
 }
+
+/**
+ * Reverse-loop restore — undo interactions one by one from latest back to N+1.
+ *
+ * For each interaction being undone (in reverse order):
+ *   - git_snapshot: restore workspace from that interaction's snapshot
+ *   - pip_freeze / npm_list / env_snapshot: restore from that interaction's manifest
+ *   - subagent: generate prompt for subagent
+ *
+ * This is safer than direct jump because each step is a small, well-defined
+ * reversal. If one step fails, you know exactly where it stopped.
+ */
+export function restoreInteractionLoop(
+  targetInteractionName: string,
+  config: SandboxConfig
+): RestoreResult[] {
+  const interactions = listRestorableInteractions(config);
+  const targetIdx = interactions.findIndex((i) => i.name === targetInteractionName);
+
+  if (targetIdx === -1) {
+    return [{ success: false, description: `Interaction not found: ${targetInteractionName}` }];
+  }
+
+  // Nothing to undo — already at or before target
+  if (targetIdx >= interactions.length - 1) {
+    return [{ success: true, description: `Already at interaction ${targetInteractionName}` }];
+  }
+
+  const results: RestoreResult[] = [];
+
+  // Walk backwards: undo interactions from latest down to targetIdx + 1
+  // Each step restores the state that existed BEFORE that interaction.
+  for (let i = interactions.length - 1; i > targetIdx; i--) {
+    const inter = interactions[i];
+    results.push({
+      success: true,
+      description: `--- Undoing ${inter.name} ---`,
+    });
+
+    for (const artifact of inter.artifacts) {
+      const r = restoreArtifact(artifact);
+      results.push(r);
+
+      if (!r.success && !r.subagentPrompt) {
+        // Non-fatal: log and continue to next artifact
+        results.push({
+          success: false,
+          description: `Warning: failed to restore ${artifact.strategy} in ${inter.name}, continuing...`,
+        });
+      }
+    }
+  }
+
+  // Finally, restore the target interaction's state directly
+  results.push({
+    success: true,
+    description: `--- Restoring target: ${targetInteractionName} ---`,
+  });
+  const targetResults = restoreInteractionDirect(targetInteractionName, config);
+  results.push(...targetResults);
+
+  return results;
+}
+
+// Keep backward compat alias
+export const restoreInteraction = restoreInteractionDirect;
 
 /**
  * List all interactions with their artifact summaries for the restore CLI.

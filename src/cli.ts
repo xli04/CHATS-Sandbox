@@ -240,60 +240,39 @@ function listBackups(projectRoot: string): void {
 
 // ── Restore ──────────────────────────────────────────────────────────
 
-function restoreCommand(projectRoot: string, interactionArg?: string, fileArg?: string): void {
-  const { listRestorableInteractions, restoreInteraction } = require("./restore/restore.js");
+function listInteractionsForRestore(projectRoot: string): Array<{
+  name: string;
+  artifacts: Array<{ strategy: string; description: string; timestamp: string }>;
+}> {
+  const { listRestorableInteractions } = require("./restore/restore.js");
   const config = loadConfig(projectRoot);
-
-  // No argument → list all restorable interactions
-  if (!interactionArg) {
-    const interactions = listRestorableInteractions(config) as Array<{
-      name: string;
-      artifacts: Array<{ strategy: string; description: string; timestamp: string }>;
-    }>;
-
-    if (interactions.length === 0) {
-      console.log("No interactions to restore.");
-      return;
-    }
-
-    console.log("Restorable interactions:\n");
-    for (let i = 0; i < interactions.length; i++) {
-      const inter = interactions[i];
-      const strategies = inter.artifacts.map((a) => a.strategy).join(", ");
-      console.log(`  ${i + 1}. ${inter.name}  [${strategies}]`);
-      for (const a of inter.artifacts) {
-        const badge = a.strategy === "subagent" ? " (needs subagent)" : "";
-        console.log(`     - ${a.description}${badge}`);
-      }
-    }
-
-    console.log("\nUsage:");
-    console.log("  chats-sandbox restore <N>              Restore interaction N");
-    console.log("  chats-sandbox restore <N> --file <path> Restore single file");
-    return;
-  }
-
-  // Parse interaction number (1-indexed)
-  const interactions = listRestorableInteractions(config) as Array<{
+  return listRestorableInteractions(config) as Array<{
     name: string;
-    artifacts: Array<{ strategy: string }>;
+    artifacts: Array<{ strategy: string; description: string; timestamp: string }>;
   }>;
-  const idx = parseInt(interactionArg, 10) - 1;
+}
 
-  if (isNaN(idx) || idx < 0 || idx >= interactions.length) {
-    console.error(`Invalid interaction number: ${interactionArg}. Use 1-${interactions.length}.`);
-    process.exit(1);
+function printInteractionList(interactions: Array<{
+  name: string;
+  artifacts: Array<{ strategy: string; description: string }>;
+}>): void {
+  console.log("Restorable interactions:\n");
+  for (let i = 0; i < interactions.length; i++) {
+    const inter = interactions[i];
+    const strategies = inter.artifacts.map((a) => a.strategy).join(", ");
+    console.log(`  ${i + 1}. ${inter.name}  [${strategies}]`);
+    for (const a of inter.artifacts) {
+      const badge = a.strategy === "subagent" ? " (needs subagent)" : "";
+      console.log(`     - ${a.description}${badge}`);
+    }
   }
+}
 
-  const target = interactions[idx];
-  console.log(`Restoring interaction: ${target.name}\n`);
-
-  const results = restoreInteraction(target.name, config, fileArg ? { fileOnly: fileArg } : undefined) as Array<{
-    success: boolean;
-    description: string;
-    subagentPrompt?: string;
-  }>;
-
+function printRestoreResults(results: Array<{
+  success: boolean;
+  description: string;
+  subagentPrompt?: string;
+}>): void {
   for (const r of results) {
     const icon = r.success ? "OK" : "FAIL";
     console.log(`  [${icon}] ${r.description}`);
@@ -301,10 +280,87 @@ function restoreCommand(projectRoot: string, interactionArg?: string, fileArg?: 
     if (r.subagentPrompt) {
       console.log("\n  --- Subagent restore needed ---");
       console.log("  The following prompt should be sent to a subagent:\n");
-      console.log(r.subagentPrompt.split("\n").map((l) => `    ${l}`).join("\n"));
+      console.log(r.subagentPrompt.split("\n").map((l: string) => `    ${l}`).join("\n"));
       console.log();
     }
   }
+}
+
+/**
+ * restore <N> — Reverse-loop restore. Undoes interactions one by one from
+ * latest back to N+1, then restores N's state. Safer for non-workspace state.
+ */
+function restoreCommand(projectRoot: string, interactionArg?: string, fileArg?: string): void {
+  const config = loadConfig(projectRoot);
+  const interactions = listInteractionsForRestore(projectRoot);
+
+  if (!interactionArg) {
+    if (interactions.length === 0) {
+      console.log("No interactions to restore.");
+      return;
+    }
+    printInteractionList(interactions);
+    console.log("\nUsage:");
+    console.log("  chats-sandbox restore <N>              Reverse-loop restore to N");
+    console.log("  chats-sandbox restore <N> --file <path> Restore single file");
+    console.log("  chats-sandbox restore_direct <N>       Direct jump to N's snapshot");
+    return;
+  }
+
+  const idx = parseInt(interactionArg, 10) - 1;
+  if (isNaN(idx) || idx < 0 || idx >= interactions.length) {
+    console.error(`Invalid interaction number: ${interactionArg}. Use 1-${interactions.length}.`);
+    process.exit(1);
+  }
+
+  const target = interactions[idx];
+
+  // --file flag uses direct restore for single file
+  if (fileArg) {
+    const { restoreInteractionDirect } = require("./restore/restore.js");
+    console.log(`Restoring file ${fileArg} from ${target.name}\n`);
+    const results = restoreInteractionDirect(target.name, config, { fileOnly: fileArg });
+    printRestoreResults(results);
+    return;
+  }
+
+  // Reverse-loop restore
+  const { restoreInteractionLoop } = require("./restore/restore.js");
+  console.log(`Reverse-loop restore to: ${target.name}\n`);
+  const results = restoreInteractionLoop(target.name, config);
+  printRestoreResults(results);
+}
+
+/**
+ * restore_direct <N> — Direct jump to interaction N's snapshot.
+ * Fast, but only covers what that single interaction backed up.
+ */
+function restoreDirectCommand(projectRoot: string, interactionArg?: string): void {
+  const config = loadConfig(projectRoot);
+  const interactions = listInteractionsForRestore(projectRoot);
+
+  if (!interactionArg) {
+    if (interactions.length === 0) {
+      console.log("No interactions to restore.");
+      return;
+    }
+    printInteractionList(interactions);
+    console.log("\nUsage:");
+    console.log("  chats-sandbox restore_direct <N>       Direct jump to N's snapshot");
+    return;
+  }
+
+  const idx = parseInt(interactionArg, 10) - 1;
+  if (isNaN(idx) || idx < 0 || idx >= interactions.length) {
+    console.error(`Invalid interaction number: ${interactionArg}. Use 1-${interactions.length}.`);
+    process.exit(1);
+  }
+
+  const target = interactions[idx];
+  const { restoreInteractionDirect } = require("./restore/restore.js");
+  console.log(`Direct restore from: ${target.name}\n`);
+  const results = restoreInteractionDirect(target.name, config);
+  printRestoreResults(results);
 }
 
 // ── Diff ─────────────────────────────────────────────────────────────
@@ -397,6 +453,9 @@ switch (command) {
     restoreCommand(projectRoot, args[1], fileArg);
     break;
   }
+  case "restore_direct":
+    restoreDirectCommand(projectRoot, args[1]);
+    break;
   case "diff":
     diffCommand(projectRoot, args[1]);
     break;
@@ -411,8 +470,9 @@ switch (command) {
     console.log("  status                          Show sandbox state");
     console.log("  backups                         List recent backup artifacts");
     console.log("  restore                         List restorable interactions");
-    console.log("  restore <N>                     Restore interaction N");
+    console.log("  restore <N>                     Reverse-loop restore to interaction N");
     console.log("  restore <N> --file <path>       Restore single file from interaction N");
+    console.log("  restore_direct <N>              Direct jump to interaction N's snapshot");
     console.log("  diff <N>                        Diff interaction N vs current state");
     break;
 }
