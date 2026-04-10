@@ -1,0 +1,23 @@
+{
+  "name": "chats-sandbox",
+  "version": "0.1.0",
+  "description": "General-purpose sandbox plugin for Claude Code — backup, policy, and effect tracking for AI agent tool calls",
+  "main": "dist/index.js",
+  "bin": {
+    "chats-sandbox": "dist/cli.js"
+  },
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsc --watch",
+    "test": "node --test dist/**/*.test.js",
+    "install-plugin": "node dist/cli.js install",
+    "uninstall-plugin": "node dist/cli.js uninstall"
+  },
+  "keywords": ["claude-code", "sandbox", "backup", "hooks", "ai-agent"],
+  "author": "xli04",
+  "license": "MIT",
+  "devDependencies": {
+    "typescript": "^5.4.0",
+    "@types/node": "^20.0.0"
+  }
+}
