@@ -7,17 +7,30 @@
     "chats-sandbox": "dist/cli.js"
   },
   "scripts": {
-    "build": "tsc",
+    "build": "tsc -p tsconfig.json && tsc -p tsconfig.test.json",
+    "build:src": "tsc -p tsconfig.json",
+    "build:test": "tsc -p tsconfig.test.json",
     "dev": "tsc --watch",
-    "test": "node --test dist/**/*.test.js",
+    "test": "npm run build && node --test dist-test/**/*.test.js",
+    "lint": "eslint src/ tests/",
+    "check": "npm run lint && npm run test",
     "install-plugin": "node dist/cli.js install",
     "uninstall-plugin": "node dist/cli.js uninstall"
   },
-  "keywords": ["claude-code", "sandbox", "backup", "hooks", "ai-agent"],
+  "keywords": [
+    "claude-code",
+    "sandbox",
+    "backup",
+    "hooks",
+    "ai-agent"
+  ],
   "author": "xli04",
   "license": "MIT",
   "devDependencies": {
-    "typescript": "^5.4.0",
-    "@types/node": "^20.0.0"
+    "@types/node": "^20.0.0",
+    "@typescript-eslint/eslint-plugin": "^8.58.1",
+    "@typescript-eslint/parser": "^8.58.1",
+    "eslint": "^10.2.0",
+    "typescript": "^5.4.0"
   }
 }

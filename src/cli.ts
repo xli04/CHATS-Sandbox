@@ -260,7 +260,6 @@ function restoreCommand(projectRoot: string, interactionArg?: string, fileArg?: 
     for (let i = 0; i < interactions.length; i++) {
       const inter = interactions[i];
       const strategies = inter.artifacts.map((a) => a.strategy).join(", ");
-      const ts = inter.artifacts[0]?.timestamp?.split("T")[1]?.slice(0, 5) ?? "";
       console.log(`  ${i + 1}. ${inter.name}  [${strategies}]`);
       for (const a of inter.artifacts) {
         const badge = a.strategy === "subagent" ? " (needs subagent)" : "";
