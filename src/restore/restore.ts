@@ -219,10 +219,59 @@ export function restoreArtifact(artifact: BackupArtifact): RestoreResult {
   }
 }
 
+// ── Helpers ──────────────────────────────────────────────────────────
+
+/**
+ * Delete interaction folders that come AFTER the target in the timeline.
+ * Called after a successful restore — the interactions "in the future"
+ * of the restore point are now off the main timeline and should be removed.
+ *
+ * Note: the commits in the shared shadow repo remain (they become
+ * dangling commits, which git will garbage-collect eventually).
+ *
+ * Returns the number of folders deleted.
+ */
+function pruneIntermediateFolders(
+  targetInteractionName: string,
+  config: SandboxConfig
+): number {
+  const backupRoot = path.resolve(config.backupDir);
+  const interactions = listRestorableInteractions(config);
+  const targetIdx = interactions.findIndex((i) => i.name === targetInteractionName);
+
+  if (targetIdx === -1 || targetIdx >= interactions.length - 1) {
+    return 0;
+  }
+
+  let deleted = 0;
+  // Delete everything AFTER the target (from index targetIdx + 1 onwards)
+  for (let i = targetIdx + 1; i < interactions.length; i++) {
+    const folder = path.join(backupRoot, interactions[i].name);
+    try {
+      fs.rmSync(folder, { recursive: true, force: true });
+      deleted++;
+    } catch {
+      // best-effort; skip on failure
+    }
+  }
+  return deleted;
+}
+
+/**
+ * Check if all results in a restore operation succeeded (allowing
+ * subagent-needed as "success" since the deterministic part worked).
+ */
+function allSucceeded(results: RestoreResult[]): boolean {
+  return results.every((r) => r.success || r.subagentPrompt !== undefined);
+}
+
 /**
  * Direct restore — jump straight to interaction N's snapshot.
  * Fast for workspace files (git_snapshot), but only covers what that
  * single interaction backed up. Use for quick workspace rollback.
+ *
+ * After a successful full-state restore (not --file mode), intermediate
+ * folders (interactions AFTER the target) are deleted.
  */
 export function restoreInteractionDirect(
   interactionName: string,
@@ -266,6 +315,8 @@ export function restoreInteractionDirect(
         cwd,
         stdio: "pipe",
       });
+      // Single-file restore does NOT prune intermediate folders —
+      // the other files in later interactions may still be wanted.
       return [{
         success: true,
         description: `Restored ${options.fileOnly} from ${interactionName} snapshot`,
@@ -276,7 +327,20 @@ export function restoreInteractionDirect(
     }
   }
 
-  return artifacts.map((a) => restoreArtifact(a));
+  // Full restore — apply all artifacts, then prune intermediate folders.
+  const results = artifacts.map((a) => restoreArtifact(a));
+
+  if (allSucceeded(results)) {
+    const deleted = pruneIntermediateFolders(interactionName, config);
+    if (deleted > 0) {
+      results.push({
+        success: true,
+        description: `Pruned ${deleted} intermediate interaction folder${deleted === 1 ? "" : "s"}`,
+      });
+    }
+  }
+
+  return results;
 }
 
 /**
@@ -289,6 +353,9 @@ export function restoreInteractionDirect(
  *
  * This is safer than direct jump because each step is a small, well-defined
  * reversal. If one step fails, you know exactly where it stopped.
+ *
+ * After a successful restore, intermediate folders (those we walked through)
+ * are deleted — they're off the main timeline now.
  */
 export function restoreInteractionLoop(
   targetInteractionName: string,
@@ -307,6 +374,7 @@ export function restoreInteractionLoop(
   }
 
   const results: RestoreResult[] = [];
+  let anyFailed = false;
 
   // Walk backwards: undo interactions from latest down to targetIdx + 1
   // Each step restores the state that existed BEFORE that interaction.
@@ -322,6 +390,7 @@ export function restoreInteractionLoop(
       results.push(r);
 
       if (!r.success && !r.subagentPrompt) {
+        anyFailed = true;
         // Non-fatal: log and continue to next artifact
         results.push({
           success: false,
@@ -331,13 +400,39 @@ export function restoreInteractionLoop(
     }
   }
 
-  // Finally, restore the target interaction's state directly
+  // Finally, restore the target interaction's state directly.
+  // IMPORTANT: call restoreArtifact on each artifact of the target rather than
+  // restoreInteractionDirect — the latter would itself try to prune folders
+  // and we want to coordinate pruning at this level.
   results.push({
     success: true,
     description: `--- Restoring target: ${targetInteractionName} ---`,
   });
-  const targetResults = restoreInteractionDirect(targetInteractionName, config);
-  results.push(...targetResults);
+  const targetInteraction = interactions[targetIdx];
+  for (const artifact of targetInteraction.artifacts) {
+    const r = restoreArtifact(artifact);
+    results.push(r);
+    if (!r.success && !r.subagentPrompt) {
+      anyFailed = true;
+    }
+  }
+
+  // Prune intermediate folders only if everything succeeded.
+  // If any step failed, leave the folders so the user can inspect/retry.
+  if (!anyFailed) {
+    const deleted = pruneIntermediateFolders(targetInteractionName, config);
+    if (deleted > 0) {
+      results.push({
+        success: true,
+        description: `Pruned ${deleted} intermediate interaction folder${deleted === 1 ? "" : "s"}`,
+      });
+    }
+  } else {
+    results.push({
+      success: false,
+      description: "Intermediate folders NOT pruned (some restore steps failed). Inspect and retry.",
+    });
+  }
 
   return results;
 }

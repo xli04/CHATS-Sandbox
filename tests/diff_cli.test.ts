@@ -132,18 +132,47 @@ describe("diff CLI end-to-end", () => {
     }
   });
 
-  it("shows usage when no argument is provided", () => {
+  it("defaults to previous interaction when no argument is provided", () => {
+    const { workspace, config, originalCwd } = setupWorkspaceWithConfig();
+    try {
+      // Two interactions — default should diff against the first one
+      resetInteraction();
+      const filePath = path.join(workspace, "y.txt");
+      fs.writeFileSync(filePath, "alpha\n");
+      runBackup(makeCtx("Write", { path: filePath, content: "alpha" }), config);
+
+      resetInteraction();
+      fs.writeFileSync(filePath, "beta\n");
+      runBackup(makeCtx("Write", { path: filePath, content: "beta" }), config);
+
+      const result = runCli(["diff"], workspace);
+      assert.equal(result.exitCode, 0, `Expected success, got stderr: ${result.stderr}`);
+      // Should mention defaulting to previous
+      assert.ok(
+        result.stdout.toLowerCase().includes("previous") ||
+          result.stdout.includes("alpha") ||
+          result.stdout.includes("beta"),
+        `Expected diff output, got: ${result.stdout.slice(0, 300)}`,
+      );
+    } finally {
+      teardown(workspace, originalCwd);
+    }
+  });
+
+  it("shows helpful message when only one interaction exists", () => {
     const { workspace, config, originalCwd } = setupWorkspaceWithConfig();
     try {
       resetInteraction();
-      fs.writeFileSync(path.join(workspace, "y.txt"), "test\n");
-      runBackup(makeCtx("Write", { path: "y.txt", content: "t" }), config);
+      fs.writeFileSync(path.join(workspace, "z.txt"), "only\n");
+      runBackup(makeCtx("Write", { path: "z.txt", content: "only" }), config);
 
       const result = runCli(["diff"], workspace);
+      assert.equal(result.exitCode, 0);
       const combined = result.stdout + result.stderr;
       assert.ok(
-        combined.toLowerCase().includes("usage"),
-        `Expected usage message, got: ${combined.slice(0, 300)}`,
+        combined.toLowerCase().includes("only one") ||
+          combined.toLowerCase().includes("nothing to diff"),
+        `Expected 'only one'/'nothing to diff' message, got: ${combined.slice(0, 300)}`,
       );
     } finally {
       teardown(workspace, originalCwd);

@@ -146,6 +146,7 @@ function install(projectRoot: string): void {
   console.log("  /sandbox:diff            Diff against interaction");
   console.log("  /sandbox:backups         List backup artifacts");
   console.log("  /sandbox:config          Show/edit configuration");
+  console.log("  /sandbox:clear           Delete all backups and shadow repo");
   console.log("");
   console.log("To configure: chats-sandbox config");
   console.log("To disable:   chats-sandbox uninstall");
@@ -180,7 +181,8 @@ function uninstall(projectRoot: string): void {
   // Remove slash commands
   const commandsDir = path.join(projectRoot, ".claude", "commands");
   const sandboxCmds = ["sandbox:status.md", "sandbox:restore.md", "sandbox:restore_direct.md",
-    "sandbox:diff.md", "sandbox:backups.md", "sandbox:config.md", "sandbox:history.md"];
+    "sandbox:diff.md", "sandbox:backups.md", "sandbox:config.md", "sandbox:history.md",
+    "sandbox:clear.md"];
   for (const f of sandboxCmds) {
     const p = path.join(commandsDir, f);
     if (fs.existsSync(p)) {
@@ -287,22 +289,6 @@ function listInteractionsForRestore(projectRoot: string): Array<{
   }>;
 }
 
-function printInteractionList(interactions: Array<{
-  name: string;
-  artifacts: Array<{ strategy: string; description: string }>;
-}>): void {
-  console.log("Restorable interactions:\n");
-  for (let i = 0; i < interactions.length; i++) {
-    const inter = interactions[i];
-    const strategies = inter.artifacts.map((a) => a.strategy).join(", ");
-    console.log(`  ${i + 1}. ${inter.name}  [${strategies}]`);
-    for (const a of inter.artifacts) {
-      const badge = a.strategy === "subagent" ? " (needs subagent)" : "";
-      console.log(`     - ${a.description}${badge}`);
-    }
-  }
-}
-
 function printRestoreResults(results: Array<{
   success: boolean;
   description: string;
@@ -329,23 +315,27 @@ function restoreCommand(projectRoot: string, interactionArg?: string, fileArg?: 
   const config = loadConfig(projectRoot);
   const interactions = listInteractionsForRestore(projectRoot);
 
-  if (!interactionArg) {
-    if (interactions.length === 0) {
-      console.log("No interactions to restore.");
-      return;
-    }
-    printInteractionList(interactions);
-    console.log("\nUsage:");
-    console.log("  chats-sandbox restore <N>              Reverse-loop restore to N");
-    console.log("  chats-sandbox restore <N> --file <path> Restore single file");
-    console.log("  chats-sandbox restore_direct <N>       Direct jump to N's snapshot");
+  if (interactions.length === 0) {
+    console.log("No interactions to restore.");
     return;
   }
 
-  const idx = parseInt(interactionArg, 10) - 1;
-  if (isNaN(idx) || idx < 0 || idx >= interactions.length) {
-    console.error(`Invalid interaction number: ${interactionArg}. Use 1-${interactions.length}.`);
-    process.exit(1);
+  // Default: restore to the interaction BEFORE the latest
+  // ("undo the last thing"). Requires at least 2 interactions.
+  let idx: number;
+  if (!interactionArg) {
+    if (interactions.length < 2) {
+      console.log("Only one interaction exists — nothing to undo. Use 'history' to list.");
+      return;
+    }
+    idx = interactions.length - 2; // second-to-last (0-indexed)
+    console.log(`No argument — defaulting to previous interaction (undo last step).\n`);
+  } else {
+    idx = parseInt(interactionArg, 10) - 1;
+    if (isNaN(idx) || idx < 0 || idx >= interactions.length) {
+      console.error(`Invalid interaction number: ${interactionArg}. Use 1-${interactions.length}.`);
+      process.exit(1);
+    }
   }
 
   const target = interactions[idx];
@@ -369,26 +359,31 @@ function restoreCommand(projectRoot: string, interactionArg?: string, fileArg?: 
 /**
  * restore_direct <N> — Direct jump to interaction N's snapshot.
  * Fast, but only covers what that single interaction backed up.
+ * No-arg default: jump to the interaction before the latest (undo last).
  */
 function restoreDirectCommand(projectRoot: string, interactionArg?: string): void {
   const config = loadConfig(projectRoot);
   const interactions = listInteractionsForRestore(projectRoot);
 
-  if (!interactionArg) {
-    if (interactions.length === 0) {
-      console.log("No interactions to restore.");
-      return;
-    }
-    printInteractionList(interactions);
-    console.log("\nUsage:");
-    console.log("  chats-sandbox restore_direct <N>       Direct jump to N's snapshot");
+  if (interactions.length === 0) {
+    console.log("No interactions to restore.");
     return;
   }
 
-  const idx = parseInt(interactionArg, 10) - 1;
-  if (isNaN(idx) || idx < 0 || idx >= interactions.length) {
-    console.error(`Invalid interaction number: ${interactionArg}. Use 1-${interactions.length}.`);
-    process.exit(1);
+  let idx: number;
+  if (!interactionArg) {
+    if (interactions.length < 2) {
+      console.log("Only one interaction exists — nothing to undo.");
+      return;
+    }
+    idx = interactions.length - 2;
+    console.log(`No argument — defaulting to previous interaction.\n`);
+  } else {
+    idx = parseInt(interactionArg, 10) - 1;
+    if (isNaN(idx) || idx < 0 || idx >= interactions.length) {
+      console.error(`Invalid interaction number: ${interactionArg}. Use 1-${interactions.length}.`);
+      process.exit(1);
+    }
   }
 
   const target = interactions[idx];
@@ -408,20 +403,27 @@ function diffCommand(projectRoot: string, interactionArg?: string): void {
     artifacts: Array<{ strategy: string; artifactPath: string; commitHash?: string; id: string }>;
   }>;
 
-  if (!interactionArg) {
-    console.error("Usage: chats-sandbox diff <N>  — diff between interaction N and current state");
-    return;
-  }
-
   if (interactions.length === 0) {
     console.log("No interactions to diff against.");
     return;
   }
 
-  const idx = parseInt(interactionArg, 10) - 1;
-  if (isNaN(idx) || idx < 0 || idx >= interactions.length) {
-    console.error(`Invalid interaction number: ${interactionArg}. Use 1-${interactions.length}.`);
-    return;
+  // Default: diff against the interaction BEFORE the latest
+  // ("what did the last step change?"). Requires at least 2 interactions.
+  let idx: number;
+  if (!interactionArg) {
+    if (interactions.length < 2) {
+      console.log("Only one interaction exists — nothing to diff against.");
+      return;
+    }
+    idx = interactions.length - 2;
+    console.log(`No argument — showing changes since previous interaction.\n`);
+  } else {
+    idx = parseInt(interactionArg, 10) - 1;
+    if (isNaN(idx) || idx < 0 || idx >= interactions.length) {
+      console.error(`Invalid interaction number: ${interactionArg}. Use 1-${interactions.length}.`);
+      return;
+    }
   }
 
   const target = interactions[idx];
@@ -517,46 +519,132 @@ function historyCommand(projectRoot: string, countArg?: string): void {
   const { execSync } = require("node:child_process");
   const cwd = process.cwd();
 
+  const MAX_FILES_SHOWN = 5;
+
   for (let i = 0; i < shown.length; i++) {
     const inter = shown[i];
     const displayNum = startIdx + i;
     const time = inter.name.split("_").slice(2).join("_"); // e.g. 20260410221532
     const timeFormatted =
       time.length >= 14
-        ? `${time.slice(8, 10)}:${time.slice(10, 12)}:${time.slice(12, 14)}`
+        ? `${time.slice(8, 10)}:${time.slice(10, 12)}`  // HH:MM only
         : "?";
 
     const snapshot = inter.artifacts.find((a) => a.strategy === "git_snapshot");
-    const tool = inter.artifacts[0]?.toolName ?? "?";
     const strategies = inter.artifacts.map((a) => a.strategy).join("+");
 
-    // Get file stats from the shared shadow repo if we have a commit
+    // Get file list and stats from the shared shadow repo
+    let files: string[] = [];
     let stat = "";
     if (snapshot && (snapshot.commitHash || snapshot.id) && fs.existsSync(snapshot.artifactPath)) {
       const commit = snapshot.commitHash ?? snapshot.id;
       try {
         const env = { ...process.env, GIT_DIR: snapshot.artifactPath, GIT_WORK_TREE: cwd };
         const opts = { encoding: "utf-8" as const, timeout: 10_000, env, cwd, stdio: "pipe" as const };
+        // Get the list of files changed in this commit
+        const fileOutput = execSync(`git show --name-only --format= ${commit}`, opts).trim();
+        files = fileOutput.split("\n").filter((f: string) => f.trim().length > 0);
+        // Get the shortstat
         stat = execSync(`git diff --shortstat ${commit}~1 ${commit}`, opts).trim();
       } catch {
-        // first commit or other error — skip stat
+        // First commit or other error — try listing the tree of the first commit
+        try {
+          const env = { ...process.env, GIT_DIR: snapshot.artifactPath, GIT_WORK_TREE: cwd };
+          const opts = { encoding: "utf-8" as const, timeout: 10_000, env, cwd, stdio: "pipe" as const };
+          const fileOutput = execSync(`git ls-tree -r --name-only ${commit}`, opts).trim();
+          files = fileOutput.split("\n").filter((f: string) => f.trim().length > 0).slice(0, MAX_FILES_SHOWN);
+          stat = `baseline snapshot (${files.length} files)`;
+        } catch {
+          // give up
+        }
       }
     }
 
-    console.log(`  ${displayNum}. ${timeFormatted}  ${inter.name}  [${strategies}]`);
-    console.log(`     Tool: ${tool}`);
-    for (const a of inter.artifacts) {
-      console.log(`     - ${a.description}`);
+    // Display line 1: number, time, strategies
+    console.log(`  ${displayNum}. ${timeFormatted}  [${strategies}]`);
+
+    // Display line 2: files (truncated to top 5)
+    if (files.length > 0) {
+      const shownFiles = files.slice(0, MAX_FILES_SHOWN);
+      const extra = files.length - shownFiles.length;
+      const fileStr = shownFiles.join(", ") + (extra > 0 ? `, +${extra} more` : "");
+      console.log(`     Files: ${fileStr}`);
     }
+
+    // Display line 3: stats
     if (stat) {
-      console.log(`     ${stat}`);
+      console.log(`     Stats: ${stat}`);
     }
+
+    // Display targeted-manifest supplements (pip freeze, npm list, etc.)
+    const nonGitArtifacts = inter.artifacts.filter((a) => a.strategy !== "git_snapshot");
+    for (const a of nonGitArtifacts) {
+      console.log(`     + ${a.description}`);
+    }
+
     console.log();
   }
 
   if (interactions.length > shown.length) {
     console.log(`(${interactions.length - shown.length} older interactions hidden — use 'chats-sandbox history <N>' to see more)`);
   }
+}
+
+// ── Clear ────────────────────────────────────────────────────────────
+
+function clearCommand(projectRoot: string, _args: string[]): void {
+  const config = loadConfig(projectRoot);
+  const backupRoot = path.resolve(config.backupDir);
+  const shadowRoot = path.join(path.dirname(backupRoot), "shadow-repo");
+  const effectsLog = path.resolve(config.effectLogPath);
+
+  // Check existing state
+  const hasBackups = fs.existsSync(backupRoot) &&
+    fs.readdirSync(backupRoot).some((d: string) => d.startsWith("interaction_"));
+  const hasShadow = fs.existsSync(shadowRoot);
+  const hasEffects = fs.existsSync(effectsLog);
+
+  if (!hasBackups && !hasShadow && !hasEffects) {
+    console.log("Nothing to clear — no backups, shadow repo, or effect log found.");
+    return;
+  }
+
+  // Delete interaction folders
+  if (hasBackups) {
+    const dirs = fs.readdirSync(backupRoot).filter((d: string) => d.startsWith("interaction_"));
+    for (const d of dirs) {
+      try {
+        fs.rmSync(path.join(backupRoot, d), { recursive: true, force: true });
+      } catch {
+        // best-effort
+      }
+    }
+    console.log(`Removed ${dirs.length} interaction folder(s)`);
+  }
+
+  // Delete shadow repo
+  if (hasShadow) {
+    try {
+      fs.rmSync(shadowRoot, { recursive: true, force: true });
+      console.log(`Removed shared shadow repo at ${shadowRoot}`);
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : String(e);
+      console.error(`Failed to remove shadow repo: ${msg}`);
+    }
+  }
+
+  // Delete effect log
+  if (hasEffects) {
+    try {
+      fs.unlinkSync(effectsLog);
+      console.log(`Removed effect log at ${effectsLog}`);
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : String(e);
+      console.error(`Failed to remove effect log: ${msg}`);
+    }
+  }
+
+  console.log("\nCleared. Hooks and config are untouched. Run 'chats-sandbox uninstall' to remove those.");
 }
 
 // ── Main ─────────────────────────────────────────────────────────────
@@ -600,6 +688,9 @@ switch (command) {
   case "history":
     historyCommand(projectRoot, args[1]);
     break;
+  case "clear":
+    clearCommand(projectRoot, args.slice(1));
+    break;
   default:
     console.log("CHATS-Sandbox — General-purpose sandbox for Claude Code\n");
     console.log("Usage: chats-sandbox <command>\n");
@@ -616,5 +707,6 @@ switch (command) {
     console.log("  restore <N> --file <path>       Restore single file from interaction N");
     console.log("  restore_direct <N>              Direct jump to interaction N's snapshot");
     console.log("  diff <N>                        Diff interaction N vs current state");
+    console.log("  clear [--yes]                   Delete all backups, shadow repo, and effect log");
     break;
 }

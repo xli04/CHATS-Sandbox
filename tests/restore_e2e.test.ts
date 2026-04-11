@@ -161,7 +161,7 @@ describe("restore e2e: restoreInteractionLoop", () => {
 describe("restore e2e: specific-commit targeting (not HEAD)", () => {
   beforeEach(() => resetInteraction());
 
-  it("restoreInteractionDirect uses the specific commit for each interaction", () => {
+  it("restoreInteractionDirect uses the specific commit (not HEAD)", () => {
     const { workspace, config, originalCwd } = setupWorkspace();
     try {
       const filePath = path.join(workspace, "data.txt");
@@ -182,15 +182,45 @@ describe("restore e2e: specific-commit targeting (not HEAD)", () => {
       const interactions = listRestorableInteractions(config);
       assert.equal(interactions.length, 3);
 
-      // Restore to interaction 1 → should get "A" (not "C", which would be the bug)
+      // Restore to interaction 1 → should get "A" (not "C", which would be the HEAD bug)
       const res1 = restoreInteractionDirect(interactions[0].name, config);
       assert.ok(res1.every((r) => r.success || r.subagentPrompt));
       assert.equal(fs.readFileSync(filePath, "utf-8"), "A\n");
 
-      // Restore to interaction 2 → should get "B"
-      const res2 = restoreInteractionDirect(interactions[1].name, config);
-      assert.ok(res2.every((r) => r.success || r.subagentPrompt));
+      // After restoring to 1, interactions 2 and 3 should be pruned
+      const remaining = listRestorableInteractions(config);
+      assert.equal(remaining.length, 1, "Intermediate folders should be pruned after restore");
+      assert.equal(remaining[0].name, interactions[0].name);
+    } finally {
+      teardown(workspace, originalCwd);
+    }
+  });
+
+  it("restoreInteractionDirect to middle interaction prunes only later ones", () => {
+    const { workspace, config, originalCwd } = setupWorkspace();
+    try {
+      const filePath = path.join(workspace, "data.txt");
+
+      fs.writeFileSync(filePath, "A\n");
+      runBackup(makeCtx("Write", { path: filePath, content: "A" }), config);
+
+      resetInteraction();
+      fs.writeFileSync(filePath, "B\n");
+      runBackup(makeCtx("Write", { path: filePath, content: "B" }), config);
+
+      resetInteraction();
+      fs.writeFileSync(filePath, "C\n");
+      runBackup(makeCtx("Write", { path: filePath, content: "C" }), config);
+
+      const interactions = listRestorableInteractions(config);
+
+      // Restore to interaction 2 → should get "B", prune only interaction 3
+      const res = restoreInteractionDirect(interactions[1].name, config);
+      assert.ok(res.every((r) => r.success || r.subagentPrompt));
       assert.equal(fs.readFileSync(filePath, "utf-8"), "B\n");
+
+      const remaining = listRestorableInteractions(config);
+      assert.equal(remaining.length, 2, "Only interaction 3 should be pruned");
     } finally {
       teardown(workspace, originalCwd);
     }
