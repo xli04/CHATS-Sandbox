@@ -142,6 +142,7 @@ function ensureSharedShadowRepo(config: SandboxConfig): string {
         "node_modules/", ".git/", "dist/", "build/", "__pycache__/",
         "*.pyc", ".env", ".env.*", ".venv/", "venv/", ".cache/",
         ".chats-sandbox/",
+        ".DS_Store", "Thumbs.db",  // macOS/Windows filesystem noise
       ].join("\n") + "\n",
       "utf-8"
     );

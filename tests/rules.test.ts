@@ -85,6 +85,25 @@ describe("read-only tools", () => {
   }
 });
 
+// ── chats-sandbox CLI commands ────────────────────────────────────────
+
+describe("chats-sandbox CLI commands", () => {
+  for (const cmd of [
+    "chats-sandbox status",
+    "chats-sandbox restore 1",
+    "chats-sandbox restore_direct 2",
+    "chats-sandbox history",
+    "chats-sandbox clear",
+    "chats-sandbox diff 1",
+    "chats-sandbox config",
+  ]) {
+    it(`passes through "${cmd}"`, () => {
+      const r = evaluate(makeCtx("Bash", { command: cmd }), cfg());
+      assert.equal(r.decision, "pass", `Expected pass for "${cmd}", got ${r.decision}: ${r.reason}`);
+    });
+  }
+});
+
 // ── File-mutating tools ──────────────────────────────────────────────
 
 describe("file-mutating tools", () => {

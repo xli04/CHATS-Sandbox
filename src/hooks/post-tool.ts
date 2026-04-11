@@ -8,7 +8,7 @@
 import * as fs from "node:fs";
 import { loadConfig } from "../config/load.js";
 import { captureEffect, logEffect } from "../engine/effects.js";
-import type { HookContext, PostToolHookOutput } from "../types.js";
+import type { HookContext } from "../types.js";
 
 async function main(): Promise<void> {
   // Read context from stdin
@@ -48,18 +48,16 @@ async function main(): Promise<void> {
     );
   }
 
-  // Optionally inject effect summary into conversation
-  const summary = buildEffectSummary(effect);
-  if (summary) {
-    const output: PostToolHookOutput = {
-      hookSpecificOutput: {
-        hookEventName: ctx.hook_event as "PostToolUse" | "PostToolUseFailure",
-        additionalContext: summary,
-      },
-    };
-    process.stdout.write(JSON.stringify(output));
+  if (config.verbose) {
+    const summary = buildEffectSummary(effect);
+    if (summary) {
+      process.stderr.write(summary + "\n");
+    }
   }
 
+  // Don't write to stdout — Claude Code's PostToolUse hook validation
+  // is strict and rejects output that doesn't match its expected schema.
+  // Effect logging is internal; no need to inject into the conversation.
   process.exit(0);
 }
 

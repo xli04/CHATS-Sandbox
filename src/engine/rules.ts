@@ -77,6 +77,15 @@ export function evaluate(ctx: HookContext, config: SandboxConfig): RuleResult {
     };
   }
 
+  // ── 3b. Skip our own CLI commands (they manage backups, not create risk) ──
+  if (toolName === "Bash" && /\bchats-sandbox\b/.test(commandStr)) {
+    return {
+      decision: "pass",
+      reason: "chats-sandbox CLI command (internal)",
+      trigger: "none",
+    };
+  }
+
   // ── 4. Rule-based checklist ────────────────────────────────────
   if (isFileMutatingTool(toolName)) {
     return {
