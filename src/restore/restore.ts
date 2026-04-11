@@ -229,12 +229,15 @@ export function restoreArtifact(artifact: BackupArtifact): RestoreResult {
 // ── Helpers ──────────────────────────────────────────────────────────
 
 /**
- * Delete interaction folders that come AFTER the target in the timeline.
- * Called after a successful restore — the interactions "in the future"
- * of the restore point are now off the main timeline and should be removed.
+ * Delete interaction folders from the target onwards (inclusive).
  *
- * Note: the commits in the shared shadow repo remain (they become
- * dangling commits, which git will garbage-collect eventually).
+ * Since each snapshot captures the state BEFORE the interaction ran,
+ * restoring to interaction N means "undo N." So folder N itself should
+ * also be deleted — the workspace is now in the pre-N state, and
+ * folder N's snapshot has been applied.
+ *
+ * Commits in the shared shadow repo remain as dangling objects
+ * (git will garbage-collect them eventually).
  *
  * Returns the number of folders deleted.
  */
@@ -246,13 +249,13 @@ function pruneIntermediateFolders(
   const interactions = listRestorableInteractions(config);
   const targetIdx = interactions.findIndex((i) => i.name === targetInteractionName);
 
-  if (targetIdx === -1 || targetIdx >= interactions.length - 1) {
+  if (targetIdx === -1) {
     return 0;
   }
 
   let deleted = 0;
-  // Delete everything AFTER the target (from index targetIdx + 1 onwards)
-  for (let i = targetIdx + 1; i < interactions.length; i++) {
+  // Delete from targetIdx onwards (inclusive — target folder is also removed)
+  for (let i = targetIdx; i < interactions.length; i++) {
     const folder = path.join(backupRoot, interactions[i].name);
     try {
       fs.rmSync(folder, { recursive: true, force: true });

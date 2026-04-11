@@ -187,10 +187,11 @@ describe("restore e2e: specific-commit targeting (not HEAD)", () => {
       assert.ok(res1.every((r) => r.success || r.subagentPrompt));
       assert.equal(fs.readFileSync(filePath, "utf-8"), "A\n");
 
-      // After restoring to 1, interactions 2 and 3 should be pruned
+      // After restoring to 1, ALL folders (1, 2, 3) should be pruned.
+      // Snapshot 1 = state BEFORE interaction 1, so interaction 1's folder
+      // is also removed (its snapshot has been applied to the workspace).
       const remaining = listRestorableInteractions(config);
-      assert.equal(remaining.length, 1, "Intermediate folders should be pruned after restore");
-      assert.equal(remaining[0].name, interactions[0].name);
+      assert.equal(remaining.length, 0, "All folders should be pruned after restoring to first interaction");
     } finally {
       teardown(workspace, originalCwd);
     }
@@ -214,13 +215,14 @@ describe("restore e2e: specific-commit targeting (not HEAD)", () => {
 
       const interactions = listRestorableInteractions(config);
 
-      // Restore to interaction 2 → should get "B", prune only interaction 3
+      // Restore to interaction 2 → should get "B", prune interactions 2 and 3
+      // (snapshot 2 = state BEFORE interaction 2, so folder 2 is also removed)
       const res = restoreInteractionDirect(interactions[1].name, config);
       assert.ok(res.every((r) => r.success || r.subagentPrompt));
       assert.equal(fs.readFileSync(filePath, "utf-8"), "B\n");
 
       const remaining = listRestorableInteractions(config);
-      assert.equal(remaining.length, 2, "Only interaction 3 should be pruned");
+      assert.equal(remaining.length, 1, "Only interaction 1 should remain");
     } finally {
       teardown(workspace, originalCwd);
     }
