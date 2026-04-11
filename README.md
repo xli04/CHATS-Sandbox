@@ -1,6 +1,6 @@
 # CHATS-Sandbox
 
-General-purpose sandbox plugin for Claude Code. Automatically backs up state before destructive tool calls, enforces safety policies, and logs effect manifests.
+General-purpose sandbox plugin for Claude Code. Automatically backs up state before destructive tool calls and logs effect manifests, so you can restore to the prior state at any previous interaction.
 
 ## Quick Start
 
@@ -17,7 +17,7 @@ cd /path/to/your/project
 chats-sandbox install
 
 # Done. Runs automatically on every Claude Code tool call.
-# Blocks dangerous commands, backs up before destructive actions, logs effects.
+# Backs up before destructive actions and logs effects.
 
 chats-sandbox status             # see what's been backed up
 chats-sandbox restore            # list restore points
@@ -30,7 +30,7 @@ chats-sandbox uninstall          # remove hooks entirely
 
 ## How It Works
 
-Hooks into Claude Code's `PreToolUse` and `PostToolUse` events. Before any tool call executes, it decides whether to deny, backup, or pass through.
+Hooks into Claude Code's `PreToolUse` and `PostToolUse` events. Before any tool call executes, it decides whether to back up or pass through. (Policy/deny rules are opt-in — Claude Code and the model already refuse obviously destructive commands.)
 
 ### Backup Tiers (cheapest first)
 
@@ -98,7 +98,7 @@ Stored in `.chats-sandbox/config.json`:
 | `maxInteractions` | `50` | Max interaction folders before pruning oldest |
 | `effectManifest` | `true` | Log effect manifests to JSONL |
 | `verbose` | `false` | Verbose stderr logging |
-| `denyPatterns` | `[...]` | Regex patterns that block tool calls entirely |
+| `denyPatterns` | `[]` | Opt-in regex patterns that block tool calls entirely |
 | `alwaysBackupPatterns` | `[...]` | Regex patterns that always trigger backup |
 
 ## Backup Storage

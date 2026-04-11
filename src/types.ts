@@ -73,12 +73,11 @@ export const DEFAULT_CONFIG: SandboxConfig = {
   maxInteractions: 50,
   effectManifest: true,
   effectLogPath: ".chats-sandbox/effects.jsonl",
-  denyPatterns: [
-    "rm\\s+-rf\\s+/(?!tmp)",
-    "mkfs\\.",
-    "dd\\s+if=.+of=/dev/",
-    ":(\\)\\{\\s*:|\\(\\)\\s*\\{)",  // fork bomb
-  ],
+  // Deny is opt-in. Claude Code and the underlying model already refuse
+  // obviously destructive commands (rm -rf /, fork bombs, etc.), so the
+  // sandbox ships with no default deny rules. Users who want policy
+  // enforcement can add their own patterns via `chats-sandbox config`.
+  denyPatterns: [],
   alwaysBackupPatterns: [
     "rm\\s",
     "git\\s+push",

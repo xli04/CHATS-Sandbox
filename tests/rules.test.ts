@@ -18,25 +18,38 @@ function cfg(overrides?: Partial<SandboxConfig>): SandboxConfig {
 // ── Deny rules ───────────────────────────────────────────────────────
 
 describe("deny rules", () => {
-  it("blocks rm -rf /", () => {
+  it("default config has no deny rules (policy is opt-in)", () => {
+    // Claude Code and the model already refuse obviously destructive
+    // commands, so the sandbox ships with an empty denyPatterns list.
+    // rm -rf / should pass through the deny check (it'll still get
+    // backed up by tier 2).
     const r = evaluate(makeCtx("Bash", { command: "rm -rf /" }), cfg());
+    assert.notEqual(r.decision, "deny");
+  });
+
+  it("mechanism still works when user configures deny patterns", () => {
+    const r = evaluate(
+      makeCtx("Bash", { command: "rm -rf /" }),
+      cfg({ denyPatterns: ["rm\\s+-rf\\s+/(?!tmp)"] })
+    );
     assert.equal(r.decision, "deny");
     assert.equal(r.trigger, "deny_rule");
   });
 
-  it("blocks fork bombs", () => {
-    const r = evaluate(makeCtx("Bash", { command: ":(){ :|:& };:" }), cfg());
+  it("user-configured deny pattern for fork bombs", () => {
+    const r = evaluate(
+      makeCtx("Bash", { command: ":(){ :|:& };:" }),
+      cfg({ denyPatterns: [":(\\)\\{\\s*:|\\(\\)\\s*\\{)"] })
+    );
     assert.equal(r.decision, "deny");
   });
 
-  it("allows rm -rf /tmp", () => {
-    const r = evaluate(makeCtx("Bash", { command: "rm -rf /tmp/junk" }), cfg());
+  it("user-configured pattern allows /tmp exception", () => {
+    const r = evaluate(
+      makeCtx("Bash", { command: "rm -rf /tmp/junk" }),
+      cfg({ denyPatterns: ["rm\\s+-rf\\s+/(?!tmp)"] })
+    );
     assert.notEqual(r.decision, "deny");
-  });
-
-  it("blocks mkfs", () => {
-    const r = evaluate(makeCtx("Bash", { command: "mkfs.ext4 /dev/sda" }), cfg());
-    assert.equal(r.decision, "deny");
   });
 });
 
@@ -130,10 +143,13 @@ describe("backupMode=off", () => {
     assert.equal(r.decision, "pass");
   });
 
-  it("still denies dangerous commands when off", () => {
-    // Deny rules should NOT fire when backupMode=off — verify current behavior
-    const r = evaluate(makeCtx("Bash", { command: "rm -rf /" }), cfg({ backupMode: "off" }));
-    // backupMode=off returns pass immediately before deny check
+  it("backupMode=off short-circuits before deny rules", () => {
+    // Even if the user configures deny patterns, backupMode=off passes
+    // everything through. Off means off.
+    const r = evaluate(
+      makeCtx("Bash", { command: "rm -rf /" }),
+      cfg({ backupMode: "off", denyPatterns: ["rm\\s+-rf\\s+/"] })
+    );
     assert.equal(r.decision, "pass");
   });
 });
