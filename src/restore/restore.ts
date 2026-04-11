@@ -145,21 +145,28 @@ function restoreGitSnapshot(artifact: BackupArtifact): RestoreResult {
     GIT_WORK_TREE: cwd,
   };
 
+  const opts = { encoding: "utf-8" as const, timeout: 30_000, env, cwd, stdio: "pipe" as const };
+
   try {
-    execSync(`git checkout ${commit} -- .`, {
-      encoding: "utf-8",
-      timeout: 30_000,
-      env,
-      cwd,
-      stdio: "pipe",
-    });
+    // Use read-tree + checkout-index + clean instead of plain checkout.
+    // `git checkout <hash> -- .` only overwrites files present in the commit
+    // but does NOT delete files that were added after it. The three-step
+    // approach makes the workspace exactly match the commit:
+    //   read-tree: set the index to the target commit's tree
+    //   checkout-index: overwrite workspace files from the index
+    //   clean -fd: remove workspace files not in the index
+    // The shadow repo's info/exclude protects node_modules, .env, etc.
+    execSync(`git read-tree ${commit}`, opts);
+    execSync("git checkout-index -f -a", opts);
+    execSync("git clean -fd", opts);
+
     return {
       success: true,
       description: `Restored workspace from git snapshot (${commit.slice(0, 8)})`,
     };
   } catch (e: unknown) {
     const msg = e instanceof Error ? e.message : String(e);
-    return { success: false, description: `git checkout failed: ${msg.slice(0, 200)}` };
+    return { success: false, description: `git restore failed: ${msg.slice(0, 200)}` };
   }
 }
 

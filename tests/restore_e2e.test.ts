@@ -227,6 +227,76 @@ describe("restore e2e: specific-commit targeting (not HEAD)", () => {
   });
 });
 
+// ── File deletion on restore (the webpack.common.ts bug) ─────────────
+
+describe("restore e2e: files added after target commit are deleted", () => {
+  beforeEach(() => resetInteraction());
+
+  it("restoreInteractionDirect removes files created by later interactions", () => {
+    const { workspace, config, originalCwd } = setupWorkspace();
+    try {
+      // Interaction 1: create file_a
+      const fileA = path.join(workspace, "file_a.txt");
+      fs.writeFileSync(fileA, "a\n");
+      runBackup(makeCtx("Write", { path: fileA, content: "a" }), config);
+
+      // Interaction 2: create file_b (file_a still exists)
+      resetInteraction();
+      const fileB = path.join(workspace, "file_b.txt");
+      fs.writeFileSync(fileB, "b\n");
+      runBackup(makeCtx("Write", { path: fileB, content: "b" }), config);
+
+      // Interaction 3: create file_c (file_a + file_b still exist)
+      resetInteraction();
+      const fileC = path.join(workspace, "file_c.txt");
+      fs.writeFileSync(fileC, "c\n");
+      runBackup(makeCtx("Write", { path: fileC, content: "c" }), config);
+
+      // All 3 files exist
+      assert.ok(fs.existsSync(fileA));
+      assert.ok(fs.existsSync(fileB));
+      assert.ok(fs.existsSync(fileC));
+
+      // Restore to interaction 1 — only file_a should remain
+      const interactions = listRestorableInteractions(config);
+      const res = restoreInteractionDirect(interactions[0].name, config);
+      assert.ok(res.every((r) => r.success || r.subagentPrompt),
+        `Restore failed: ${JSON.stringify(res)}`);
+
+      assert.ok(fs.existsSync(fileA), "file_a should still exist");
+      assert.ok(!fs.existsSync(fileB), "file_b should be deleted (created after target)");
+      assert.ok(!fs.existsSync(fileC), "file_c should be deleted (created after target)");
+
+      assert.equal(fs.readFileSync(fileA, "utf-8"), "a\n");
+    } finally {
+      teardown(workspace, originalCwd);
+    }
+  });
+
+  it("restoreInteractionLoop removes files created by undone interactions", () => {
+    const { workspace, config, originalCwd } = setupWorkspace();
+    try {
+      const fileA = path.join(workspace, "alpha.txt");
+      fs.writeFileSync(fileA, "alpha\n");
+      runBackup(makeCtx("Write", { path: fileA, content: "alpha" }), config);
+
+      resetInteraction();
+      const fileB = path.join(workspace, "beta.txt");
+      fs.writeFileSync(fileB, "beta\n");
+      runBackup(makeCtx("Write", { path: fileB, content: "beta" }), config);
+
+      // Restore via loop to interaction 1
+      const interactions = listRestorableInteractions(config);
+      restoreInteractionLoop(interactions[0].name, config);
+
+      assert.ok(fs.existsSync(fileA), "alpha.txt should exist");
+      assert.ok(!fs.existsSync(fileB), "beta.txt should be deleted");
+    } finally {
+      teardown(workspace, originalCwd);
+    }
+  });
+});
+
 // ── Single-file restore (fileOnly option) ────────────────────────────
 
 describe("restore e2e: --file single-file restore", () => {
