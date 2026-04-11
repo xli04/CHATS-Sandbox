@@ -365,6 +365,7 @@ function gitSnapshotBackup(
       description: `git add -A snapshot (${hash.slice(0, 8)})`,
       strategy: "git_snapshot",
       artifactPath: shadowDir,
+      commitHash: hash,
     };
   } catch {
     return null;

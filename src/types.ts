@@ -121,6 +121,8 @@ export interface BackupArtifact {
   subagentCommands?: string[];
   /** The original action that was about to execute (for restore context) */
   originalAction?: string;
+  /** Full git commit hash (for git_snapshot strategy — references shared shadow repo) */
+  commitHash?: string;
 }
 
 // ── Effect manifest entry ────────────────────────────────────────────

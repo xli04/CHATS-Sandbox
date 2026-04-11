@@ -140,6 +140,7 @@ function install(projectRoot: string): void {
   console.log("");
   console.log("Slash commands available in Claude Code:");
   console.log("  /sandbox:status          Show sandbox state");
+  console.log("  /sandbox:history         Timeline of recent interactions");
   console.log("  /sandbox:restore         Reverse-loop restore");
   console.log("  /sandbox:restore_direct  Direct jump restore");
   console.log("  /sandbox:diff            Diff against interaction");
@@ -179,7 +180,7 @@ function uninstall(projectRoot: string): void {
   // Remove slash commands
   const commandsDir = path.join(projectRoot, ".claude", "commands");
   const sandboxCmds = ["sandbox:status.md", "sandbox:restore.md", "sandbox:restore_direct.md",
-    "sandbox:diff.md", "sandbox:backups.md", "sandbox:config.md"];
+    "sandbox:diff.md", "sandbox:backups.md", "sandbox:config.md", "sandbox:history.md"];
   for (const f of sandboxCmds) {
     const p = path.join(commandsDir, f);
     if (fs.existsSync(p)) {
@@ -404,7 +405,7 @@ function diffCommand(projectRoot: string, interactionArg?: string): void {
   const { listRestorableInteractions } = require("./restore/restore.js");
   const interactions = listRestorableInteractions(config) as Array<{
     name: string;
-    artifacts: Array<{ strategy: string; artifactPath: string }>;
+    artifacts: Array<{ strategy: string; artifactPath: string; commitHash?: string; id: string }>;
   }>;
 
   if (!interactionArg) {
@@ -412,9 +413,14 @@ function diffCommand(projectRoot: string, interactionArg?: string): void {
     return;
   }
 
+  if (interactions.length === 0) {
+    console.log("No interactions to diff against.");
+    return;
+  }
+
   const idx = parseInt(interactionArg, 10) - 1;
   if (isNaN(idx) || idx < 0 || idx >= interactions.length) {
-    console.error(`Invalid interaction number. Use 1-${interactions.length}.`);
+    console.error(`Invalid interaction number: ${interactionArg}. Use 1-${interactions.length}.`);
     return;
   }
 
@@ -426,32 +432,130 @@ function diffCommand(projectRoot: string, interactionArg?: string): void {
     return;
   }
 
+  // Use the specific commit hash for this interaction (NOT HEAD, which is
+  // the latest snapshot in the shared shadow repo).
+  const commit = snapshot.commitHash ?? snapshot.id;
+  if (!commit) {
+    console.error(`Snapshot in ${target.name} is missing commit hash.`);
+    return;
+  }
+
   const shadowDir = snapshot.artifactPath;
+  if (!fs.existsSync(shadowDir)) {
+    console.error(`Shadow repo not found: ${shadowDir}`);
+    return;
+  }
+
   const { execSync } = require("node:child_process");
   const cwd = process.cwd();
 
   try {
-    // Stage current state in shadow repo to diff against snapshot
     const env = { ...process.env, GIT_DIR: shadowDir, GIT_WORK_TREE: cwd };
     const opts = { encoding: "utf-8" as const, timeout: 30_000, env, cwd, stdio: "pipe" as const };
 
+    // Stage current state, diff against the target commit, then unstage.
     execSync("git add -A", opts);
-    const diff = execSync("git diff --cached --stat HEAD", opts).trim();
-    const fullDiff = execSync("git diff --cached HEAD --no-color", opts).trim();
-    execSync("git reset HEAD --quiet", opts);
+    const diff = execSync(`git diff --cached --stat ${commit}`, opts).trim();
+    const fullDiff = execSync(`git diff --cached ${commit} --no-color`, opts).trim();
+    execSync("git reset --quiet", opts);
 
     if (!diff) {
       console.log(`No changes between ${target.name} and current state.`);
       return;
     }
 
-    console.log(`Changes since ${target.name}:\n`);
+    console.log(`Changes since ${target.name} (${commit.slice(0, 8)}):\n`);
     console.log(diff);
     console.log("\n--- Full diff ---\n");
     console.log(fullDiff);
   } catch (e: unknown) {
     const msg = e instanceof Error ? e.message : String(e);
     console.error(`Diff failed: ${msg.slice(0, 200)}`);
+  }
+}
+
+// ── History ──────────────────────────────────────────────────────────
+
+function historyCommand(projectRoot: string, countArg?: string): void {
+  const config = loadConfig(projectRoot);
+  const { listRestorableInteractions } = require("./restore/restore.js");
+  const interactions = listRestorableInteractions(config) as Array<{
+    name: string;
+    artifacts: Array<{
+      strategy: string;
+      artifactPath: string;
+      commitHash?: string;
+      id: string;
+      toolName: string;
+      description: string;
+      timestamp: string;
+    }>;
+  }>;
+
+  if (interactions.length === 0) {
+    console.log("No interactions recorded yet.");
+    return;
+  }
+
+  // Parse count (default 10)
+  let count = 10;
+  if (countArg !== undefined) {
+    const n = parseInt(countArg, 10);
+    if (isNaN(n) || n < 1) {
+      console.error(`Invalid count: ${countArg}. Must be a positive integer.`);
+      return;
+    }
+    count = n;
+  }
+
+  // Show the most recent `count` interactions
+  const shown = interactions.slice(-count);
+  const startIdx = interactions.length - shown.length + 1;
+
+  console.log(`Showing last ${shown.length} of ${interactions.length} interactions:\n`);
+
+  const { execSync } = require("node:child_process");
+  const cwd = process.cwd();
+
+  for (let i = 0; i < shown.length; i++) {
+    const inter = shown[i];
+    const displayNum = startIdx + i;
+    const time = inter.name.split("_").slice(2).join("_"); // e.g. 20260410221532
+    const timeFormatted =
+      time.length >= 14
+        ? `${time.slice(8, 10)}:${time.slice(10, 12)}:${time.slice(12, 14)}`
+        : "?";
+
+    const snapshot = inter.artifacts.find((a) => a.strategy === "git_snapshot");
+    const tool = inter.artifacts[0]?.toolName ?? "?";
+    const strategies = inter.artifacts.map((a) => a.strategy).join("+");
+
+    // Get file stats from the shared shadow repo if we have a commit
+    let stat = "";
+    if (snapshot && (snapshot.commitHash || snapshot.id) && fs.existsSync(snapshot.artifactPath)) {
+      const commit = snapshot.commitHash ?? snapshot.id;
+      try {
+        const env = { ...process.env, GIT_DIR: snapshot.artifactPath, GIT_WORK_TREE: cwd };
+        const opts = { encoding: "utf-8" as const, timeout: 10_000, env, cwd, stdio: "pipe" as const };
+        stat = execSync(`git diff --shortstat ${commit}~1 ${commit}`, opts).trim();
+      } catch {
+        // first commit or other error — skip stat
+      }
+    }
+
+    console.log(`  ${displayNum}. ${timeFormatted}  ${inter.name}  [${strategies}]`);
+    console.log(`     Tool: ${tool}`);
+    for (const a of inter.artifacts) {
+      console.log(`     - ${a.description}`);
+    }
+    if (stat) {
+      console.log(`     ${stat}`);
+    }
+    console.log();
+  }
+
+  if (interactions.length > shown.length) {
+    console.log(`(${interactions.length - shown.length} older interactions hidden — use 'chats-sandbox history <N>' to see more)`);
   }
 }
 
@@ -493,6 +597,9 @@ switch (command) {
   case "diff":
     diffCommand(projectRoot, args[1]);
     break;
+  case "history":
+    historyCommand(projectRoot, args[1]);
+    break;
   default:
     console.log("CHATS-Sandbox — General-purpose sandbox for Claude Code\n");
     console.log("Usage: chats-sandbox <command>\n");
@@ -503,6 +610,7 @@ switch (command) {
     console.log("  config set <key> <value>        Set a config value");
     console.log("  status                          Show sandbox state");
     console.log("  backups                         List recent backup artifacts");
+    console.log("  history [N]                     Timeline of last N interactions (default 10)");
     console.log("  restore                         List restorable interactions");
     console.log("  restore <N>                     Reverse-loop restore to interaction N");
     console.log("  restore <N> --file <path>       Restore single file from interaction N");

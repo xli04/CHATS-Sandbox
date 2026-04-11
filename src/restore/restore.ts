@@ -121,10 +121,21 @@ function restoreGitSnapshot(artifact: BackupArtifact): RestoreResult {
     return { success: false, description: `Shadow repo not found: ${shadowDir}` };
   }
 
-  // Get the HEAD commit from the shadow repo
-  const headResult = exec("git rev-parse HEAD", shadowDir);
-  if (!headResult.ok) {
-    return { success: false, description: `Cannot read shadow repo HEAD` };
+  // Use the specific commit hash stored with the artifact — NOT HEAD.
+  // With the shared shadow repo, HEAD points to the LATEST snapshot,
+  // which may be a later interaction than the one we want to restore.
+  const commit = artifact.commitHash ?? artifact.id;
+  if (!commit) {
+    return { success: false, description: "Artifact is missing commit hash" };
+  }
+
+  // Verify the commit exists in the shadow repo
+  const verifyResult = exec(`git rev-parse ${commit}`, shadowDir);
+  if (!verifyResult.ok) {
+    return {
+      success: false,
+      description: `Commit ${commit.slice(0, 8)} not found in shadow repo`,
+    };
   }
 
   const cwd = process.cwd();
@@ -135,7 +146,7 @@ function restoreGitSnapshot(artifact: BackupArtifact): RestoreResult {
   };
 
   try {
-    execSync(`git checkout ${headResult.stdout} -- .`, {
+    execSync(`git checkout ${commit} -- .`, {
       encoding: "utf-8",
       timeout: 30_000,
       env,
@@ -144,7 +155,7 @@ function restoreGitSnapshot(artifact: BackupArtifact): RestoreResult {
     });
     return {
       success: true,
-      description: `Restored workspace from git snapshot (${headResult.stdout.slice(0, 8)})`,
+      description: `Restored workspace from git snapshot (${commit.slice(0, 8)})`,
     };
   } catch (e: unknown) {
     const msg = e instanceof Error ? e.message : String(e);
@@ -240,14 +251,15 @@ export function restoreInteractionDirect(
     }
 
     const shadowDir = snapshot.artifactPath;
-    const headResult = exec("git rev-parse HEAD", shadowDir);
-    if (!headResult.ok) {
-      return [{ success: false, description: "Cannot read shadow repo" }];
+    // Use the specific commit hash for this interaction, not HEAD.
+    const commit = snapshot.commitHash ?? snapshot.id;
+    if (!commit) {
+      return [{ success: false, description: "Snapshot is missing commit hash" }];
     }
 
     const cwd = process.cwd();
     try {
-      execSync(`git checkout ${headResult.stdout} -- "${options.fileOnly}"`, {
+      execSync(`git checkout ${commit} -- "${options.fileOnly}"`, {
         encoding: "utf-8",
         timeout: 30_000,
         env: { ...process.env, GIT_DIR: shadowDir, GIT_WORK_TREE: cwd },
