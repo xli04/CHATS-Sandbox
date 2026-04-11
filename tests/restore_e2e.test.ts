@@ -371,3 +371,58 @@ describe("restore e2e: --file single-file restore", () => {
     }
   });
 });
+
+// ── Partial restore failure → pruning skipped ────────────────────────
+
+describe("restore e2e: partial failure preserves folders", () => {
+  beforeEach(() => resetInteraction());
+
+  it("restoreInteractionLoop does NOT prune when a step fails", () => {
+    const { workspace, config, originalCwd } = setupWorkspace();
+    try {
+      // Interaction 1: real backup
+      const fileA = path.join(workspace, "good.txt");
+      fs.writeFileSync(fileA, "good\n");
+      runBackup(makeCtx("Write", { path: fileA, content: "good" }), config);
+
+      // Interaction 2: real backup
+      resetInteraction();
+      fs.writeFileSync(fileA, "changed\n");
+      runBackup(makeCtx("Write", { path: fileA, content: "changed" }), config);
+
+      // Now corrupt interaction 2's metadata to force a restore failure:
+      // replace the commitHash with a nonexistent one
+      const interactions = listRestorableInteractions(config);
+      assert.equal(interactions.length, 2);
+
+      const inter2Dir = path.join(
+        path.resolve(config.backupDir),
+        interactions[1].name
+      );
+      const metaPath = path.join(inter2Dir, "metadata.json");
+      const meta = JSON.parse(fs.readFileSync(metaPath, "utf-8"));
+      for (const a of meta) {
+        if (a.strategy === "git_snapshot") {
+          a.commitHash = "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef";
+        }
+      }
+      fs.writeFileSync(metaPath, JSON.stringify(meta));
+
+      // Try to loop-restore to interaction 1
+      const results = restoreInteractionLoop(interactions[0].name, config);
+
+      // Should have at least one failure
+      const failures = results.filter((r: { success: boolean }) => !r.success);
+      assert.ok(failures.length > 0, "Expected at least one failure from corrupted commit");
+
+      // Folders should NOT be pruned because restore had a failure
+      const remaining = listRestorableInteractions(config);
+      assert.ok(
+        remaining.length >= 2,
+        `Expected folders preserved on failure, got ${remaining.length}`
+      );
+    } finally {
+      teardown(workspace, originalCwd);
+    }
+  });
+});

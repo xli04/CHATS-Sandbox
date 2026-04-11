@@ -511,17 +511,22 @@ export function runBackup(
     /\b(export|unset|source\s+\.env)/i.test(command) ||
     /git\s+(push|rebase|reset|commit\s+--amend)/i.test(command);
 
+  let targetedSucceeded = false;
   if (hasTargetedPattern) {
     const targeted = targetedFn();
     if (targeted) {
       const dir = materializeInteractionDir(config);
       result.artifacts.push(targeted);
       writeMetadata(dir, targeted);
+      targetedSucceeded = true;
     }
   }
 
   // ── 3rd level: need subagent for outside-workspace state ───────
-  if (outsideWorkspace && !hasTargetedPattern) {
+  // Trigger when outside-workspace AND no targeted manifest actually succeeded.
+  // (hasTargetedPattern may be true but the backup can fail, e.g., git tag
+  // fails when there's no repo — still need subagent for the remote state.)
+  if (outsideWorkspace && !targetedSucceeded) {
     const cmdStr = String(ctx.tool_input.command ?? JSON.stringify(ctx.tool_input));
     result.needsSubagent = true;
     result.subagentReason =
