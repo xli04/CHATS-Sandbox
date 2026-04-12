@@ -202,11 +202,15 @@ export function runSubagentBackup(
   //   --bare               : skip plugins/hooks/MCP discovery (faster + no recursion)
   //   --model <model>      : select the subagent model
   // We use execFileSync with an array to avoid shell quoting issues with the prompt.
+  // NOTE: do NOT use --bare. That flag skips OAuth/keychain auth loading,
+  // which causes "Not logged in · Please run /login" errors for users
+  // authenticated via Claude Max (the common case). Our recursion guard
+  // via CHATS_SANDBOX_NO_HOOK env var is sufficient — we don't need
+  // --bare's plugin-skipping behavior.
   const args = [
     "-p",
     prompt,
     "--output-format", "json",
-    "--bare",
   ];
   if (config.subagentModel && config.subagentModel !== "inherit") {
     args.push("--model", config.subagentModel);
@@ -224,9 +228,9 @@ export function runSubagentBackup(
       timeout: timeoutMs,
       env: {
         ...process.env,
-        // Recursion guard (even with --bare, belt and suspenders):
-        // the subagent's own tool calls will fire our hooks. This env
-        // var makes our hooks exit early inside the subprocess.
+        // Recursion guard: the subagent's own tool calls will fire our
+        // hooks. This env var makes our hooks exit early inside the
+        // subprocess.
         CHATS_SANDBOX_NO_HOOK: "1",
       },
       stdio: ["pipe", "pipe", "pipe"],
@@ -241,7 +245,16 @@ export function runSubagentBackup(
     logDebug(`FAILED: ${msg.slice(0, 500)}`);
     if (stderr) logDebug(`stderr: ${stderr.slice(0, 500)}`);
     if (stdout) logDebug(`partial stdout: ${stdout.slice(0, 500)}`);
-    if (config.verbose) {
+
+    // Detect common auth failure and log a clear message
+    if (stdout.includes("Not logged in") || stderr.includes("Not logged in")) {
+      logDebug("DIAGNOSIS: claude CLI is not logged in. Run `claude` interactively once to authenticate.");
+      process.stderr.write(
+        "[CHATS-Sandbox] Subagent skipped: claude CLI not logged in. " +
+        "Run `claude` interactively once to authenticate, or disable the subagent with " +
+        "`chats-sandbox config set subagentEnabled false`.\n"
+      );
+    } else if (config.verbose) {
       process.stderr.write(
         `[CHATS-Sandbox] subagent failed: ${msg.slice(0, 200)}\n`
       );
