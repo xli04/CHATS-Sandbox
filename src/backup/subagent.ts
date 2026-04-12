@@ -51,7 +51,7 @@ function buildSubagentPrompt(
   const args = JSON.stringify(ctx.tool_input, null, 2);
   const cwd = process.cwd();
 
-  return `You are a backup subagent for CHATS-Sandbox. A tool call is about to execute that affects state OUTSIDE the workspace. Your job: create a minimal recovery artifact BEFORE it runs.
+  return `You are a backup subagent for CHATS-Sandbox. A tool call is about to execute that affects state OUTSIDE the workspace. Your job: actually CREATE a minimal recovery artifact BEFORE the action runs, then report what you did.
 
 UPCOMING ACTION:
   Tool: ${toolName}
@@ -61,31 +61,65 @@ UPCOMING ACTION:
 WORKSPACE (files inside this directory are already captured by tier-2 git snapshot):
   ${cwd}
 
-BACKUP STORAGE DIRECTORY (write artifact files here if needed):
+BACKUP STORAGE DIRECTORY (write any artifact files you create here):
   ${interactionDir}
 
-INSTRUCTIONS:
-1. Analyze the upcoming action. What out-of-workspace state does it affect?
-   Examples:
-     - pip/npm/apt install → system-wide packages (can save with pip freeze, etc.)
-     - git push → remote ref state (can create a git tag)
-     - curl POST → remote API (probably can't back up, just document)
-     - writing to /etc/ or ~/.config/ → copy the file before overwriting
-2. Use the CHEAPEST strategy. Save a recipe (manifest), not a full copy.
-3. DO NOT execute the upcoming action itself. You are only creating the backup.
-4. Output ONLY a single-line JSON object to stdout (no markdown, no commentary):
+## CLASSIFY THE ACTION FIRST
 
-{"description":"what was backed up","backup_commands":["cmd1","cmd2"],"recovery_commands":["cmd1","cmd2"],"artifact_paths":["path/to/artifact"]}
+Pick ONE of these categories:
 
-REQUIREMENTS:
+### Category A: Local file write outside the current workspace
+Example: Write tool with path /Users/foo/other_project/src/file.ts
+
+STRATEGY — shadow git repo rooted at the target's project:
+1. Find the target file's project root (walk up from its directory looking for .git, package.json, pyproject.toml, Cargo.toml, or similar markers). If no marker found, use the file's parent directory.
+2. Create a shadow git repo at ${interactionDir}/external-shadow/:
+     mkdir -p '${interactionDir}/external-shadow'
+     GIT_DIR='${interactionDir}/external-shadow' GIT_WORK_TREE='<target-project-root>' git init
+     GIT_DIR='${interactionDir}/external-shadow' GIT_WORK_TREE='<target-project-root>' git config user.email "chats-sandbox@local"
+     GIT_DIR='${interactionDir}/external-shadow' GIT_WORK_TREE='<target-project-root>' git config user.name "CHATS-Sandbox"
+     GIT_DIR='${interactionDir}/external-shadow' GIT_WORK_TREE='<target-project-root>' git add -A
+     GIT_DIR='${interactionDir}/external-shadow' GIT_WORK_TREE='<target-project-root>' git commit -m "pre-action snapshot" --allow-empty-message
+3. Record the target project root path and the commit hash.
+4. recovery_commands should be the three-step restore:
+     GIT_DIR='${interactionDir}/external-shadow' GIT_WORK_TREE='<target-project-root>' git read-tree <hash>
+     GIT_DIR='${interactionDir}/external-shadow' GIT_WORK_TREE='<target-project-root>' git checkout-index -f -a
+     GIT_DIR='${interactionDir}/external-shadow' GIT_WORK_TREE='<target-project-root>' git clean -fd
+   This correctly handles create, modify, AND delete scenarios because it snapshots the entire target tree.
+
+### Category B: Remote state (git push, curl POST/PUT/DELETE, API calls)
+STRATEGY — document recovery for out-of-band state:
+- For git push: create a local git tag at the current HEAD (backup_commands), and provide recovery_commands that would force-push the tag back if needed.
+- For remote API calls: you likely can't back up the remote state. Document what would be needed for manual recovery in description.
+
+### Category C: System package install/uninstall (pip, npm, apt, brew)
+STRATEGY — save a manifest:
+- pip install → pip freeze > ${interactionDir}/pip_freeze.txt, recovery = pip install -r that file
+- npm install -g → npm list -g --json > ${interactionDir}/npm_list.json
+- apt install → dpkg --get-selections > ${interactionDir}/apt_list.txt
+- brew install → brew list > ${interactionDir}/brew_list.txt
+
+### Category D: Environment variable mutation (export, unset, source)
+STRATEGY — snapshot env vars: env > ${interactionDir}/env.txt
+
+### Category E: Anything else
+Do your best to capture some recoverable state in ${interactionDir}, or document clearly what cannot be recovered.
+
+## OUTPUT FORMAT
+
+After running your backup commands, output a single-line JSON object (no markdown fences, no commentary):
+
+{"description":"...","backup_commands":["cmd1","cmd2"],"recovery_commands":["cmd1","cmd2"],"artifact_paths":["path1"]}
+
 - description: short human-readable summary
-- backup_commands: list of shell commands you actually ran (for audit/debug)
-- recovery_commands: list of shell commands that would reverse the upcoming action
-- artifact_paths: optional list of files you created in the backup storage dir
+- backup_commands: the commands you ACTUALLY RAN to create the backup
+- recovery_commands: commands that would reverse the upcoming action (these will be executed verbatim by chats-sandbox restore)
+- artifact_paths: files you created inside the backup storage directory
 
-If the action is reversible via simple commands, fill recovery_commands with those.
-If it's not truly reversible, document what steps would be needed anyway.
-Be concise. Keep the JSON under 2KB.`;
+CRITICAL:
+- DO NOT execute the upcoming action. You only create the backup.
+- Actually run your backup_commands with the bash tool. Don't just describe them.
+- Keep the final JSON under 2KB.`;
 }
 
 function parseSubagentOutput(raw: string): SubagentResponse | null {
