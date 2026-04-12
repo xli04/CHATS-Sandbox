@@ -89,29 +89,73 @@ Be concise. Keep the JSON under 2KB.`;
 }
 
 function parseSubagentOutput(raw: string): SubagentResponse | null {
-  // Find the first {...} block in the output (claude may emit extra lines)
-  const match = raw.match(/\{[\s\S]*\}/);
-  if (!match) return null;
+  // When claude -p is called with --output-format json, the response is a
+  // JSON wrapper like {"result": "...", "session_id": "...", ...}.
+  // The `result` field contains the actual text the subagent produced,
+  // which should itself be (or contain) our backup JSON.
+  //
+  // We try in this order:
+  //   1. Parse raw as JSON wrapper → extract `result` → parse result as our JSON
+  //   2. Parse the first {...} block in raw directly (fallback for text mode)
 
-  try {
-    const parsed = JSON.parse(match[0]);
+  function extractOurShape(candidate: unknown): SubagentResponse | null {
     if (
-      typeof parsed.description === "string" &&
-      Array.isArray(parsed.backup_commands) &&
-      Array.isArray(parsed.recovery_commands)
+      typeof candidate === "object" && candidate !== null &&
+      typeof (candidate as Record<string, unknown>).description === "string" &&
+      Array.isArray((candidate as Record<string, unknown>).backup_commands) &&
+      Array.isArray((candidate as Record<string, unknown>).recovery_commands)
     ) {
+      const c = candidate as Record<string, unknown>;
       return {
-        description: parsed.description,
-        backup_commands: parsed.backup_commands.map(String),
-        recovery_commands: parsed.recovery_commands.map(String),
-        artifact_paths: Array.isArray(parsed.artifact_paths)
-          ? parsed.artifact_paths.map(String)
+        description: String(c.description),
+        backup_commands: (c.backup_commands as unknown[]).map(String),
+        recovery_commands: (c.recovery_commands as unknown[]).map(String),
+        artifact_paths: Array.isArray(c.artifact_paths)
+          ? (c.artifact_paths as unknown[]).map(String)
           : undefined,
       };
     }
-  } catch {
-    // fall through
+    return null;
   }
+
+  // Try 1: parse raw as claude -p JSON wrapper
+  try {
+    const wrapper = JSON.parse(raw);
+    if (wrapper && typeof wrapper === "object") {
+      const result = (wrapper as Record<string, unknown>).result;
+      if (typeof result === "string") {
+        // Extract JSON block from the result text
+        const innerMatch = result.match(/\{[\s\S]*\}/);
+        if (innerMatch) {
+          try {
+            const inner = JSON.parse(innerMatch[0]);
+            const shaped = extractOurShape(inner);
+            if (shaped) return shaped;
+          } catch {
+            // fall through
+          }
+        }
+      }
+      // Maybe the wrapper itself has our shape (if claude passed through)
+      const direct = extractOurShape(wrapper);
+      if (direct) return direct;
+    }
+  } catch {
+    // Not valid JSON at top level, fall through
+  }
+
+  // Try 2: find any {...} block in the raw text
+  const match = raw.match(/\{[\s\S]*\}/);
+  if (match) {
+    try {
+      const parsed = JSON.parse(match[0]);
+      const shaped = extractOurShape(parsed);
+      if (shaped) return shaped;
+    } catch {
+      // give up
+    }
+  }
+
   return null;
 }
 
@@ -129,7 +173,21 @@ export function runSubagentBackup(
   config: SandboxConfig
 ): BackupArtifact | null {
   if (!config.subagentEnabled) return null;
+
+  // Always write diagnostic trace to a log file so users can debug
+  // silent subagent failures without needing verbose mode.
+  const debugLogPath = path.join(path.dirname(path.resolve(config.backupDir)), "subagent.log");
+  const logDebug = (msg: string): void => {
+    try {
+      fs.mkdirSync(path.dirname(debugLogPath), { recursive: true });
+      fs.appendFileSync(debugLogPath, `[${new Date().toISOString()}] ${msg}\n`);
+    } catch {
+      // best-effort
+    }
+  };
+
   if (!isClaudeCliAvailable()) {
+    logDebug("skipped: claude CLI not found in PATH");
     if (config.verbose) {
       process.stderr.write("[CHATS-Sandbox] subagent skipped: claude CLI not found\n");
     }
@@ -139,29 +197,50 @@ export function runSubagentBackup(
   const prompt = buildSubagentPrompt(ctx, interactionDir);
   const timeoutMs = Math.max(10_000, config.subagentTimeoutSeconds * 1000);
 
-  // Build claude -p command with model selection
-  const modelArg =
-    config.subagentModel && config.subagentModel !== "inherit"
-      ? ` --model ${config.subagentModel}`
-      : "";
+  // Invoke `claude -p` with:
+  //   --output-format json : structured output with a `result` field
+  //   --bare               : skip plugins/hooks/MCP discovery (faster + no recursion)
+  //   --model <model>      : select the subagent model
+  // We use execFileSync with an array to avoid shell quoting issues with the prompt.
+  const args = [
+    "-p",
+    prompt,
+    "--output-format", "json",
+    "--bare",
+  ];
+  if (config.subagentModel && config.subagentModel !== "inherit") {
+    args.push("--model", config.subagentModel);
+  }
+
+  logDebug(`invoking: claude ${args.slice(0, 2).join(" ")} [prompt=${prompt.length} chars] ${args.slice(2).join(" ")} (timeout=${timeoutMs}ms)`);
 
   let stdout = "";
+  let stderr = "";
   try {
-    stdout = execSync(`claude -p${modelArg}`, {
-      input: prompt,
+    // Use execFileSync — avoids shell parsing of the prompt argument
+    const { execFileSync } = require("node:child_process");
+    stdout = execFileSync("claude", args, {
       encoding: "utf-8",
       timeout: timeoutMs,
       env: {
         ...process.env,
-        // Recursion guard: the subagent's own tool calls will fire our hooks.
-        // This env var makes our hooks exit early inside the subprocess.
+        // Recursion guard (even with --bare, belt and suspenders):
+        // the subagent's own tool calls will fire our hooks. This env
+        // var makes our hooks exit early inside the subprocess.
         CHATS_SANDBOX_NO_HOOK: "1",
       },
       stdio: ["pipe", "pipe", "pipe"],
       maxBuffer: 4 * 1024 * 1024, // 4 MB cap
     });
+    logDebug(`stdout (${stdout.length} chars): ${stdout.slice(0, 500)}`);
   } catch (e: unknown) {
     const msg = e instanceof Error ? e.message : String(e);
+    const errWithOutput = e as { stdout?: string; stderr?: string };
+    if (errWithOutput.stdout) stdout = String(errWithOutput.stdout);
+    if (errWithOutput.stderr) stderr = String(errWithOutput.stderr);
+    logDebug(`FAILED: ${msg.slice(0, 500)}`);
+    if (stderr) logDebug(`stderr: ${stderr.slice(0, 500)}`);
+    if (stdout) logDebug(`partial stdout: ${stdout.slice(0, 500)}`);
     if (config.verbose) {
       process.stderr.write(
         `[CHATS-Sandbox] subagent failed: ${msg.slice(0, 200)}\n`
@@ -172,6 +251,7 @@ export function runSubagentBackup(
 
   const parsed = parseSubagentOutput(stdout);
   if (!parsed) {
+    logDebug(`parse failed. Raw stdout was: ${stdout.slice(0, 2000)}`);
     if (config.verbose) {
       process.stderr.write(
         "[CHATS-Sandbox] subagent returned unparseable output\n"
@@ -179,6 +259,8 @@ export function runSubagentBackup(
     }
     return null;
   }
+
+  logDebug(`parse success: ${parsed.description}`);
 
   // Persist the raw subagent response as a file alongside the artifact
   const id = Math.random().toString(36).slice(2, 10);

@@ -28,10 +28,14 @@ const MOCK_CLAUDE = path.join(MOCK_DIR, "claude");
 let originalPath = "";
 
 function installMockClaude(responseJson: string): void {
-  // Write a shell script that ignores its input and emits the canned response
+  // Write the canned response to a sidecar file, then have the mock
+  // script `cat` it. This avoids shell escaping entirely — we can
+  // handle arbitrary JSON (even with embedded newlines and quotes).
+  const responseFile = path.join(MOCK_DIR, "response.txt");
+  fs.writeFileSync(responseFile, responseJson, "utf-8");
   const script = `#!/bin/sh
-cat > /dev/null   # drain stdin
-echo '${responseJson.replace(/'/g, "'\\''")}'
+cat > /dev/null   # drain stdin (ignored — claude -p can take prompt as arg too)
+cat "${responseFile}"
 `;
   fs.writeFileSync(MOCK_CLAUDE, script);
   fs.chmodSync(MOCK_CLAUDE, 0o755);
@@ -83,6 +87,41 @@ function teardown(workspace: string, originalCwd: string): void {
 
 describe("subagent: runSubagentBackup with mock claude CLI", () => {
   beforeEach(() => resetInteraction());
+
+  it("parses claude -p --output-format json wrapper (result field)", () => {
+    // Real claude -p --output-format json output looks like:
+    // {"result": "...", "session_id": "...", ...}
+    // The `result` field contains the model's text response, which
+    // we expect to contain our JSON shape.
+    const innerJson = JSON.stringify({
+      description: "wrapper test",
+      backup_commands: ["echo bw"],
+      recovery_commands: ["echo rw"],
+    });
+    const wrapper = JSON.stringify({
+      result: `Here is the backup plan:\n\n${innerJson}\n\nDone.`,
+      session_id: "test-session",
+    });
+    installMockClaude(wrapper);
+
+    const { workspace, config, originalCwd } = setup();
+    try {
+      const interactionDir = path.join(config.backupDir, "interaction_test");
+      fs.mkdirSync(interactionDir, { recursive: true });
+
+      const artifact = runSubagentBackup(
+        makeCtx("Bash", { command: "curl -X POST https://api.example.com" }),
+        interactionDir,
+        config
+      );
+
+      assert.ok(artifact, `Expected artifact, got null`);
+      assert.ok(artifact!.description.includes("wrapper test"));
+      assert.deepEqual(artifact!.subagentCommands, ["echo rw"]);
+    } finally {
+      teardown(workspace, originalCwd);
+    }
+  });
 
   it("returns a BackupArtifact when mock claude emits valid JSON", () => {
     installMockClaude(JSON.stringify({

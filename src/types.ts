@@ -102,10 +102,11 @@ export const DEFAULT_CONFIG: SandboxConfig = {
     "DELETE\\s+FROM",
   ],
   verbose: false,
-  // Tier-3 subagent is opt-in: it shells out to `claude -p` and uses
-  // the user's Claude Code session (which consumes tokens). Users can
-  // enable it via `chats-sandbox config set subagentEnabled true`.
-  subagentEnabled: false,
+  // Tier-3 subagent is enabled by default. It shells out to `claude -p
+  // --model haiku` when an out-of-workspace action is detected that
+  // no targeted manifest can cover. Users who want zero subagent
+  // overhead can disable it via `chats-sandbox config set subagentEnabled false`.
+  subagentEnabled: true,
   subagentModel: "haiku",
   subagentTimeoutSeconds: 60,
 };
