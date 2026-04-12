@@ -213,13 +213,19 @@ function setConfigValue(
   const k = key as keyof typeof config;
 
   // Type coercion
-  if (k === "enabled" || k === "effectManifest" || k === "verbose") {
+  if (k === "enabled" || k === "effectManifest" || k === "verbose" || k === "subagentEnabled") {
     (config as unknown as Record<string, unknown>)[k] = value === "true";
-  } else if (k === "maxInteractions") {
+  } else if (k === "maxInteractions" || k === "subagentTimeoutSeconds") {
     (config as unknown as Record<string, unknown>)[k] = parseInt(value, 10);
   } else if (k === "backupMode") {
     if (!["always", "smart", "off"].includes(value)) {
       console.error(`Invalid backupMode: ${value}. Use: always | smart | off`);
+      process.exit(1);
+    }
+    (config as unknown as Record<string, unknown>)[k] = value;
+  } else if (k === "subagentModel") {
+    if (!["haiku", "sonnet", "opus", "inherit"].includes(value)) {
+      console.error(`Invalid subagentModel: ${value}. Use: haiku | sonnet | opus | inherit`);
       process.exit(1);
     }
     (config as unknown as Record<string, unknown>)[k] = value;
@@ -245,6 +251,7 @@ function showStatus(projectRoot: string): void {
   console.log(`  Interactions:  ${interactions.length} / ${config.maxInteractions} folders`);
   console.log(`  Artifacts:     ${manifest.length} total`);
   console.log(`  Effect log:    ${config.effectManifest ? config.effectLogPath : "disabled"}`);
+  console.log(`  Subagent:      ${config.subagentEnabled ? `enabled (${config.subagentModel})` : "disabled"}`);
   console.log(`  Verbose:       ${config.verbose}`);
 
   // Check if hooks are installed

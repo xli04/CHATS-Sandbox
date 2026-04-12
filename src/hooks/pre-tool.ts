@@ -23,6 +23,13 @@ import { runBackup } from "../backup/strategies.js";
 import type { HookContext, PreToolHookOutput } from "../types.js";
 
 async function main(): Promise<void> {
+  // Recursion guard: if we're running inside a subagent that we spawned,
+  // exit immediately to avoid infinite recursion (subagent tool calls
+  // would otherwise fire this hook again).
+  if (process.env.CHATS_SANDBOX_NO_HOOK === "1") {
+    process.exit(0);
+  }
+
   const chunks: Buffer[] = [];
   for await (const chunk of process.stdin) {
     chunks.push(chunk as Buffer);

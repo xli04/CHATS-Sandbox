@@ -11,6 +11,11 @@ import { captureEffect, logEffect } from "../engine/effects.js";
 import type { HookContext } from "../types.js";
 
 async function main(): Promise<void> {
+  // Recursion guard: exit early if running inside a sandbox-spawned subagent
+  if (process.env.CHATS_SANDBOX_NO_HOOK === "1") {
+    process.exit(0);
+  }
+
   // Read context from stdin
   const chunks: Buffer[] = [];
   for await (const chunk of process.stdin) {

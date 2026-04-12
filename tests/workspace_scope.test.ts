@@ -31,6 +31,7 @@ function setup(): { workspace: string; config: SandboxConfig; originalCwd: strin
       ...DEFAULT_CONFIG,
       backupDir: path.join(workspace, ".chats-sandbox", "backups"),
       maxInteractions: 10,
+      // DEFAULT_CONFIG has subagentEnabled=false so no claude CLI calls here
     },
     originalCwd,
   };

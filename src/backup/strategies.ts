@@ -22,6 +22,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { execSync } from "node:child_process";
 import type { BackupArtifact, HookContext, SandboxConfig } from "../types.js";
+import { runSubagentBackup } from "./subagent.js";
 
 // ── Interaction folder management (LAZY) ─────────────────────────────
 
@@ -522,20 +523,50 @@ export function runBackup(
     }
   }
 
-  // ── 3rd level: need subagent for outside-workspace state ───────
-  // Trigger when outside-workspace AND no targeted manifest actually succeeded.
-  // (hasTargetedPattern may be true but the backup can fail, e.g., git tag
-  // fails when there's no repo — still need subagent for the remote state.)
+  // ── 3rd level: subagent for outside-workspace state ────────────
+  // Trigger when outside-workspace AND no targeted manifest succeeded.
   if (outsideWorkspace && !targetedSucceeded) {
     const cmdStr = String(ctx.tool_input.command ?? JSON.stringify(ctx.tool_input));
-    result.needsSubagent = true;
-    result.subagentReason =
-      `Action "${ctx.tool_name}(${cmdStr.slice(0, 200)})" affects state outside the workspace (${process.cwd()}). ` +
-      `No predefined backup strategy matched. ` +
-      (gitSnapshot
-        ? `Workspace files were captured via git snapshot. `
-        : `No workspace changes detected. `) +
-      `Please create a minimal recovery artifact for the out-of-workspace state before this action executes.`;
+
+    // Try to invoke the real subagent via `claude -p` subprocess.
+    // The subagent is SYNCHRONOUS — blocks until it produces an artifact
+    // or hits the timeout. Safe to run here because we're already inside
+    // the PreToolUse hook, which blocks the parent tool call.
+    //
+    // Import lazily to avoid loading child_process for the common path.
+    let subagentArtifact: BackupArtifact | null = null;
+    if (config.subagentEnabled) {
+      try {
+        // Materialize the folder so the subagent has somewhere to write
+        const dir = materializeInteractionDir(config);
+        subagentArtifact = runSubagentBackup(ctx, dir, config);
+        if (subagentArtifact) {
+          result.artifacts.push(subagentArtifact);
+          writeMetadata(dir, subagentArtifact);
+        }
+      } catch (e) {
+        if (config.verbose) {
+          process.stderr.write(
+            `[CHATS-Sandbox] subagent invocation error: ${e}\n`
+          );
+        }
+      }
+    }
+
+    // If the subagent failed or is disabled, still signal the caller
+    // that out-of-workspace state is at risk.
+    if (!subagentArtifact) {
+      result.needsSubagent = true;
+      result.subagentReason =
+        `Action "${ctx.tool_name}(${cmdStr.slice(0, 200)})" affects state outside the workspace (${process.cwd()}). ` +
+        `No predefined backup strategy matched. ` +
+        (gitSnapshot
+          ? `Workspace files were captured via git snapshot. `
+          : `No workspace changes detected. `) +
+        `Subagent tier-3 backup was ${config.subagentEnabled ? "attempted but failed" : "disabled"}. ` +
+        `Proceed with caution.`;
+    }
+
     return result;
   }
 

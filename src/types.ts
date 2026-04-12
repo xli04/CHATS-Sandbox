@@ -64,6 +64,12 @@ export interface SandboxConfig {
   alwaysBackupPatterns: string[];
   /** Verbose logging */
   verbose: boolean;
+  /** Enable tier-3 subagent backup for out-of-workspace actions */
+  subagentEnabled: boolean;
+  /** Model to use for the subagent ("haiku", "sonnet", "opus", "inherit") */
+  subagentModel: "haiku" | "sonnet" | "opus" | "inherit";
+  /** Max seconds to wait for the subagent before giving up */
+  subagentTimeoutSeconds: number;
 }
 
 export const DEFAULT_CONFIG: SandboxConfig = {
@@ -96,6 +102,12 @@ export const DEFAULT_CONFIG: SandboxConfig = {
     "DELETE\\s+FROM",
   ],
   verbose: false,
+  // Tier-3 subagent is opt-in: it shells out to `claude -p` and uses
+  // the user's Claude Code session (which consumes tokens). Users can
+  // enable it via `chats-sandbox config set subagentEnabled true`.
+  subagentEnabled: false,
+  subagentModel: "haiku",
+  subagentTimeoutSeconds: 60,
 };
 
 // ── Backup artifact ──────────────────────────────────────────────────

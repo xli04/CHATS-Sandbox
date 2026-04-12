@@ -82,17 +82,31 @@ describe("restore - git_snapshot", () => {
 
 describe("restore - subagent", () => {
   it("returns a subagent prompt", () => {
+    // subagent restore now EXECUTES the recovery commands deterministically.
+    // Use a safe, always-succeeding command so the test is hermetic.
     const r = restoreArtifact(makeArtifact({
       strategy: "subagent",
-      description: "Created remote tag pre-deploy on origin",
-      subagentCommands: ["git tag pre-deploy", "git push origin pre-deploy"],
-      originalAction: "git push --force origin main",
+      description: "backup complete",
+      subagentCommands: ["true"],   // POSIX 'true' always succeeds
+      originalAction: "some risky action",
     }));
     assert.equal(r.success, true);
-    assert.ok(r.subagentPrompt, "Should have a subagent prompt");
-    assert.ok(r.subagentPrompt!.includes("git push --force origin main"));
-    assert.ok(r.subagentPrompt!.includes("git tag pre-deploy"));
-    assert.ok(r.subagentPrompt!.includes("RESTORE TASK"));
+    assert.ok(
+      r.description.includes("executed") || r.description.includes("recovery"),
+      `Expected executed/recovery in description, got: ${r.description}`
+    );
+  });
+
+  it("returns failure when a recovery command fails", () => {
+    const r = restoreArtifact(makeArtifact({
+      strategy: "subagent",
+      description: "backup",
+      subagentCommands: ["false"],  // POSIX 'false' always exits non-zero
+      originalAction: "test action",
+    }));
+    assert.equal(r.success, false);
+    assert.ok(r.description.toLowerCase().includes("fail"),
+      `Expected failure description, got: ${r.description}`);
   });
 
   it("handles missing subagentCommands gracefully", () => {
