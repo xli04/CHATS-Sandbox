@@ -232,10 +232,18 @@ export function runSubagentBackup(
   const timeoutMs = Math.max(10_000, config.subagentTimeoutSeconds * 1000);
 
   // Invoke `claude -p` with:
-  //   --output-format json : structured output with a `result` field
-  //   --bare               : skip plugins/hooks/MCP discovery (faster + no recursion)
-  //   --model <model>      : select the subagent model
-  // We use execFileSync with an array to avoid shell quoting issues with the prompt.
+  //   --output-format json     : structured output with a `result` field
+  //   --permission-mode acceptEdits : auto-approve filesystem ops (mkdir,
+  //                              git, cp, mv) so the subagent can actually
+  //                              create backup artifacts without prompting.
+  //                              Without this, claude -p denies all Bash
+  //                              tool use in headless mode and fails with
+  //                              "permission_denials" in the response.
+  //   --model <model>          : select the subagent model
+  //
+  // We use execFileSync with an array to avoid shell quoting issues with
+  // the prompt argument.
+  //
   // NOTE: do NOT use --bare. That flag skips OAuth/keychain auth loading,
   // which causes "Not logged in · Please run /login" errors for users
   // authenticated via Claude Max (the common case). Our recursion guard
@@ -245,6 +253,7 @@ export function runSubagentBackup(
     "-p",
     prompt,
     "--output-format", "json",
+    "--permission-mode", "acceptEdits",
   ];
   if (config.subagentModel && config.subagentModel !== "inherit") {
     args.push("--model", config.subagentModel);
@@ -299,7 +308,17 @@ export function runSubagentBackup(
   const parsed = parseSubagentOutput(stdout);
   if (!parsed) {
     logDebug(`parse failed. Raw stdout was: ${stdout.slice(0, 2000)}`);
-    if (config.verbose) {
+
+    // Detect permission denial (subagent couldn't run bash) and warn clearly
+    if (stdout.includes("permission_denials") || stdout.includes("permission denied") ||
+        stdout.includes("approval is needed") || stdout.includes("cannot proceed")) {
+      logDebug("DIAGNOSIS: subagent was denied tool permissions. Use --permission-mode acceptEdits.");
+      process.stderr.write(
+        "[CHATS-Sandbox] Subagent could not run backup commands (tool permission denied). " +
+        "This usually means an older Claude Code version doesn't honor --permission-mode acceptEdits. " +
+        "Update Claude Code or disable subagent: chats-sandbox config set subagentEnabled false\n"
+      );
+    } else if (config.verbose) {
       process.stderr.write(
         "[CHATS-Sandbox] subagent returned unparseable output\n"
       );
