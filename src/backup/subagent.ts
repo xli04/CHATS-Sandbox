@@ -42,6 +42,30 @@ function isClaudeCliAvailable(): boolean {
   }
 }
 
+/**
+ * Write a status message directly to the user's controlling terminal.
+ *
+ * Claude Code captures hook stderr silently (it doesn't display in the
+ * user's terminal), so this is the only way to show real-time progress.
+ * /dev/tty bypasses stderr/stdout entirely and writes to whichever
+ * terminal the user is sitting at.
+ *
+ * Falls back silently if /dev/tty is not writable (Windows, headless,
+ * piped contexts).
+ */
+function tellUser(message: string): void {
+  try {
+    fs.writeFileSync("/dev/tty", `${message}\n`);
+  } catch {
+    // /dev/tty not available — fall back to stderr (visible in some setups)
+    try {
+      process.stderr.write(`${message}\n`);
+    } catch {
+      // give up
+    }
+  }
+}
+
 function buildSubagentPrompt(
   ctx: HookContext,
   interactionDir: string
@@ -265,6 +289,16 @@ export function runSubagentBackup(
 
   logDebug(`invoking: claude ${args.slice(0, 2).join(" ")} [prompt=${prompt.length} chars] ${args.slice(2).join(" ")} (timeout=${timeoutMs}ms)`);
 
+  // Tell the user what we're about to do — claude -p can take 5-30s and
+  // there's otherwise no signal that anything is happening.
+  const cmdPreview = String(ctx.tool_input.command ?? "")
+    || String(ctx.tool_input.path ?? ctx.tool_input.file_path ?? "");
+  tellUser(
+    `[CHATS-Sandbox] Out-of-workspace action detected. Invoking ${config.subagentModel} subagent to back up... ` +
+    `(${ctx.tool_name}${cmdPreview ? `: ${cmdPreview.slice(0, 60)}` : ""})`
+  );
+
+  const startTime = Date.now();
   let stdout = "";
   let stderr = "";
   try {
@@ -293,18 +327,18 @@ export function runSubagentBackup(
     if (stderr) logDebug(`stderr: ${stderr.slice(0, 500)}`);
     if (stdout) logDebug(`partial stdout: ${stdout.slice(0, 500)}`);
 
+    const elapsedSec = ((Date.now() - startTime) / 1000).toFixed(1);
+
     // Detect common auth failure and log a clear message
     if (stdout.includes("Not logged in") || stderr.includes("Not logged in")) {
       logDebug("DIAGNOSIS: claude CLI is not logged in. Run `claude` interactively once to authenticate.");
-      process.stderr.write(
+      tellUser(
         "[CHATS-Sandbox] Subagent skipped: claude CLI not logged in. " +
         "Run `claude` interactively once to authenticate, or disable the subagent with " +
-        "`chats-sandbox config set subagentEnabled false`.\n"
+        "`chats-sandbox config set subagentEnabled false`."
       );
-    } else if (config.verbose) {
-      process.stderr.write(
-        `[CHATS-Sandbox] subagent failed: ${msg.slice(0, 200)}\n`
-      );
+    } else {
+      tellUser(`[CHATS-Sandbox] Subagent failed after ${elapsedSec}s: ${msg.slice(0, 120)}`);
     }
     return null;
   }
@@ -317,19 +351,17 @@ export function runSubagentBackup(
     if (stdout.includes("permission_denials") || stdout.includes("permission denied") ||
         stdout.includes("approval is needed") || stdout.includes("cannot proceed")) {
       logDebug("DIAGNOSIS: subagent was denied tool permissions. Use --permission-mode acceptEdits.");
-      process.stderr.write(
+      tellUser(
         "[CHATS-Sandbox] Subagent could not run backup commands (tool permission denied). " +
-        "This usually means an older Claude Code version doesn't honor --permission-mode acceptEdits. " +
-        "Update Claude Code or disable subagent: chats-sandbox config set subagentEnabled false\n"
+        "Try: chats-sandbox config set subagentPermissionMode bypassPermissions"
       );
-    } else if (config.verbose) {
-      process.stderr.write(
-        "[CHATS-Sandbox] subagent returned unparseable output\n"
-      );
+    } else {
+      tellUser("[CHATS-Sandbox] Subagent returned unparseable output — backup skipped.");
     }
     return null;
   }
 
+  const elapsedSec = ((Date.now() - startTime) / 1000).toFixed(1);
   logDebug(`parse success: ${parsed.description}`);
 
   // Persist the raw subagent response as a file alongside the artifact
@@ -337,6 +369,9 @@ export function runSubagentBackup(
   const artifactFile = path.join(interactionDir, `subagent_${id}.json`);
   fs.mkdirSync(interactionDir, { recursive: true });
   fs.writeFileSync(artifactFile, JSON.stringify(parsed, null, 2), "utf-8");
+
+  // Tell the user the backup succeeded
+  tellUser(`[CHATS-Sandbox] Subagent backup done in ${elapsedSec}s: ${parsed.description.slice(0, 100)}`);
 
   return {
     id,
