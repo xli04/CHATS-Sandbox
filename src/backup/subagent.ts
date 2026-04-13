@@ -233,12 +233,15 @@ export function runSubagentBackup(
 
   // Invoke `claude -p` with:
   //   --output-format json     : structured output with a `result` field
-  //   --permission-mode acceptEdits : auto-approve filesystem ops (mkdir,
-  //                              git, cp, mv) so the subagent can actually
-  //                              create backup artifacts without prompting.
-  //                              Without this, claude -p denies all Bash
-  //                              tool use in headless mode and fails with
-  //                              "permission_denials" in the response.
+  //   --permission-mode <mode> : controls what tool calls the subagent
+  //                              can run without prompting. Default is
+  //                              "bypassPermissions" — full freedom for
+  //                              git push, curl, ssh, etc. Configurable
+  //                              to "acceptEdits" for a smaller blast
+  //                              radius (filesystem ops only).
+  //                              Without any permission mode, claude -p
+  //                              denies all Bash tool use in headless
+  //                              mode and fails with "permission_denials".
   //   --model <model>          : select the subagent model
   //
   // We use execFileSync with an array to avoid shell quoting issues with
@@ -249,11 +252,12 @@ export function runSubagentBackup(
   // authenticated via Claude Max (the common case). Our recursion guard
   // via CHATS_SANDBOX_NO_HOOK env var is sufficient — we don't need
   // --bare's plugin-skipping behavior.
+  const permissionMode = config.subagentPermissionMode ?? "bypassPermissions";
   const args = [
     "-p",
     prompt,
     "--output-format", "json",
-    "--permission-mode", "acceptEdits",
+    "--permission-mode", permissionMode,
   ];
   if (config.subagentModel && config.subagentModel !== "inherit") {
     args.push("--model", config.subagentModel);

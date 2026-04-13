@@ -229,6 +229,12 @@ function setConfigValue(
       process.exit(1);
     }
     (config as unknown as Record<string, unknown>)[k] = value;
+  } else if (k === "subagentPermissionMode") {
+    if (!["bypassPermissions", "acceptEdits"].includes(value)) {
+      console.error(`Invalid subagentPermissionMode: ${value}. Use: bypassPermissions | acceptEdits`);
+      process.exit(1);
+    }
+    (config as unknown as Record<string, unknown>)[k] = value;
   } else {
     (config as unknown as Record<string, unknown>)[k] = value;
   }
@@ -251,7 +257,7 @@ function showStatus(projectRoot: string): void {
   console.log(`  Interactions:  ${interactions.length} / ${config.maxInteractions} folders`);
   console.log(`  Artifacts:     ${manifest.length} total`);
   console.log(`  Effect log:    ${config.effectManifest ? config.effectLogPath : "disabled"}`);
-  console.log(`  Subagent:      ${config.subagentEnabled ? `enabled (${config.subagentModel})` : "disabled"}`);
+  console.log(`  Subagent:      ${config.subagentEnabled ? `enabled (${config.subagentModel}, ${config.subagentPermissionMode ?? "bypassPermissions"})` : "disabled"}`);
   console.log(`  Verbose:       ${config.verbose}`);
 
   // Check if hooks are installed

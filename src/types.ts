@@ -70,6 +70,15 @@ export interface SandboxConfig {
   subagentModel: "haiku" | "sonnet" | "opus" | "inherit";
   /** Max seconds to wait for the subagent before giving up */
   subagentTimeoutSeconds: number;
+  /** Permission mode passed to claude -p for the subagent.
+   *  "bypassPermissions" (default) — full freedom, needed for git push,
+   *    curl, ssh, aws, gcloud, etc. Wide blast radius — only safe to
+   *    use if you trust the parent prompt and your sandbox config.
+   *  "acceptEdits" — auto-approve filesystem ops only (mkdir, cp, mv,
+   *    sed, git). Blocks network calls and arbitrary shell. Smaller
+   *    blast radius but may fail for backups that need network access.
+   */
+  subagentPermissionMode: "bypassPermissions" | "acceptEdits";
 }
 
 export const DEFAULT_CONFIG: SandboxConfig = {
@@ -109,6 +118,11 @@ export const DEFAULT_CONFIG: SandboxConfig = {
   subagentEnabled: true,
   subagentModel: "haiku",
   subagentTimeoutSeconds: 60,
+  // Default to bypassPermissions so the subagent has full freedom to
+  // run any backup commands it needs (git push, curl, ssh, etc.).
+  // Users who want a smaller blast radius can switch to "acceptEdits"
+  // via `chats-sandbox config set subagentPermissionMode acceptEdits`.
+  subagentPermissionMode: "bypassPermissions",
 };
 
 // ── Backup artifact ──────────────────────────────────────────────────
