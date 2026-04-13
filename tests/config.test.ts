@@ -29,7 +29,7 @@ describe("config", () => {
     assert.equal(config.verbose, true);
     // Other fields should still be defaults
     assert.equal(config.enabled, true);
-    assert.equal(config.maxInteractions, 50);
+    assert.equal(config.maxActions, 50);
   });
 
   it("merges partial config with defaults", () => {

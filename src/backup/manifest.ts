@@ -1,6 +1,6 @@
 /**
- * Backup manifest — reads interaction folders to list all backup artifacts.
- * No separate manifest.json needed — metadata.json inside each interaction
+ * Backup manifest — reads action folders to list all backup artifacts.
+ * No separate manifest.json needed — metadata.json inside each action
  * folder is the source of truth.
  */
 
@@ -9,23 +9,23 @@ import * as path from "node:path";
 import type { BackupArtifact, SandboxConfig } from "../types.js";
 
 /**
- * List all interaction folders (sorted oldest → newest).
+ * List all action folders (sorted oldest → newest).
  */
-export function listInteractions(config: SandboxConfig): string[] {
+export function listActions(config: SandboxConfig): string[] {
   const backupRoot = path.resolve(config.backupDir);
   if (!fs.existsSync(backupRoot)) return [];
   return fs
     .readdirSync(backupRoot)
-    .filter((d) => d.startsWith("interaction_"))
+    .filter((d) => d.startsWith("action_"))
     .sort();
 }
 
 /**
- * Load all backup artifacts across all interaction folders.
+ * Load all backup artifacts across all action folders.
  */
 export function loadManifest(config: SandboxConfig): BackupArtifact[] {
   const backupRoot = path.resolve(config.backupDir);
-  const dirs = listInteractions(config);
+  const dirs = listActions(config);
   const all: BackupArtifact[] = [];
 
   for (const dir of dirs) {
@@ -47,7 +47,7 @@ export function loadManifest(config: SandboxConfig): BackupArtifact[] {
 
 /**
  * No-op for compatibility — artifacts are now written directly by strategies.ts
- * into the interaction folder's metadata.json.
+ * into the action folder's metadata.json.
  */
 export function appendToManifest(
   _artifact: BackupArtifact,

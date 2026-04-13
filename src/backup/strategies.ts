@@ -12,7 +12,7 @@
  *
  * Folder structure:
  *   .chats-sandbox/backups/
- *     interaction_001_20260410_1906/
+ *     action_001_20260410_1906/
  *       pip_freeze_abc123.txt        ← 1st level
  *       git_snapshot/                ← 2nd level (shadow repo)
  *       metadata.json
@@ -24,37 +24,37 @@ import { execSync } from "node:child_process";
 import type { BackupArtifact, HookContext, SandboxConfig } from "../types.js";
 import { runSubagentBackup } from "./subagent.js";
 
-// ── Interaction folder management (LAZY) ─────────────────────────────
+// ── Action folder management (LAZY) ─────────────────────────────
 
-// _pendingInteractionId holds the name of the NEXT interaction to create
-// if a backup actually happens. _currentInteractionDir is only populated
+// _pendingActionId holds the name of the NEXT action to create
+// if a backup actually happens. _currentActionDir is only populated
 // AFTER we create a real artifact (lazy creation).
-let _pendingInteractionName: string | null = null;
-let _currentInteractionDir: string | null = null;
-let _currentInteractionId: string | null = null;
+let _pendingActionName: string | null = null;
+let _currentActionDir: string | null = null;
+let _currentActionId: string | null = null;
 
 /**
- * Prepare a pending interaction name. The folder is NOT created yet —
+ * Prepare a pending action name. The folder is NOT created yet —
  * it will only be created if a backup artifact is actually produced.
  */
-function preparePendingInteraction(config: SandboxConfig): string {
-  if (_pendingInteractionName) return _pendingInteractionName;
+function preparePendingAction(config: SandboxConfig): string {
+  if (_pendingActionName) return _pendingActionName;
 
   const backupRoot = path.resolve(config.backupDir);
-  const existing = listInteractionDirs(backupRoot);
+  const existing = listActionDirs(backupRoot);
   const seq = String(existing.length + 1).padStart(3, "0");
   const ts = new Date().toISOString().replace(/[-:T]/g, "").slice(0, 14);
-  _pendingInteractionName = `interaction_${seq}_${ts}`;
-  return _pendingInteractionName;
+  _pendingActionName = `action_${seq}_${ts}`;
+  return _pendingActionName;
 }
 
 /**
- * Actually create the interaction folder on disk. Called only when we
+ * Actually create the action folder on disk. Called only when we
  * know we have something to back up. Idempotent.
  */
-function materializeInteractionDir(config: SandboxConfig): string {
-  if (_currentInteractionDir && fs.existsSync(_currentInteractionDir)) {
-    return _currentInteractionDir;
+function materializeActionDir(config: SandboxConfig): string {
+  if (_currentActionDir && fs.existsSync(_currentActionDir)) {
+    return _currentActionDir;
   }
 
   const backupRoot = path.resolve(config.backupDir);
@@ -62,38 +62,53 @@ function materializeInteractionDir(config: SandboxConfig): string {
     fs.mkdirSync(backupRoot, { recursive: true });
   }
 
-  const dirName = _pendingInteractionName ?? preparePendingInteraction(config);
+  const dirName = _pendingActionName ?? preparePendingAction(config);
   const dirPath = path.join(backupRoot, dirName);
   fs.mkdirSync(dirPath, { recursive: true });
 
-  _currentInteractionDir = dirPath;
-  _currentInteractionId = dirName;
+  _currentActionDir = dirPath;
+  _currentActionId = dirName;
 
-  pruneInteractions(backupRoot, config.maxInteractions);
+  // Copy the user's current instruction (if any) into the action folder.
+  // The instruction is set by the UserPromptSubmit hook into a sidecar
+  // file at .chats-sandbox/current-instruction.txt — multiple actions
+  // from the same user prompt all read the same instruction.
+  try {
+    const sandboxDir = path.dirname(backupRoot);
+    const currentInstructionPath = path.join(sandboxDir, "current-instruction.txt");
+    if (fs.existsSync(currentInstructionPath)) {
+      const text = fs.readFileSync(currentInstructionPath, "utf-8");
+      fs.writeFileSync(path.join(dirPath, "instruction.txt"), text, "utf-8");
+    }
+  } catch {
+    // best-effort
+  }
+
+  pruneActions(backupRoot, config.maxActions);
 
   return dirPath;
 }
 
-export function resetInteraction(): void {
-  _pendingInteractionName = null;
-  _currentInteractionDir = null;
-  _currentInteractionId = null;
+export function resetAction(): void {
+  _pendingActionName = null;
+  _currentActionDir = null;
+  _currentActionId = null;
 }
 
-export function getCurrentInteractionId(): string | null {
-  return _currentInteractionId;
+export function getCurrentActionId(): string | null {
+  return _currentActionId;
 }
 
-function listInteractionDirs(backupRoot: string): string[] {
+function listActionDirs(backupRoot: string): string[] {
   if (!fs.existsSync(backupRoot)) return [];
   return fs
     .readdirSync(backupRoot)
-    .filter((d: string) => d.startsWith("interaction_"))
+    .filter((d: string) => d.startsWith("action_"))
     .sort();
 }
 
-function pruneInteractions(backupRoot: string, max: number): void {
-  const dirs = listInteractionDirs(backupRoot);
+function pruneActions(backupRoot: string, max: number): void {
+  const dirs = listActionDirs(backupRoot);
   while (dirs.length > max) {
     const oldest = dirs.shift()!;
     const fullPath = path.join(backupRoot, oldest);
@@ -110,9 +125,9 @@ function pruneInteractions(backupRoot: string, max: number): void {
 /**
  * Single shared shadow git repo for the whole project. All snapshots
  * are commits in this one repo, which means:
- *   - Git deduplication across all interactions (space-efficient)
+ *   - Git deduplication across all actions (space-efficient)
  *   - A snapshot is only created if there are actual changes
- *   - Diffing between any two interactions is a native git diff
+ *   - Diffing between any two actions is a native git diff
  */
 function getSharedShadowRepo(config: SandboxConfig): string {
   const backupRoot = path.resolve(config.backupDir);
@@ -178,11 +193,11 @@ function makeId(): string {
 // =====================================================================
 
 function pipFreezeBackup(
-  interactionDir: string,
+  actionDir: string,
   ctx: HookContext
 ): BackupArtifact | null {
   const id = makeId();
-  const dest = path.join(interactionDir, `pip_freeze_${id}.txt`);
+  const dest = path.join(actionDir, `pip_freeze_${id}.txt`);
 
   const freeze = exec("pip freeze 2>/dev/null || pip3 freeze 2>/dev/null");
   if (!freeze) return null;
@@ -201,11 +216,11 @@ function pipFreezeBackup(
 }
 
 function npmListBackup(
-  interactionDir: string,
+  actionDir: string,
   ctx: HookContext
 ): BackupArtifact | null {
   const id = makeId();
-  const dest = path.join(interactionDir, `npm_list_${id}.json`);
+  const dest = path.join(actionDir, `npm_list_${id}.json`);
 
   const list = exec("npm list --json --depth=0 2>/dev/null");
   if (!list) return null;
@@ -224,11 +239,11 @@ function npmListBackup(
 }
 
 function envSnapshotBackup(
-  interactionDir: string,
+  actionDir: string,
   ctx: HookContext
 ): BackupArtifact | null {
   const id = makeId();
-  const dest = path.join(interactionDir, `env_snapshot_${id}.txt`);
+  const dest = path.join(actionDir, `env_snapshot_${id}.txt`);
 
   const env = exec("env | sort");
   if (!env) return null;
@@ -248,7 +263,7 @@ function envSnapshotBackup(
 
 function gitTagBackup(
   ctx: HookContext,
-  interactionDir: string
+  actionDir: string
 ): BackupArtifact | null {
   const head = exec("git rev-parse HEAD");
   if (!head) return null;
@@ -260,7 +275,7 @@ function gitTagBackup(
   if (result === null) return null;
 
   fs.writeFileSync(
-    path.join(interactionDir, `git_tag_${id}.txt`),
+    path.join(actionDir, `git_tag_${id}.txt`),
     `tag: ${tagName}\ncommit: ${head}\n`,
     "utf-8"
   );
@@ -282,28 +297,28 @@ function gitTagBackup(
  */
 function tryTargetedManifest(
   ctx: HookContext,
-  interactionDir: string
+  actionDir: string
 ): BackupArtifact | null {
   const command = String(ctx.tool_input.command ?? "");
 
   // pip install/uninstall → save package list
   if (/pip3?\s+(install|uninstall)/i.test(command)) {
-    return pipFreezeBackup(interactionDir, ctx);
+    return pipFreezeBackup(actionDir, ctx);
   }
 
   // npm install/uninstall → save package list
   if (/npm\s+(install|uninstall|remove)/i.test(command)) {
-    return npmListBackup(interactionDir, ctx);
+    return npmListBackup(actionDir, ctx);
   }
 
   // env/export changes → save env vars
   if (/\b(export|unset|source\s+\.env)/i.test(command)) {
-    return envSnapshotBackup(interactionDir, ctx);
+    return envSnapshotBackup(actionDir, ctx);
   }
 
   // git push/rebase/reset → create a tag (pointer to current HEAD)
   if (/git\s+(push|rebase|reset|commit\s+--amend)/i.test(command)) {
-    return gitTagBackup(ctx, interactionDir);
+    return gitTagBackup(ctx, actionDir);
   }
 
   return null;
@@ -477,15 +492,15 @@ export interface BackupResult {
  *   3rd: Subagent needed — when action touches outside workspace AND
  *        no targeted manifest covered it.
  *
- * Interaction folders are created LAZILY — only if a real artifact is produced.
+ * Action folders are created LAZILY — only if a real artifact is produced.
  * Read-only actions produce no artifact → no folder → no noise.
  */
 export function runBackup(
   ctx: HookContext,
   config: SandboxConfig
 ): BackupResult {
-  // Reserve a pending interaction name but don't create the folder yet.
-  preparePendingInteraction(config);
+  // Reserve a pending action name but don't create the folder yet.
+  preparePendingAction(config);
   const result: BackupResult = { artifacts: [], needsSubagent: false };
 
   const outsideWorkspace = touchesOutsideWorkspace(ctx);
@@ -494,7 +509,7 @@ export function runBackup(
   // If the workspace hasn't changed, this returns null and no folder is made.
   const gitSnapshot = gitSnapshotBackup(ctx, config);
   if (gitSnapshot) {
-    const dir = materializeInteractionDir(config);
+    const dir = materializeActionDir(config);
     result.artifacts.push(gitSnapshot);
     writeMetadata(dir, gitSnapshot);
   }
@@ -502,7 +517,7 @@ export function runBackup(
   // ── 1st level: targeted manifest (runs second, supplements git snapshot) ─
   // Only relevant for known patterns. Materializes folder only if it fires.
   const targetedFn = () => {
-    const dir = materializeInteractionDir(config);
+    const dir = materializeActionDir(config);
     return tryTargetedManifest(ctx, dir);
   };
   const command = String(ctx.tool_input.command ?? "");
@@ -516,7 +531,7 @@ export function runBackup(
   if (hasTargetedPattern) {
     const targeted = targetedFn();
     if (targeted) {
-      const dir = materializeInteractionDir(config);
+      const dir = materializeActionDir(config);
       result.artifacts.push(targeted);
       writeMetadata(dir, targeted);
       targetedSucceeded = true;
@@ -538,7 +553,7 @@ export function runBackup(
     if (config.subagentEnabled) {
       try {
         // Materialize the folder so the subagent has somewhere to write
-        const dir = materializeInteractionDir(config);
+        const dir = materializeActionDir(config);
         subagentArtifact = runSubagentBackup(ctx, dir, config);
         if (subagentArtifact) {
           result.artifacts.push(subagentArtifact);
@@ -583,8 +598,8 @@ export function runBackup(
 
 // ── Metadata ─────────────────────────────────────────────────────────
 
-function writeMetadata(interactionDir: string, artifact: BackupArtifact): void {
-  const metaPath = path.join(interactionDir, "metadata.json");
+function writeMetadata(actionDir: string, artifact: BackupArtifact): void {
+  const metaPath = path.join(actionDir, "metadata.json");
   let entries: BackupArtifact[] = [];
 
   if (fs.existsSync(metaPath)) {

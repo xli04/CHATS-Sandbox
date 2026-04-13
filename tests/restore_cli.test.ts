@@ -9,7 +9,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import * as os from "node:os";
 import { execSync } from "node:child_process";
-import { runBackup, resetInteraction } from "../src/backup/strategies.js";
+import { runBackup, resetAction } from "../src/backup/strategies.js";
 import { DEFAULT_CONFIG, type HookContext, type SandboxConfig } from "../src/types.js";
 
 const PROJECT_ROOT = path.resolve(__dirname, "../..");
@@ -63,10 +63,10 @@ function teardown(workspace: string, originalCwd: string): void {
 }
 
 describe("restore CLI: no-arg default (undo last step)", () => {
-  it("restore with no arg undoes the last interaction", () => {
+  it("restore with no arg undoes the last action", () => {
     const { workspace, config, originalCwd } = setupWorkspace();
     try {
-      resetInteraction();
+      resetAction();
       const filePath = path.join(workspace, "data.txt");
 
       // Step 1: create file
@@ -74,7 +74,7 @@ describe("restore CLI: no-arg default (undo last step)", () => {
       runBackup(makeCtx("Write", { path: filePath, content: "original" }), config);
 
       // Step 2: modify file
-      resetInteraction();
+      resetAction();
       fs.writeFileSync(filePath, "modified\n");
       runBackup(makeCtx("Write", { path: filePath, content: "modified" }), config);
 
@@ -96,10 +96,10 @@ describe("restore CLI: no-arg default (undo last step)", () => {
     }
   });
 
-  it("restore with no arg and only 1 interaction shows helpful message", () => {
+  it("restore with no arg and only 1 action shows helpful message", () => {
     const { workspace, config, originalCwd } = setupWorkspace();
     try {
-      resetInteraction();
+      resetAction();
       fs.writeFileSync(path.join(workspace, "x.txt"), "x\n");
       runBackup(makeCtx("Write", { path: "x.txt", content: "x" }), config);
 
@@ -116,16 +116,16 @@ describe("restore CLI: no-arg default (undo last step)", () => {
 });
 
 describe("restore_direct CLI: no-arg default", () => {
-  it("restore_direct with no arg undoes the last interaction", () => {
+  it("restore_direct with no arg undoes the last action", () => {
     const { workspace, config, originalCwd } = setupWorkspace();
     try {
-      resetInteraction();
+      resetAction();
       const filePath = path.join(workspace, "data.txt");
 
       fs.writeFileSync(filePath, "v1\n");
       runBackup(makeCtx("Write", { path: filePath, content: "v1" }), config);
 
-      resetInteraction();
+      resetAction();
       fs.writeFileSync(filePath, "v2\n");
       runBackup(makeCtx("Write", { path: filePath, content: "v2" }), config);
 

@@ -4,7 +4,7 @@
  * When the hook detects an outside-workspace action that no targeted
  * manifest can cover, it shells out to Claude Code in headless mode
  * with a constrained prompt. The subagent runs synchronously, its
- * output is captured, parsed, and persisted to the interaction folder's
+ * output is captured, parsed, and persisted to the action folder's
  * metadata.json as a `subagent` strategy artifact.
  *
  * Key safety properties:
@@ -68,7 +68,7 @@ function tellUser(message: string): void {
 
 function buildSubagentPrompt(
   ctx: HookContext,
-  interactionDir: string
+  actionDir: string
 ): string {
   const toolName = ctx.tool_name;
   const command = String(ctx.tool_input.command ?? "");
@@ -86,7 +86,7 @@ WORKSPACE (files inside this directory are already captured by tier-2 git snapsh
   ${cwd}
 
 BACKUP STORAGE DIRECTORY (write any artifact files you create here):
-  ${interactionDir}
+  ${actionDir}
 
 ## CLASSIFY THE ACTION FIRST
 
@@ -97,18 +97,18 @@ Example: Write tool with path /Users/foo/other_project/src/file.ts
 
 STRATEGY — shadow git repo rooted at the target's project:
 1. Find the target file's project root (walk up from its directory looking for .git, package.json, pyproject.toml, Cargo.toml, or similar markers). If no marker found, use the file's parent directory.
-2. Create a shadow git repo at ${interactionDir}/external-shadow/:
-     mkdir -p '${interactionDir}/external-shadow'
-     GIT_DIR='${interactionDir}/external-shadow' GIT_WORK_TREE='<target-project-root>' git init
-     GIT_DIR='${interactionDir}/external-shadow' GIT_WORK_TREE='<target-project-root>' git config user.email "chats-sandbox@local"
-     GIT_DIR='${interactionDir}/external-shadow' GIT_WORK_TREE='<target-project-root>' git config user.name "CHATS-Sandbox"
-     GIT_DIR='${interactionDir}/external-shadow' GIT_WORK_TREE='<target-project-root>' git add -A
-     GIT_DIR='${interactionDir}/external-shadow' GIT_WORK_TREE='<target-project-root>' git commit -m "pre-action snapshot" --allow-empty-message
+2. Create a shadow git repo at ${actionDir}/external-shadow/:
+     mkdir -p '${actionDir}/external-shadow'
+     GIT_DIR='${actionDir}/external-shadow' GIT_WORK_TREE='<target-project-root>' git init
+     GIT_DIR='${actionDir}/external-shadow' GIT_WORK_TREE='<target-project-root>' git config user.email "chats-sandbox@local"
+     GIT_DIR='${actionDir}/external-shadow' GIT_WORK_TREE='<target-project-root>' git config user.name "CHATS-Sandbox"
+     GIT_DIR='${actionDir}/external-shadow' GIT_WORK_TREE='<target-project-root>' git add -A
+     GIT_DIR='${actionDir}/external-shadow' GIT_WORK_TREE='<target-project-root>' git commit -m "pre-action snapshot" --allow-empty-message
 3. Record the target project root path and the commit hash.
 4. recovery_commands should be the three-step restore:
-     GIT_DIR='${interactionDir}/external-shadow' GIT_WORK_TREE='<target-project-root>' git read-tree <hash>
-     GIT_DIR='${interactionDir}/external-shadow' GIT_WORK_TREE='<target-project-root>' git checkout-index -f -a
-     GIT_DIR='${interactionDir}/external-shadow' GIT_WORK_TREE='<target-project-root>' git clean -fd
+     GIT_DIR='${actionDir}/external-shadow' GIT_WORK_TREE='<target-project-root>' git read-tree <hash>
+     GIT_DIR='${actionDir}/external-shadow' GIT_WORK_TREE='<target-project-root>' git checkout-index -f -a
+     GIT_DIR='${actionDir}/external-shadow' GIT_WORK_TREE='<target-project-root>' git clean -fd
    This correctly handles create, modify, AND delete scenarios because it snapshots the entire target tree.
 
 ### Category B: Remote state (git push, curl POST/PUT/DELETE, API calls)
@@ -118,16 +118,16 @@ STRATEGY — document recovery for out-of-band state:
 
 ### Category C: System package install/uninstall (pip, npm, apt, brew)
 STRATEGY — save a manifest:
-- pip install → pip freeze > ${interactionDir}/pip_freeze.txt, recovery = pip install -r that file
-- npm install -g → npm list -g --json > ${interactionDir}/npm_list.json
-- apt install → dpkg --get-selections > ${interactionDir}/apt_list.txt
-- brew install → brew list > ${interactionDir}/brew_list.txt
+- pip install → pip freeze > ${actionDir}/pip_freeze.txt, recovery = pip install -r that file
+- npm install -g → npm list -g --json > ${actionDir}/npm_list.json
+- apt install → dpkg --get-selections > ${actionDir}/apt_list.txt
+- brew install → brew list > ${actionDir}/brew_list.txt
 
 ### Category D: Environment variable mutation (export, unset, source)
-STRATEGY — snapshot env vars: env > ${interactionDir}/env.txt
+STRATEGY — snapshot env vars: env > ${actionDir}/env.txt
 
 ### Category E: Anything else
-Do your best to capture some recoverable state in ${interactionDir}, or document clearly what cannot be recovered.
+Do your best to capture some recoverable state in ${actionDir}, or document clearly what cannot be recovered.
 
 ## OUTPUT FORMAT
 
@@ -227,7 +227,7 @@ function parseSubagentOutput(raw: string): SubagentResponse | null {
  */
 export function runSubagentBackup(
   ctx: HookContext,
-  interactionDir: string,
+  actionDir: string,
   config: SandboxConfig
 ): BackupArtifact | null {
   if (!config.subagentEnabled) return null;
@@ -252,7 +252,7 @@ export function runSubagentBackup(
     return null;
   }
 
-  const prompt = buildSubagentPrompt(ctx, interactionDir);
+  const prompt = buildSubagentPrompt(ctx, actionDir);
   const timeoutMs = Math.max(10_000, config.subagentTimeoutSeconds * 1000);
 
   // Invoke `claude -p` with:
@@ -366,8 +366,8 @@ export function runSubagentBackup(
 
   // Persist the raw subagent response as a file alongside the artifact
   const id = Math.random().toString(36).slice(2, 10);
-  const artifactFile = path.join(interactionDir, `subagent_${id}.json`);
-  fs.mkdirSync(interactionDir, { recursive: true });
+  const artifactFile = path.join(actionDir, `subagent_${id}.json`);
+  fs.mkdirSync(actionDir, { recursive: true });
   fs.writeFileSync(artifactFile, JSON.stringify(parsed, null, 2), "utf-8");
 
   // Tell the user the backup succeeded

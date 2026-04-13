@@ -14,7 +14,7 @@ import assert from "node:assert/strict";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import * as os from "node:os";
-import { runBackup, resetInteraction } from "../src/backup/strategies.js";
+import { runBackup, resetAction } from "../src/backup/strategies.js";
 import { DEFAULT_CONFIG, type HookContext, type SandboxConfig } from "../src/types.js";
 
 function makeCtx(toolName: string, toolInput: Record<string, unknown>): HookContext {
@@ -30,7 +30,7 @@ function setup(): { workspace: string; config: SandboxConfig; originalCwd: strin
     config: {
       ...DEFAULT_CONFIG,
       backupDir: path.join(workspace, ".chats-sandbox", "backups"),
-      maxInteractions: 10,
+      maxActions: 10,
       // Disable subagent for these tests — we only verify the detection
       // logic, not actual subprocess invocation.
       subagentEnabled: false,
@@ -47,7 +47,7 @@ function teardown(workspace: string, originalCwd: string): void {
 // ── Commands that should detect outside-workspace ────────────────────
 
 describe("workspace scope: outside-workspace detection", () => {
-  beforeEach(() => resetInteraction());
+  beforeEach(() => resetAction());
 
   const outsideCases: Array<[string, string]> = [
     ["pip install flask", "pip install touches site-packages"],
@@ -98,7 +98,7 @@ describe("workspace scope: outside-workspace detection", () => {
 // ── Commands that should NOT detect outside-workspace ────────────────
 
 describe("workspace scope: inside-workspace only", () => {
-  beforeEach(() => resetInteraction());
+  beforeEach(() => resetAction());
 
   const insideCases: Array<[string, string]> = [
     ["make build", "make build"],
@@ -132,7 +132,7 @@ describe("workspace scope: inside-workspace only", () => {
 // ── Explicit file paths outside workspace ────────────────────────────
 
 describe("workspace scope: explicit out-of-workspace paths in tool input", () => {
-  beforeEach(() => resetInteraction());
+  beforeEach(() => resetAction());
 
   it("detects Write tool with path outside workspace", () => {
     const { workspace, config, originalCwd } = setup();

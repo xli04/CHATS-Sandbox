@@ -2,7 +2,7 @@
  * End-to-end tests for the restore engine (restore/restore.ts).
  *
  * Creates a real temp workspace, runs actual backups via strategies.ts,
- * then exercises restoreInteractionDirect and restoreInteractionLoop.
+ * then exercises restoreActionDirect and restoreActionLoop.
  * These tests catch bugs the unit tests miss — like the HEAD-vs-commit-hash
  * bug that the refactor to a shared shadow repo introduced.
  */
@@ -12,11 +12,11 @@ import assert from "node:assert/strict";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import * as os from "node:os";
-import { runBackup, resetInteraction } from "../src/backup/strategies.js";
+import { runBackup, resetAction } from "../src/backup/strategies.js";
 import {
-  restoreInteractionDirect,
-  restoreInteractionLoop,
-  listRestorableInteractions,
+  restoreActionDirect,
+  restoreActionLoop,
+  listRestorableActions,
 } from "../src/restore/restore.js";
 import { DEFAULT_CONFIG, type HookContext, type SandboxConfig } from "../src/types.js";
 
@@ -35,7 +35,7 @@ function setupWorkspace(): { workspace: string; config: SandboxConfig; originalC
   const config: SandboxConfig = {
     ...DEFAULT_CONFIG,
     backupDir: path.join(workspace, ".chats-sandbox", "backups"),
-    maxInteractions: 20,
+    maxActions: 20,
   };
   return { workspace, config, originalCwd };
 }
@@ -52,9 +52,9 @@ function teardown(workspace: string, originalCwd: string): void {
 // ── Single file overwrite → restore ──────────────────────────────────
 
 describe("restore e2e: single file overwrite", () => {
-  beforeEach(() => resetInteraction());
+  beforeEach(() => resetAction());
 
-  it("restores file content from interaction 1", () => {
+  it("restores file content from action 1", () => {
     const { workspace, config, originalCwd } = setupWorkspace();
     try {
       // Initial state
@@ -67,12 +67,12 @@ describe("restore e2e: single file overwrite", () => {
       // Simulate the edit
       fs.writeFileSync(filePath, "new content\n");
 
-      // Listing should show 1 interaction
-      const interactions = listRestorableInteractions(config);
-      assert.equal(interactions.length, 1);
+      // Listing should show 1 action
+      const actions = listRestorableActions(config);
+      assert.equal(actions.length, 1);
 
       // Restore direct
-      const results = restoreInteractionDirect(interactions[0].name, config);
+      const results = restoreActionDirect(actions[0].name, config);
       const ok = results.every((r) => r.success || r.subagentPrompt);
       assert.ok(ok, `Expected all results to succeed, got: ${JSON.stringify(results)}`);
 
@@ -87,10 +87,10 @@ describe("restore e2e: single file overwrite", () => {
 
 // ── Multi-step restore loop ──────────────────────────────────────────
 
-describe("restore e2e: restoreInteractionLoop", () => {
-  beforeEach(() => resetInteraction());
+describe("restore e2e: restoreActionLoop", () => {
+  beforeEach(() => resetAction());
 
-  it("walks back through multiple interactions", () => {
+  it("walks back through multiple actions", () => {
     const { workspace, config, originalCwd } = setupWorkspace();
     try {
       const filePath = path.join(workspace, "main.py");
@@ -100,20 +100,20 @@ describe("restore e2e: restoreInteractionLoop", () => {
       runBackup(makeCtx("Write", { path: filePath, content: "v1" }), config);
 
       // Step 2: edit to v2
-      resetInteraction();
+      resetAction();
       fs.writeFileSync(filePath, "version_2\n");
       runBackup(makeCtx("Write", { path: filePath, content: "v2" }), config);
 
       // Step 3: edit to v3
-      resetInteraction();
+      resetAction();
       fs.writeFileSync(filePath, "version_3\n");
       runBackup(makeCtx("Write", { path: filePath, content: "v3" }), config);
 
-      const interactions = listRestorableInteractions(config);
-      assert.equal(interactions.length, 3);
+      const actions = listRestorableActions(config);
+      assert.equal(actions.length, 3);
 
-      // Loop restore back to interaction 1
-      const results = restoreInteractionLoop(interactions[0].name, config);
+      // Loop restore back to action 1
+      const results = restoreActionLoop(actions[0].name, config);
 
       // Every step should have succeeded
       const failures = results.filter((r) => !r.success && !r.subagentPrompt);
@@ -127,10 +127,10 @@ describe("restore e2e: restoreInteractionLoop", () => {
     }
   });
 
-  it("rejects nonexistent interaction name", () => {
+  it("rejects nonexistent action name", () => {
     const { workspace, config, originalCwd } = setupWorkspace();
     try {
-      const results = restoreInteractionLoop("interaction_999_00000000000000", config);
+      const results = restoreActionLoop("action_999_00000000000000", config);
       assert.equal(results.length, 1);
       assert.equal(results[0].success, false);
       assert.ok(results[0].description.includes("not found"));
@@ -139,24 +139,24 @@ describe("restore e2e: restoreInteractionLoop", () => {
     }
   });
 
-  it("single-interaction restore applies the only snapshot", () => {
+  it("single-action restore applies the only snapshot", () => {
     const { workspace, config, originalCwd } = setupWorkspace();
     try {
       // Create an original file BEFORE the first backup
       const filePath = path.join(workspace, "a.txt");
       fs.writeFileSync(filePath, "original\n");
 
-      // First interaction: snapshot captures state with "original"
+      // First action: snapshot captures state with "original"
       runBackup(makeCtx("Write", { path: filePath, content: "new" }), config);
 
       // Now modify the file (simulating what the tool would have done)
       fs.writeFileSync(filePath, "new content\n");
       assert.equal(fs.readFileSync(filePath, "utf-8"), "new content\n");
 
-      // Restore to interaction 1 (the only one) — should revert to "original"
-      const interactions = listRestorableInteractions(config);
-      assert.equal(interactions.length, 1);
-      const results = restoreInteractionLoop(interactions[0].name, config);
+      // Restore to action 1 (the only one) — should revert to "original"
+      const actions = listRestorableActions(config);
+      assert.equal(actions.length, 1);
+      const results = restoreActionLoop(actions[0].name, config);
 
       // Should have actually restored (not short-circuited)
       const failures = results.filter((r) => !r.success && !r.subagentPrompt);
@@ -173,45 +173,45 @@ describe("restore e2e: restoreInteractionLoop", () => {
 // ── Commit-hash regression (the bug we just fixed) ───────────────────
 
 describe("restore e2e: specific-commit targeting (not HEAD)", () => {
-  beforeEach(() => resetInteraction());
+  beforeEach(() => resetAction());
 
-  it("restoreInteractionDirect uses the specific commit (not HEAD)", () => {
+  it("restoreActionDirect uses the specific commit (not HEAD)", () => {
     const { workspace, config, originalCwd } = setupWorkspace();
     try {
       const filePath = path.join(workspace, "data.txt");
 
-      // Three interactions with distinct contents
+      // Three actions with distinct contents
       fs.writeFileSync(filePath, "A\n");
       runBackup(makeCtx("Write", { path: filePath, content: "A" }), config);
 
-      resetInteraction();
+      resetAction();
       fs.writeFileSync(filePath, "B\n");
       runBackup(makeCtx("Write", { path: filePath, content: "B" }), config);
 
-      resetInteraction();
+      resetAction();
       fs.writeFileSync(filePath, "C\n");
       runBackup(makeCtx("Write", { path: filePath, content: "C" }), config);
 
       // Current state is "C"
-      const interactions = listRestorableInteractions(config);
-      assert.equal(interactions.length, 3);
+      const actions = listRestorableActions(config);
+      assert.equal(actions.length, 3);
 
-      // Restore to interaction 1 → should get "A" (not "C", which would be the HEAD bug)
-      const res1 = restoreInteractionDirect(interactions[0].name, config);
+      // Restore to action 1 → should get "A" (not "C", which would be the HEAD bug)
+      const res1 = restoreActionDirect(actions[0].name, config);
       assert.ok(res1.every((r) => r.success || r.subagentPrompt));
       assert.equal(fs.readFileSync(filePath, "utf-8"), "A\n");
 
       // After restoring to 1, ALL folders (1, 2, 3) should be pruned.
-      // Snapshot 1 = state BEFORE interaction 1, so interaction 1's folder
+      // Snapshot 1 = state BEFORE action 1, so action 1's folder
       // is also removed (its snapshot has been applied to the workspace).
-      const remaining = listRestorableInteractions(config);
-      assert.equal(remaining.length, 0, "All folders should be pruned after restoring to first interaction");
+      const remaining = listRestorableActions(config);
+      assert.equal(remaining.length, 0, "All folders should be pruned after restoring to first action");
     } finally {
       teardown(workspace, originalCwd);
     }
   });
 
-  it("restoreInteractionDirect to middle interaction prunes only later ones", () => {
+  it("restoreActionDirect to middle action prunes only later ones", () => {
     const { workspace, config, originalCwd } = setupWorkspace();
     try {
       const filePath = path.join(workspace, "data.txt");
@@ -219,24 +219,24 @@ describe("restore e2e: specific-commit targeting (not HEAD)", () => {
       fs.writeFileSync(filePath, "A\n");
       runBackup(makeCtx("Write", { path: filePath, content: "A" }), config);
 
-      resetInteraction();
+      resetAction();
       fs.writeFileSync(filePath, "B\n");
       runBackup(makeCtx("Write", { path: filePath, content: "B" }), config);
 
-      resetInteraction();
+      resetAction();
       fs.writeFileSync(filePath, "C\n");
       runBackup(makeCtx("Write", { path: filePath, content: "C" }), config);
 
-      const interactions = listRestorableInteractions(config);
+      const actions = listRestorableActions(config);
 
-      // Restore to interaction 2 → should get "B", prune interactions 2 and 3
-      // (snapshot 2 = state BEFORE interaction 2, so folder 2 is also removed)
-      const res = restoreInteractionDirect(interactions[1].name, config);
+      // Restore to action 2 → should get "B", prune actions 2 and 3
+      // (snapshot 2 = state BEFORE action 2, so folder 2 is also removed)
+      const res = restoreActionDirect(actions[1].name, config);
       assert.ok(res.every((r) => r.success || r.subagentPrompt));
       assert.equal(fs.readFileSync(filePath, "utf-8"), "B\n");
 
-      const remaining = listRestorableInteractions(config);
-      assert.equal(remaining.length, 1, "Only interaction 1 should remain");
+      const remaining = listRestorableActions(config);
+      assert.equal(remaining.length, 1, "Only action 1 should remain");
     } finally {
       teardown(workspace, originalCwd);
     }
@@ -246,24 +246,24 @@ describe("restore e2e: specific-commit targeting (not HEAD)", () => {
 // ── File deletion on restore (the webpack.common.ts bug) ─────────────
 
 describe("restore e2e: files added after target commit are deleted", () => {
-  beforeEach(() => resetInteraction());
+  beforeEach(() => resetAction());
 
-  it("restoreInteractionDirect removes files created by later interactions", () => {
+  it("restoreActionDirect removes files created by later actions", () => {
     const { workspace, config, originalCwd } = setupWorkspace();
     try {
-      // Interaction 1: create file_a
+      // Action 1: create file_a
       const fileA = path.join(workspace, "file_a.txt");
       fs.writeFileSync(fileA, "a\n");
       runBackup(makeCtx("Write", { path: fileA, content: "a" }), config);
 
-      // Interaction 2: create file_b (file_a still exists)
-      resetInteraction();
+      // Action 2: create file_b (file_a still exists)
+      resetAction();
       const fileB = path.join(workspace, "file_b.txt");
       fs.writeFileSync(fileB, "b\n");
       runBackup(makeCtx("Write", { path: fileB, content: "b" }), config);
 
-      // Interaction 3: create file_c (file_a + file_b still exist)
-      resetInteraction();
+      // Action 3: create file_c (file_a + file_b still exist)
+      resetAction();
       const fileC = path.join(workspace, "file_c.txt");
       fs.writeFileSync(fileC, "c\n");
       runBackup(makeCtx("Write", { path: fileC, content: "c" }), config);
@@ -273,9 +273,9 @@ describe("restore e2e: files added after target commit are deleted", () => {
       assert.ok(fs.existsSync(fileB));
       assert.ok(fs.existsSync(fileC));
 
-      // Restore to interaction 1 — only file_a should remain
-      const interactions = listRestorableInteractions(config);
-      const res = restoreInteractionDirect(interactions[0].name, config);
+      // Restore to action 1 — only file_a should remain
+      const actions = listRestorableActions(config);
+      const res = restoreActionDirect(actions[0].name, config);
       assert.ok(res.every((r) => r.success || r.subagentPrompt),
         `Restore failed: ${JSON.stringify(res)}`);
 
@@ -289,21 +289,21 @@ describe("restore e2e: files added after target commit are deleted", () => {
     }
   });
 
-  it("restoreInteractionLoop removes files created by undone interactions", () => {
+  it("restoreActionLoop removes files created by undone actions", () => {
     const { workspace, config, originalCwd } = setupWorkspace();
     try {
       const fileA = path.join(workspace, "alpha.txt");
       fs.writeFileSync(fileA, "alpha\n");
       runBackup(makeCtx("Write", { path: fileA, content: "alpha" }), config);
 
-      resetInteraction();
+      resetAction();
       const fileB = path.join(workspace, "beta.txt");
       fs.writeFileSync(fileB, "beta\n");
       runBackup(makeCtx("Write", { path: fileB, content: "beta" }), config);
 
-      // Restore via loop to interaction 1
-      const interactions = listRestorableInteractions(config);
-      restoreInteractionLoop(interactions[0].name, config);
+      // Restore via loop to action 1
+      const actions = listRestorableActions(config);
+      restoreActionLoop(actions[0].name, config);
 
       assert.ok(fs.existsSync(fileA), "alpha.txt should exist");
       assert.ok(!fs.existsSync(fileB), "beta.txt should be deleted");
@@ -316,7 +316,7 @@ describe("restore e2e: files added after target commit are deleted", () => {
 // ── Single-file restore (fileOnly option) ────────────────────────────
 
 describe("restore e2e: --file single-file restore", () => {
-  beforeEach(() => resetInteraction());
+  beforeEach(() => resetAction());
 
   it("restores only the specified file, leaves others untouched", () => {
     const { workspace, config, originalCwd } = setupWorkspace();
@@ -330,14 +330,14 @@ describe("restore e2e: --file single-file restore", () => {
       runBackup(makeCtx("Write", { path: fileA, content: "a_original" }), config);
 
       // Modify BOTH files
-      resetInteraction();
+      resetAction();
       fs.writeFileSync(fileA, "a_modified\n");
       fs.writeFileSync(fileB, "b_modified\n");
       runBackup(makeCtx("Write", { path: fileA, content: "a_modified" }), config);
 
-      // Now restore ONLY a.txt from interaction 1
-      const interactions = listRestorableInteractions(config);
-      const results = restoreInteractionDirect(interactions[0].name, config, { fileOnly: "a.txt" });
+      // Now restore ONLY a.txt from action 1
+      const actions = listRestorableActions(config);
+      const results = restoreActionDirect(actions[0].name, config, { fileOnly: "a.txt" });
 
       const failures = results.filter((r) => !r.success);
       assert.equal(failures.length, 0, `Unexpected failures: ${JSON.stringify(failures)}`);
@@ -350,14 +350,14 @@ describe("restore e2e: --file single-file restore", () => {
     }
   });
 
-  it("returns failure when interaction has no git_snapshot", () => {
+  it("returns failure when action has no git_snapshot", () => {
     const { workspace, config, originalCwd } = setupWorkspace();
     try {
-      // Create an interaction folder manually with only a non-git-snapshot artifact
-      const interactionDir = path.join(config.backupDir, "interaction_001_19990101000000");
-      fs.mkdirSync(interactionDir, { recursive: true });
+      // Create an action folder manually with only a non-git-snapshot artifact
+      const actionDir = path.join(config.backupDir, "action_001_19990101000000");
+      fs.mkdirSync(actionDir, { recursive: true });
       fs.writeFileSync(
-        path.join(interactionDir, "metadata.json"),
+        path.join(actionDir, "metadata.json"),
         JSON.stringify([
           {
             id: "abc123",
@@ -371,8 +371,8 @@ describe("restore e2e: --file single-file restore", () => {
         ]),
       );
 
-      const results = restoreInteractionDirect(
-        "interaction_001_19990101000000",
+      const results = restoreActionDirect(
+        "action_001_19990101000000",
         config,
         { fileOnly: "some_file.txt" },
       );
@@ -389,29 +389,29 @@ describe("restore e2e: --file single-file restore", () => {
 // ── Partial restore failure → pruning skipped ────────────────────────
 
 describe("restore e2e: partial failure preserves folders", () => {
-  beforeEach(() => resetInteraction());
+  beforeEach(() => resetAction());
 
-  it("restoreInteractionLoop does NOT prune when a step fails", () => {
+  it("restoreActionLoop does NOT prune when a step fails", () => {
     const { workspace, config, originalCwd } = setupWorkspace();
     try {
-      // Interaction 1: real backup
+      // Action 1: real backup
       const fileA = path.join(workspace, "good.txt");
       fs.writeFileSync(fileA, "good\n");
       runBackup(makeCtx("Write", { path: fileA, content: "good" }), config);
 
-      // Interaction 2: real backup
-      resetInteraction();
+      // Action 2: real backup
+      resetAction();
       fs.writeFileSync(fileA, "changed\n");
       runBackup(makeCtx("Write", { path: fileA, content: "changed" }), config);
 
-      // Now corrupt interaction 2's metadata to force a restore failure:
+      // Now corrupt action 2's metadata to force a restore failure:
       // replace the commitHash with a nonexistent one
-      const interactions = listRestorableInteractions(config);
-      assert.equal(interactions.length, 2);
+      const actions = listRestorableActions(config);
+      assert.equal(actions.length, 2);
 
       const inter2Dir = path.join(
         path.resolve(config.backupDir),
-        interactions[1].name
+        actions[1].name
       );
       const metaPath = path.join(inter2Dir, "metadata.json");
       const meta = JSON.parse(fs.readFileSync(metaPath, "utf-8"));
@@ -422,15 +422,15 @@ describe("restore e2e: partial failure preserves folders", () => {
       }
       fs.writeFileSync(metaPath, JSON.stringify(meta));
 
-      // Try to loop-restore to interaction 1
-      const results = restoreInteractionLoop(interactions[0].name, config);
+      // Try to loop-restore to action 1
+      const results = restoreActionLoop(actions[0].name, config);
 
       // Should have at least one failure
       const failures = results.filter((r: { success: boolean }) => !r.success);
       assert.ok(failures.length > 0, "Expected at least one failure from corrupted commit");
 
       // Folders should NOT be pruned because restore had a failure
-      const remaining = listRestorableInteractions(config);
+      const remaining = listRestorableActions(config);
       assert.ok(
         remaining.length >= 2,
         `Expected folders preserved on failure, got ${remaining.length}`

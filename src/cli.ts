@@ -56,6 +56,7 @@ function install(projectRoot: string): void {
   const pkgRoot = getPackageRoot();
   const preToolPath = path.join(pkgRoot, "hooks", "pre-tool.js");
   const postToolPath = path.join(pkgRoot, "hooks", "post-tool.js");
+  const userPromptPath = path.join(pkgRoot, "hooks", "user-prompt.js");
 
   const settings = loadClaudeSettings(projectRoot) as Record<string, unknown>;
   const hooks = (settings.hooks ?? {}) as Record<string, unknown[]>;
@@ -94,6 +95,20 @@ function install(projectRoot: string): void {
         {
           type: "command",
           command: `node ${postToolPath}`,
+        },
+      ],
+    },
+  ];
+
+  // UserPromptSubmit hook — captures the user instruction so history
+  // can show what they were asking for.
+  hooks.UserPromptSubmit = [
+    {
+      matcher: "*",
+      hooks: [
+        {
+          type: "command",
+          command: `node ${userPromptPath}`,
         },
       ],
     },
@@ -140,10 +155,10 @@ function install(projectRoot: string): void {
   console.log("");
   console.log("Slash commands available in Claude Code:");
   console.log("  /sandbox:status          Show sandbox state");
-  console.log("  /sandbox:history         Timeline of recent interactions");
+  console.log("  /sandbox:history         Timeline of recent actions");
   console.log("  /sandbox:restore         Reverse-loop restore");
   console.log("  /sandbox:restore_direct  Direct jump restore");
-  console.log("  /sandbox:diff            Diff against interaction");
+  console.log("  /sandbox:diff            Diff against action");
   console.log("  /sandbox:backups         List backup artifacts");
   console.log("  /sandbox:config          Show/edit configuration");
   console.log("  /sandbox:clear           Delete all backups and shadow repo");
@@ -159,7 +174,7 @@ function uninstall(projectRoot: string): void {
   const hooks = (settings.hooks ?? {}) as Record<string, unknown[]>;
 
   // Remove our hooks (identified by the chats-sandbox command path)
-  for (const event of ["PreToolUse", "PostToolUse", "PostToolUseFailure"]) {
+  for (const event of ["PreToolUse", "PostToolUse", "PostToolUseFailure", "UserPromptSubmit"]) {
     if (Array.isArray(hooks[event])) {
       hooks[event] = (hooks[event] as unknown[]).filter((entry) => {
         const h = entry as Record<string, unknown>;
@@ -215,7 +230,7 @@ function setConfigValue(
   // Type coercion
   if (k === "enabled" || k === "effectManifest" || k === "verbose" || k === "subagentEnabled") {
     (config as unknown as Record<string, unknown>)[k] = value === "true";
-  } else if (k === "maxInteractions" || k === "subagentTimeoutSeconds") {
+  } else if (k === "maxActions" || k === "subagentTimeoutSeconds") {
     (config as unknown as Record<string, unknown>)[k] = parseInt(value, 10);
   } else if (k === "backupMode") {
     if (!["always", "smart", "off"].includes(value)) {
@@ -248,13 +263,13 @@ function setConfigValue(
 function showStatus(projectRoot: string): void {
   const config = loadConfig(projectRoot);
   const manifest = loadManifest(config);
-  const { listInteractions } = require("./backup/manifest.js");
-  const interactions = listInteractions(config) as string[];
+  const { listActions } = require("./backup/manifest.js");
+  const actions = listActions(config) as string[];
 
   console.log("CHATS-Sandbox Status:");
   console.log(`  Enabled:       ${config.enabled}`);
   console.log(`  Backup mode:   ${config.backupMode}`);
-  console.log(`  Interactions:  ${interactions.length} / ${config.maxInteractions} folders`);
+  console.log(`  Actions:  ${actions.length} / ${config.maxActions} folders`);
   console.log(`  Artifacts:     ${manifest.length} total`);
   console.log(`  Effect log:    ${config.effectManifest ? config.effectLogPath : "disabled"}`);
   console.log(`  Subagent:      ${config.subagentEnabled ? `enabled (${config.subagentModel}, ${config.subagentPermissionMode ?? "bypassPermissions"})` : "disabled"}`);
@@ -290,13 +305,13 @@ function listBackups(projectRoot: string): void {
 
 // ── Restore ──────────────────────────────────────────────────────────
 
-function listInteractionsForRestore(projectRoot: string): Array<{
+function listActionsForRestore(projectRoot: string): Array<{
   name: string;
   artifacts: Array<{ strategy: string; description: string; timestamp: string }>;
 }> {
-  const { listRestorableInteractions } = require("./restore/restore.js");
+  const { listRestorableActions } = require("./restore/restore.js");
   const config = loadConfig(projectRoot);
-  return listRestorableInteractions(config) as Array<{
+  return listRestorableActions(config) as Array<{
     name: string;
     artifacts: Array<{ strategy: string; description: string; timestamp: string }>;
   }>;
@@ -321,125 +336,125 @@ function printRestoreResults(results: Array<{
 }
 
 /**
- * restore <N> — Reverse-loop restore. Undoes interactions one by one from
+ * restore <N> — Reverse-loop restore. Undoes actions one by one from
  * latest back to N+1, then restores N's state. Safer for non-workspace state.
  */
-function restoreCommand(projectRoot: string, interactionArg?: string, fileArg?: string): void {
+function restoreCommand(projectRoot: string, actionArg?: string, fileArg?: string): void {
   const config = loadConfig(projectRoot);
-  const interactions = listInteractionsForRestore(projectRoot);
+  const actions = listActionsForRestore(projectRoot);
 
-  if (interactions.length === 0) {
-    console.log("No interactions to restore.");
+  if (actions.length === 0) {
+    console.log("No actions to restore.");
     return;
   }
 
-  // Default: restore to the interaction BEFORE the latest
-  // ("undo the last thing"). Requires at least 2 interactions.
+  // Default: restore to the action BEFORE the latest
+  // ("undo the last thing"). Requires at least 2 actions.
   let idx: number;
-  if (!interactionArg) {
-    if (interactions.length < 2) {
-      console.log("Only one interaction exists — nothing to undo. Use 'history' to list.");
+  if (!actionArg) {
+    if (actions.length < 2) {
+      console.log("Only one action exists — nothing to undo. Use 'history' to list.");
       return;
     }
-    idx = interactions.length - 2; // second-to-last (0-indexed)
-    console.log(`No argument — defaulting to previous interaction (undo last step).\n`);
+    idx = actions.length - 2; // second-to-last (0-indexed)
+    console.log(`No argument — defaulting to previous action (undo last step).\n`);
   } else {
-    idx = parseInt(interactionArg, 10) - 1;
-    if (isNaN(idx) || idx < 0 || idx >= interactions.length) {
-      console.error(`Invalid interaction number: ${interactionArg}. Use 1-${interactions.length}.`);
+    idx = parseInt(actionArg, 10) - 1;
+    if (isNaN(idx) || idx < 0 || idx >= actions.length) {
+      console.error(`Invalid action number: ${actionArg}. Use 1-${actions.length}.`);
       process.exit(1);
     }
   }
 
-  const target = interactions[idx];
+  const target = actions[idx];
 
   // --file flag uses direct restore for single file
   if (fileArg) {
-    const { restoreInteractionDirect } = require("./restore/restore.js");
+    const { restoreActionDirect } = require("./restore/restore.js");
     console.log(`Restoring file ${fileArg} from ${target.name}\n`);
-    const results = restoreInteractionDirect(target.name, config, { fileOnly: fileArg });
+    const results = restoreActionDirect(target.name, config, { fileOnly: fileArg });
     printRestoreResults(results);
     return;
   }
 
   // Reverse-loop restore
-  const { restoreInteractionLoop } = require("./restore/restore.js");
+  const { restoreActionLoop } = require("./restore/restore.js");
   console.log(`Reverse-loop restore to: ${target.name}\n`);
-  const results = restoreInteractionLoop(target.name, config);
+  const results = restoreActionLoop(target.name, config);
   printRestoreResults(results);
 }
 
 /**
- * restore_direct <N> — Direct jump to interaction N's snapshot.
- * Fast, but only covers what that single interaction backed up.
- * No-arg default: jump to the interaction before the latest (undo last).
+ * restore_direct <N> — Direct jump to action N's snapshot.
+ * Fast, but only covers what that single action backed up.
+ * No-arg default: jump to the action before the latest (undo last).
  */
-function restoreDirectCommand(projectRoot: string, interactionArg?: string): void {
+function restoreDirectCommand(projectRoot: string, actionArg?: string): void {
   const config = loadConfig(projectRoot);
-  const interactions = listInteractionsForRestore(projectRoot);
+  const actions = listActionsForRestore(projectRoot);
 
-  if (interactions.length === 0) {
-    console.log("No interactions to restore.");
+  if (actions.length === 0) {
+    console.log("No actions to restore.");
     return;
   }
 
   let idx: number;
-  if (!interactionArg) {
-    if (interactions.length < 2) {
-      console.log("Only one interaction exists — nothing to undo.");
+  if (!actionArg) {
+    if (actions.length < 2) {
+      console.log("Only one action exists — nothing to undo.");
       return;
     }
-    idx = interactions.length - 2;
-    console.log(`No argument — defaulting to previous interaction.\n`);
+    idx = actions.length - 2;
+    console.log(`No argument — defaulting to previous action.\n`);
   } else {
-    idx = parseInt(interactionArg, 10) - 1;
-    if (isNaN(idx) || idx < 0 || idx >= interactions.length) {
-      console.error(`Invalid interaction number: ${interactionArg}. Use 1-${interactions.length}.`);
+    idx = parseInt(actionArg, 10) - 1;
+    if (isNaN(idx) || idx < 0 || idx >= actions.length) {
+      console.error(`Invalid action number: ${actionArg}. Use 1-${actions.length}.`);
       process.exit(1);
     }
   }
 
-  const target = interactions[idx];
-  const { restoreInteractionDirect } = require("./restore/restore.js");
+  const target = actions[idx];
+  const { restoreActionDirect } = require("./restore/restore.js");
   console.log(`Direct restore from: ${target.name}\n`);
-  const results = restoreInteractionDirect(target.name, config);
+  const results = restoreActionDirect(target.name, config);
   printRestoreResults(results);
 }
 
 // ── Diff ─────────────────────────────────────────────────────────────
 
-function diffCommand(projectRoot: string, interactionArg?: string): void {
+function diffCommand(projectRoot: string, actionArg?: string): void {
   const config = loadConfig(projectRoot);
-  const { listRestorableInteractions } = require("./restore/restore.js");
-  const interactions = listRestorableInteractions(config) as Array<{
+  const { listRestorableActions } = require("./restore/restore.js");
+  const actions = listRestorableActions(config) as Array<{
     name: string;
     artifacts: Array<{ strategy: string; artifactPath: string; commitHash?: string; id: string }>;
   }>;
 
-  if (interactions.length === 0) {
-    console.log("No interactions to diff against.");
+  if (actions.length === 0) {
+    console.log("No actions to diff against.");
     return;
   }
 
-  // Default: diff against the interaction BEFORE the latest
-  // ("what did the last step change?"). Requires at least 2 interactions.
+  // Default: diff against the action BEFORE the latest
+  // ("what did the last step change?"). Requires at least 2 actions.
   let idx: number;
-  if (!interactionArg) {
-    if (interactions.length < 2) {
-      console.log("Only one interaction exists — nothing to diff against.");
+  if (!actionArg) {
+    if (actions.length < 2) {
+      console.log("Only one action exists — nothing to diff against.");
       return;
     }
-    idx = interactions.length - 2;
-    console.log(`No argument — showing changes since previous interaction.\n`);
+    idx = actions.length - 2;
+    console.log(`No argument — showing changes since previous action.\n`);
   } else {
-    idx = parseInt(interactionArg, 10) - 1;
-    if (isNaN(idx) || idx < 0 || idx >= interactions.length) {
-      console.error(`Invalid interaction number: ${interactionArg}. Use 1-${interactions.length}.`);
+    idx = parseInt(actionArg, 10) - 1;
+    if (isNaN(idx) || idx < 0 || idx >= actions.length) {
+      console.error(`Invalid action number: ${actionArg}. Use 1-${actions.length}.`);
       return;
     }
   }
 
-  const target = interactions[idx];
+  const target = actions[idx];
   const snapshot = target.artifacts.find((a) => a.strategy === "git_snapshot");
 
   if (!snapshot) {
@@ -447,7 +462,7 @@ function diffCommand(projectRoot: string, interactionArg?: string): void {
     return;
   }
 
-  // Use the specific commit hash for this interaction (NOT HEAD, which is
+  // Use the specific commit hash for this action (NOT HEAD, which is
   // the latest snapshot in the shared shadow repo).
   const commit = snapshot.commitHash ?? snapshot.id;
   if (!commit) {
@@ -493,8 +508,8 @@ function diffCommand(projectRoot: string, interactionArg?: string): void {
 
 function historyCommand(projectRoot: string, countArg?: string): void {
   const config = loadConfig(projectRoot);
-  const { listRestorableInteractions } = require("./restore/restore.js");
-  const interactions = listRestorableInteractions(config) as Array<{
+  const { listRestorableActions } = require("./restore/restore.js");
+  const actions = listRestorableActions(config) as Array<{
     name: string;
     artifacts: Array<{
       strategy: string;
@@ -507,8 +522,8 @@ function historyCommand(projectRoot: string, countArg?: string): void {
     }>;
   }>;
 
-  if (interactions.length === 0) {
-    console.log("No interactions recorded yet.");
+  if (actions.length === 0) {
+    console.log("No actions recorded yet.");
     return;
   }
 
@@ -523,11 +538,11 @@ function historyCommand(projectRoot: string, countArg?: string): void {
     count = n;
   }
 
-  // Show the most recent `count` interactions
-  const shown = interactions.slice(-count);
-  const startIdx = interactions.length - shown.length + 1;
+  // Show the most recent `count` actions
+  const shown = actions.slice(-count);
+  const startIdx = actions.length - shown.length + 1;
 
-  console.log(`Showing last ${shown.length} of ${interactions.length} interactions:\n`);
+  console.log(`Showing last ${shown.length} of ${actions.length} actions:\n`);
 
   const { execSync } = require("node:child_process");
   const cwd = process.cwd();
@@ -573,10 +588,30 @@ function historyCommand(projectRoot: string, countArg?: string): void {
       }
     }
 
+    // Read instruction.txt for this action (set by UserPromptSubmit hook)
+    let instruction = "";
+    try {
+      const backupRoot = path.resolve(config.backupDir);
+      const instructionPath = path.join(backupRoot, inter.name, "instruction.txt");
+      if (fs.existsSync(instructionPath)) {
+        instruction = fs.readFileSync(instructionPath, "utf-8").trim();
+      }
+    } catch {
+      // best-effort
+    }
+
     // Display line 1: number, time, strategies
     console.log(`  ${displayNum}. ${timeFormatted}  [${strategies}]`);
 
-    // Display line 2: files (truncated to top 5)
+    // Display line 2: instruction (if available)
+    if (instruction) {
+      const shortInstr = instruction.length > 80
+        ? instruction.slice(0, 80) + "..."
+        : instruction;
+      console.log(`     "${shortInstr}"`);
+    }
+
+    // Display line 3: files (truncated to top 5)
     if (files.length > 0) {
       const shownFiles = files.slice(0, MAX_FILES_SHOWN);
       const extra = files.length - shownFiles.length;
@@ -598,8 +633,8 @@ function historyCommand(projectRoot: string, countArg?: string): void {
     console.log();
   }
 
-  if (interactions.length > shown.length) {
-    console.log(`(${interactions.length - shown.length} older interactions hidden — use 'chats-sandbox history <N>' to see more)`);
+  if (actions.length > shown.length) {
+    console.log(`(${actions.length - shown.length} older actions hidden — use 'chats-sandbox history <N>' to see more)`);
   }
 }
 
@@ -613,7 +648,7 @@ function clearCommand(projectRoot: string, _args: string[]): void {
 
   // Check existing state
   const hasBackups = fs.existsSync(backupRoot) &&
-    fs.readdirSync(backupRoot).some((d: string) => d.startsWith("interaction_"));
+    fs.readdirSync(backupRoot).some((d: string) => d.startsWith("action_"));
   const hasShadow = fs.existsSync(shadowRoot);
   const hasEffects = fs.existsSync(effectsLog);
 
@@ -622,9 +657,9 @@ function clearCommand(projectRoot: string, _args: string[]): void {
     return;
   }
 
-  // Delete interaction folders
+  // Delete action folders
   if (hasBackups) {
-    const dirs = fs.readdirSync(backupRoot).filter((d: string) => d.startsWith("interaction_"));
+    const dirs = fs.readdirSync(backupRoot).filter((d: string) => d.startsWith("action_"));
     for (const d of dirs) {
       try {
         fs.rmSync(path.join(backupRoot, d), { recursive: true, force: true });
@@ -632,7 +667,7 @@ function clearCommand(projectRoot: string, _args: string[]): void {
         // best-effort
       }
     }
-    console.log(`Removed ${dirs.length} interaction folder(s)`);
+    console.log(`Removed ${dirs.length} action folder(s)`);
   }
 
   // Delete shadow repo
@@ -654,6 +689,19 @@ function clearCommand(projectRoot: string, _args: string[]): void {
     } catch (e: unknown) {
       const msg = e instanceof Error ? e.message : String(e);
       console.error(`Failed to remove effect log: ${msg}`);
+    }
+  }
+
+  // Delete current-instruction.txt and subagent.log if present
+  const sandboxDir = path.dirname(backupRoot);
+  for (const f of ["current-instruction.txt", "subagent.log"]) {
+    const p = path.join(sandboxDir, f);
+    if (fs.existsSync(p)) {
+      try {
+        fs.unlinkSync(p);
+      } catch {
+        // best-effort
+      }
     }
   }
 
@@ -714,12 +762,12 @@ switch (command) {
     console.log("  config set <key> <value>        Set a config value");
     console.log("  status                          Show sandbox state");
     console.log("  backups                         List recent backup artifacts");
-    console.log("  history [N]                     Timeline of last N interactions (default 10)");
-    console.log("  restore                         List restorable interactions");
-    console.log("  restore <N>                     Reverse-loop restore to interaction N");
-    console.log("  restore <N> --file <path>       Restore single file from interaction N");
-    console.log("  restore_direct <N>              Direct jump to interaction N's snapshot");
-    console.log("  diff <N>                        Diff interaction N vs current state");
+    console.log("  history [N]                     Timeline of last N actions (default 10)");
+    console.log("  restore                         List restorable actions");
+    console.log("  restore <N>                     Reverse-loop restore to action N");
+    console.log("  restore <N> --file <path>       Restore single file from action N");
+    console.log("  restore_direct <N>              Direct jump to action N's snapshot");
+    console.log("  diff <N>                        Diff action N vs current state");
     console.log("  clear [--yes]                   Delete all backups, shadow repo, and effect log");
     break;
 }

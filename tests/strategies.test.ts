@@ -7,7 +7,7 @@ import assert from "node:assert/strict";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import * as os from "node:os";
-import { runBackup, resetInteraction } from "../src/backup/strategies.js";
+import { runBackup, resetAction } from "../src/backup/strategies.js";
 import { DEFAULT_CONFIG, type HookContext, type SandboxConfig } from "../src/types.js";
 
 function makeCtx(toolName: string, toolInput: Record<string, unknown>): HookContext {
@@ -16,20 +16,20 @@ function makeCtx(toolName: string, toolInput: Record<string, unknown>): HookCont
 
 function tmpConfig(): SandboxConfig {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "chats-sandbox-test-"));
-  return { ...DEFAULT_CONFIG, backupDir: path.join(dir, "backups"), maxInteractions: 5 };
+  return { ...DEFAULT_CONFIG, backupDir: path.join(dir, "backups"), maxActions: 5 };
 }
 
 describe("backup strategies", () => {
   beforeEach(() => {
-    resetInteraction();
+    resetAction();
   });
 
-  it("creates an interaction folder", () => {
+  it("creates an action folder", () => {
     const config = tmpConfig();
     runBackup(makeCtx("Bash", { command: "echo hello" }), config);
     const backupRoot = path.resolve(config.backupDir);
-    const dirs = fs.readdirSync(backupRoot).filter((d: string) => d.startsWith("interaction_"));
-    assert.ok(dirs.length >= 1, "Expected at least one interaction folder");
+    const dirs = fs.readdirSync(backupRoot).filter((d: string) => d.startsWith("action_"));
+    assert.ok(dirs.length >= 1, "Expected at least one action folder");
   });
 
   it("pip install triggers pip_freeze strategy", () => {
@@ -61,11 +61,11 @@ describe("backup strategies", () => {
     );
   });
 
-  it("writes metadata.json in interaction folder", () => {
+  it("writes metadata.json in action folder", () => {
     const config = tmpConfig();
     runBackup(makeCtx("Bash", { command: "pip install requests" }), config);
     const backupRoot = path.resolve(config.backupDir);
-    const dirs = fs.readdirSync(backupRoot).filter((d: string) => d.startsWith("interaction_"));
+    const dirs = fs.readdirSync(backupRoot).filter((d: string) => d.startsWith("action_"));
     assert.ok(dirs.length >= 1);
     const metaPath = path.join(backupRoot, dirs[0], "metadata.json");
     assert.ok(fs.existsSync(metaPath), "metadata.json should exist");
@@ -74,17 +74,17 @@ describe("backup strategies", () => {
     assert.ok(meta.length >= 1, "metadata should have at least one artifact");
   });
 
-  it("prunes old interaction folders", () => {
+  it("prunes old action folders", () => {
     const config = tmpConfig();
-    config.maxInteractions = 3;
+    config.maxActions = 3;
 
     for (let i = 0; i < 5; i++) {
-      resetInteraction();
+      resetAction();
       runBackup(makeCtx("Bash", { command: `echo step ${i}` }), config);
     }
 
     const backupRoot = path.resolve(config.backupDir);
-    const dirs = fs.readdirSync(backupRoot).filter((d: string) => d.startsWith("interaction_"));
+    const dirs = fs.readdirSync(backupRoot).filter((d: string) => d.startsWith("action_"));
     assert.ok(dirs.length <= 3, `Expected <= 3 folders, got ${dirs.length}`);
   });
 });

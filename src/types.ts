@@ -52,8 +52,8 @@ export interface SandboxConfig {
   backupMode: BackupMode;
   /** Directory for backup artifacts */
   backupDir: string;
-  /** Max interaction folders to keep before pruning oldest */
-  maxInteractions: number;
+  /** Max action folders to keep before pruning oldest */
+  maxActions: number;
   /** Enable effect manifest logging */
   effectManifest: boolean;
   /** Path to effect log */
@@ -85,7 +85,7 @@ export const DEFAULT_CONFIG: SandboxConfig = {
   enabled: true,
   backupMode: "smart",
   backupDir: ".chats-sandbox/backups",
-  maxInteractions: 50,
+  maxActions: 50,
   effectManifest: true,
   effectLogPath: ".chats-sandbox/effects.jsonl",
   // Deny is opt-in. Claude Code and the underlying model already refuse

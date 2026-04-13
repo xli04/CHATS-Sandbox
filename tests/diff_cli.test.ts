@@ -3,7 +3,7 @@
  *
  * Invokes the compiled CLI binary against a real temp workspace with
  * real backups, then verifies the diff output targets the correct
- * interaction (not HEAD of the shared shadow repo).
+ * action (not HEAD of the shared shadow repo).
  */
 
 import { describe, it } from "node:test";
@@ -12,7 +12,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import * as os from "node:os";
 import { execSync } from "node:child_process";
-import { runBackup, resetInteraction } from "../src/backup/strategies.js";
+import { runBackup, resetAction } from "../src/backup/strategies.js";
 import { DEFAULT_CONFIG, type HookContext, type SandboxConfig } from "../src/types.js";
 
 const PROJECT_ROOT = path.resolve(__dirname, "../..");
@@ -75,23 +75,23 @@ function teardown(workspace: string, originalCwd: string): void {
 }
 
 describe("diff CLI end-to-end", () => {
-  it("targets the specific interaction's commit, not HEAD", () => {
+  it("targets the specific action's commit, not HEAD", () => {
     const { workspace, config, originalCwd } = setupWorkspaceWithConfig();
     try {
-      resetInteraction();
+      resetAction();
       const filePath = path.join(workspace, "app.py");
 
-      // Interaction 1: create file with "version_A"
+      // Action 1: create file with "version_A"
       fs.writeFileSync(filePath, "version_A\n");
       runBackup(makeCtx("Write", { path: filePath, content: "A" }), config);
 
-      // Interaction 2: change to "version_B"
-      resetInteraction();
+      // Action 2: change to "version_B"
+      resetAction();
       fs.writeFileSync(filePath, "version_B\n");
       runBackup(makeCtx("Write", { path: filePath, content: "B" }), config);
 
       // Current state is "version_B"
-      // diff against interaction 1 should show the A → B change
+      // diff against action 1 should show the A → B change
       const diff1 = runCli(["diff", "1"], workspace);
       assert.equal(diff1.exitCode, 0, `diff failed: ${diff1.stderr}`);
 
@@ -101,7 +101,7 @@ describe("diff CLI end-to-end", () => {
       assert.ok(diff1.stdout.includes("version_B") || diff1.stdout.includes("+version_B"),
         `Expected 'version_B' in diff output, got: ${diff1.stdout.slice(0, 500)}`);
 
-      // diff against interaction 2 should show NO changes (current state IS interaction 2)
+      // diff against action 2 should show NO changes (current state IS action 2)
       const diff2 = runCli(["diff", "2"], workspace);
       assert.equal(diff2.exitCode, 0);
       assert.ok(
@@ -113,18 +113,18 @@ describe("diff CLI end-to-end", () => {
     }
   });
 
-  it("rejects out-of-range interaction number", () => {
+  it("rejects out-of-range action number", () => {
     const { workspace, config, originalCwd } = setupWorkspaceWithConfig();
     try {
-      resetInteraction();
+      resetAction();
       fs.writeFileSync(path.join(workspace, "x.txt"), "hello\n");
       runBackup(makeCtx("Write", { path: "x.txt", content: "h" }), config);
 
       const result = runCli(["diff", "999"], workspace);
       // CLI should print an error but not crash
       assert.ok(
-        result.stderr.includes("Invalid interaction number") ||
-          result.stdout.includes("Invalid interaction number"),
+        result.stderr.includes("Invalid action number") ||
+          result.stdout.includes("Invalid action number"),
         `Expected error message, got stdout=${result.stdout} stderr=${result.stderr}`,
       );
     } finally {
@@ -132,16 +132,16 @@ describe("diff CLI end-to-end", () => {
     }
   });
 
-  it("defaults to previous interaction when no argument is provided", () => {
+  it("defaults to previous action when no argument is provided", () => {
     const { workspace, config, originalCwd } = setupWorkspaceWithConfig();
     try {
-      // Two interactions — default should diff against the first one
-      resetInteraction();
+      // Two actions — default should diff against the first one
+      resetAction();
       const filePath = path.join(workspace, "y.txt");
       fs.writeFileSync(filePath, "alpha\n");
       runBackup(makeCtx("Write", { path: filePath, content: "alpha" }), config);
 
-      resetInteraction();
+      resetAction();
       fs.writeFileSync(filePath, "beta\n");
       runBackup(makeCtx("Write", { path: filePath, content: "beta" }), config);
 
@@ -159,10 +159,10 @@ describe("diff CLI end-to-end", () => {
     }
   });
 
-  it("shows helpful message when only one interaction exists", () => {
+  it("shows helpful message when only one action exists", () => {
     const { workspace, config, originalCwd } = setupWorkspaceWithConfig();
     try {
-      resetInteraction();
+      resetAction();
       fs.writeFileSync(path.join(workspace, "z.txt"), "only\n");
       runBackup(makeCtx("Write", { path: "z.txt", content: "only" }), config);
 

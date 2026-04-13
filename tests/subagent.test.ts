@@ -13,7 +13,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import * as os from "node:os";
 import { runSubagentBackup } from "../src/backup/subagent.js";
-import { runBackup, resetInteraction } from "../src/backup/strategies.js";
+import { runBackup, resetAction } from "../src/backup/strategies.js";
 import { restoreArtifact } from "../src/restore/restore.js";
 import { DEFAULT_CONFIG, type HookContext, type SandboxConfig, type BackupArtifact } from "../src/types.js";
 
@@ -69,11 +69,11 @@ function setup(): { workspace: string; config: SandboxConfig; originalCwd: strin
   const config: SandboxConfig = {
     ...DEFAULT_CONFIG,
     backupDir: path.join(workspace, ".chats-sandbox", "backups"),
-    maxInteractions: 10,
+    maxActions: 10,
     subagentEnabled: true, // enable for these tests
     subagentTimeoutSeconds: 10,
   };
-  // Create the interaction folder
+  // Create the action folder
   fs.mkdirSync(config.backupDir, { recursive: true });
   return { workspace, config, originalCwd };
 }
@@ -86,7 +86,7 @@ function teardown(workspace: string, originalCwd: string): void {
 // ── runSubagentBackup direct tests ───────────────────────────────────
 
 describe("subagent: runSubagentBackup with mock claude CLI", () => {
-  beforeEach(() => resetInteraction());
+  beforeEach(() => resetAction());
 
   it("parses claude -p --output-format json wrapper (result field)", () => {
     // Real claude -p --output-format json output looks like:
@@ -106,12 +106,12 @@ describe("subagent: runSubagentBackup with mock claude CLI", () => {
 
     const { workspace, config, originalCwd } = setup();
     try {
-      const interactionDir = path.join(config.backupDir, "interaction_test");
-      fs.mkdirSync(interactionDir, { recursive: true });
+      const actionDir = path.join(config.backupDir, "action_test");
+      fs.mkdirSync(actionDir, { recursive: true });
 
       const artifact = runSubagentBackup(
         makeCtx("Bash", { command: "curl -X POST https://api.example.com" }),
-        interactionDir,
+        actionDir,
         config
       );
 
@@ -133,12 +133,12 @@ describe("subagent: runSubagentBackup with mock claude CLI", () => {
 
     const { workspace, config, originalCwd } = setup();
     try {
-      const interactionDir = path.join(config.backupDir, "interaction_test");
-      fs.mkdirSync(interactionDir, { recursive: true });
+      const actionDir = path.join(config.backupDir, "action_test");
+      fs.mkdirSync(actionDir, { recursive: true });
 
       const artifact = runSubagentBackup(
         makeCtx("Bash", { command: "curl -X POST https://api.example.com" }),
-        interactionDir,
+        actionDir,
         config
       );
 
@@ -158,12 +158,12 @@ describe("subagent: runSubagentBackup with mock claude CLI", () => {
     installBrokenMockClaude();
     const { workspace, config, originalCwd } = setup();
     try {
-      const interactionDir = path.join(config.backupDir, "interaction_test");
-      fs.mkdirSync(interactionDir, { recursive: true });
+      const actionDir = path.join(config.backupDir, "action_test");
+      fs.mkdirSync(actionDir, { recursive: true });
 
       const artifact = runSubagentBackup(
         makeCtx("Bash", { command: "curl -X POST https://api.example.com" }),
-        interactionDir,
+        actionDir,
         config
       );
       assert.equal(artifact, null, "Expected null on broken output");
@@ -181,12 +181,12 @@ describe("subagent: runSubagentBackup with mock claude CLI", () => {
     const { workspace, config, originalCwd } = setup();
     try {
       config.subagentEnabled = false;
-      const interactionDir = path.join(config.backupDir, "interaction_test");
-      fs.mkdirSync(interactionDir, { recursive: true });
+      const actionDir = path.join(config.backupDir, "action_test");
+      fs.mkdirSync(actionDir, { recursive: true });
 
       const artifact = runSubagentBackup(
         makeCtx("Bash", { command: "curl -X POST https://api.example.com" }),
-        interactionDir,
+        actionDir,
         config
       );
       assert.equal(artifact, null);
@@ -199,7 +199,7 @@ describe("subagent: runSubagentBackup with mock claude CLI", () => {
 // ── runBackup integration with subagent ──────────────────────────────
 
 describe("subagent: runBackup wires subagent into tier-3", () => {
-  beforeEach(() => resetInteraction());
+  beforeEach(() => resetAction());
 
   it("uses subagent for outside-workspace action when enabled", () => {
     installMockClaude(JSON.stringify({
@@ -336,12 +336,12 @@ fi
 
     const { workspace, config, originalCwd } = setup();
     try {
-      const interactionDir = path.join(config.backupDir, "interaction_test");
-      fs.mkdirSync(interactionDir, { recursive: true });
+      const actionDir = path.join(config.backupDir, "action_test");
+      fs.mkdirSync(actionDir, { recursive: true });
 
       const artifact = runSubagentBackup(
         makeCtx("Bash", { command: "docker run ubuntu" }),
-        interactionDir,
+        actionDir,
         config
       );
       assert.ok(artifact);
