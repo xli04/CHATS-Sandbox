@@ -139,17 +139,31 @@ describe("restore e2e: restoreInteractionLoop", () => {
     }
   });
 
-  it("returns already-at-target when restoring to latest", () => {
+  it("single-interaction restore applies the only snapshot", () => {
     const { workspace, config, originalCwd } = setupWorkspace();
     try {
+      // Create an original file BEFORE the first backup
       const filePath = path.join(workspace, "a.txt");
-      fs.writeFileSync(filePath, "one\n");
-      runBackup(makeCtx("Write", { path: filePath, content: "x" }), config);
+      fs.writeFileSync(filePath, "original\n");
 
+      // First interaction: snapshot captures state with "original"
+      runBackup(makeCtx("Write", { path: filePath, content: "new" }), config);
+
+      // Now modify the file (simulating what the tool would have done)
+      fs.writeFileSync(filePath, "new content\n");
+      assert.equal(fs.readFileSync(filePath, "utf-8"), "new content\n");
+
+      // Restore to interaction 1 (the only one) — should revert to "original"
       const interactions = listRestorableInteractions(config);
-      // Restoring to the last interaction is a no-op
-      const results = restoreInteractionLoop(interactions[interactions.length - 1].name, config);
-      assert.ok(results.some((r) => r.description.includes("Already at")));
+      assert.equal(interactions.length, 1);
+      const results = restoreInteractionLoop(interactions[0].name, config);
+
+      // Should have actually restored (not short-circuited)
+      const failures = results.filter((r) => !r.success && !r.subagentPrompt);
+      assert.equal(failures.length, 0, `Unexpected failures: ${JSON.stringify(failures)}`);
+
+      // File should be back to "original"
+      assert.equal(fs.readFileSync(filePath, "utf-8"), "original\n");
     } finally {
       teardown(workspace, originalCwd);
     }

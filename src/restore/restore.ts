@@ -424,10 +424,12 @@ export function restoreInteractionLoop(
     return [{ success: false, description: `Interaction not found: ${targetInteractionName}` }];
   }
 
-  // Nothing to undo — already at or before target
-  if (targetIdx >= interactions.length - 1) {
-    return [{ success: true, description: `Already at interaction ${targetInteractionName}` }];
-  }
+  // NOTE: we do NOT short-circuit when targetIdx is the latest interaction.
+  // Each snapshot captures the state BEFORE the interaction ran, so
+  // "restore 1" when there's only 1 interaction means: apply that
+  // snapshot, reverting the single change the user made. The loop below
+  // simply skips the "walk backwards" phase (since i > targetIdx is
+  // immediately false) and proceeds directly to the target restore.
 
   const results: RestoreResult[] = [];
   let anyFailed = false;
