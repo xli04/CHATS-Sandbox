@@ -256,17 +256,22 @@ export function runSubagentBackup(
   const timeoutMs = Math.max(10_000, config.subagentTimeoutSeconds * 1000);
 
   // Invoke `claude -p` with:
-  //   --output-format json     : structured output with a `result` field
-  //   --permission-mode <mode> : controls what tool calls the subagent
-  //                              can run without prompting. Default is
-  //                              "bypassPermissions" — full freedom for
-  //                              git push, curl, ssh, etc. Configurable
-  //                              to "acceptEdits" for a smaller blast
-  //                              radius (filesystem ops only).
-  //                              Without any permission mode, claude -p
-  //                              denies all Bash tool use in headless
-  //                              mode and fails with "permission_denials".
-  //   --model <model>          : select the subagent model
+  //   --output-format json       : structured output with a `result` field
+  //   --permission-mode <mode>   : controls what tool calls the subagent
+  //                                can run without prompting. Default is
+  //                                "bypassPermissions" — full freedom for
+  //                                git push, curl, ssh, etc. Configurable
+  //                                to "acceptEdits" for a smaller blast
+  //                                radius (filesystem ops only).
+  //                                Without any permission mode, claude -p
+  //                                denies all Bash tool use in headless
+  //                                mode and fails with "permission_denials".
+  //   --no-session-persistence   : don't save the subagent's transcript
+  //                                to ~/.claude/projects/<cwd>/<uuid>.jsonl.
+  //                                Prevents pollution of the user's
+  //                                /resume picker with dozens of
+  //                                sandbox-triggered sessions.
+  //   --model <model>            : select the subagent model
   //
   // We use execFileSync with an array to avoid shell quoting issues with
   // the prompt argument.
@@ -282,6 +287,11 @@ export function runSubagentBackup(
     prompt,
     "--output-format", "json",
     "--permission-mode", permissionMode,
+    // Don't persist the subagent's session to disk. Without this, every
+    // sandbox-triggered backup creates a .jsonl file in
+    // ~/.claude/projects/<cwd>/ that shows up in the user's /resume
+    // picker and clutters their session history.
+    "--no-session-persistence",
   ];
   if (config.subagentModel && config.subagentModel !== "inherit") {
     args.push("--model", config.subagentModel);
