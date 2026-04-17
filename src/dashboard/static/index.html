@@ -1,0 +1,907 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>CHATS-Sandbox</title>
+<style>
+  :root {
+    --bg-0: #0a0c12;
+    --bg-1: #0f1320;
+    --bg-2: #131827;
+    --surface: rgba(24, 28, 44, 0.72);
+    --surface-solid: #181c2c;
+    --surface-raised: rgba(34, 40, 62, 0.85);
+    --border: rgba(122, 162, 247, 0.12);
+    --border-strong: rgba(122, 162, 247, 0.24);
+    --text: #e6e8f0;
+    --text-dim: #b0b6cb;
+    --muted: #6b7390;
+    --accent: #7aa2f7;
+    --accent-2: #bb9af7;
+    --accent-3: #7dcfff;
+    --success: #9ece6a;
+    --warn: #e0af68;
+    --danger: #f7768e;
+    --shadow-lg: 0 20px 60px rgba(0, 0, 0, 0.45);
+    --shadow-sm: 0 4px 16px rgba(0, 0, 0, 0.35);
+    --radius: 12px;
+  }
+
+  * { box-sizing: border-box; }
+
+  html, body { height: 100%; }
+  body {
+    margin: 0;
+    color: var(--text);
+    font-family: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+    font-size: 14px;
+    line-height: 1.55;
+    background:
+      radial-gradient(1200px 800px at 80% -10%, rgba(187, 154, 247, 0.10), transparent 60%),
+      radial-gradient(900px 700px at -10% 110%, rgba(122, 162, 247, 0.10), transparent 55%),
+      linear-gradient(180deg, var(--bg-0), var(--bg-1) 40%, var(--bg-0));
+    background-attachment: fixed;
+    min-height: 100vh;
+  }
+
+  code, pre, .mono {
+    font-family: "JetBrains Mono", "SF Mono", Menlo, Consolas, ui-monospace, monospace;
+  }
+
+  /* ── Header ───────────────────────────────────────────────── */
+  header {
+    position: sticky;
+    top: 0;
+    z-index: 10;
+    padding: 18px 32px;
+    border-bottom: 1px solid var(--border);
+    backdrop-filter: blur(14px);
+    -webkit-backdrop-filter: blur(14px);
+    background: rgba(10, 12, 18, 0.72);
+    display: flex;
+    align-items: center;
+    gap: 18px;
+  }
+  .brand {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+  }
+  .brand-logo {
+    width: 30px; height: 30px;
+    border-radius: 8px;
+    background: linear-gradient(135deg, var(--accent), var(--accent-2) 60%, var(--accent-3));
+    box-shadow: 0 0 24px rgba(122, 162, 247, 0.45);
+    position: relative;
+  }
+  .brand-logo::after {
+    content: "";
+    position: absolute; inset: 6px;
+    border-radius: 4px;
+    background: rgba(10, 12, 18, 0.85);
+  }
+  .brand h1 {
+    margin: 0;
+    font-size: 16px;
+    font-weight: 600;
+    letter-spacing: 0.2px;
+  }
+  .brand h1 span {
+    background: linear-gradient(90deg, var(--accent), var(--accent-2));
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent;
+  }
+  .status-pills {
+    margin-left: auto;
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+  }
+  .pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 4px 10px;
+    border-radius: 999px;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    font-size: 11.5px;
+    color: var(--text-dim);
+    letter-spacing: 0.2px;
+  }
+  .pill-dot {
+    width: 6px; height: 6px;
+    border-radius: 50%;
+    background: var(--muted);
+  }
+  .pill.on .pill-dot {
+    background: var(--success);
+    box-shadow: 0 0 8px var(--success);
+    animation: pulse 2s ease-in-out infinite;
+  }
+  .pill.warn .pill-dot { background: var(--warn); box-shadow: 0 0 8px var(--warn); }
+  .pill.off .pill-dot { background: var(--muted); }
+  @keyframes pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.45; }
+  }
+
+  /* ── Nav / tabs ───────────────────────────────────────────── */
+  nav {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    padding: 10px 32px 0;
+    max-width: 1080px;
+    margin: 0 auto;
+  }
+  .tab {
+    background: transparent;
+    color: var(--muted);
+    border: 1px solid transparent;
+    padding: 9px 16px;
+    font-size: 13.5px;
+    cursor: pointer;
+    border-radius: 10px 10px 0 0;
+    transition: color 0.15s, background 0.15s;
+    font-weight: 500;
+  }
+  .tab:hover { color: var(--text-dim); }
+  .tab.active {
+    color: var(--text);
+    background: var(--surface);
+    border-color: var(--border);
+    border-bottom-color: transparent;
+  }
+  .tab.active::after {
+    content: "";
+    display: block;
+    height: 2px;
+    margin-top: 7px;
+    margin-bottom: -10px;
+    background: linear-gradient(90deg, var(--accent), var(--accent-2));
+    border-radius: 2px;
+  }
+  .nav-right {
+    margin-left: auto;
+    display: flex;
+    gap: 8px;
+  }
+  .btn-ghost {
+    background: var(--surface);
+    color: var(--text-dim);
+    border: 1px solid var(--border);
+    padding: 7px 14px;
+    border-radius: 8px;
+    font-size: 12.5px;
+    cursor: pointer;
+    transition: all 0.15s;
+  }
+  .btn-ghost:hover {
+    color: var(--text);
+    border-color: var(--border-strong);
+    background: var(--surface-raised);
+  }
+
+  main {
+    padding: 24px 32px 80px;
+    max-width: 1080px;
+    margin: 0 auto;
+  }
+  .panel { display: none; animation: fadeIn 0.25s ease; }
+  .panel.active { display: block; }
+  @keyframes fadeIn {
+    from { opacity: 0; transform: translateY(4px); }
+    to { opacity: 1; transform: translateY(0); }
+  }
+
+  /* ── Timeline ─────────────────────────────────────────────── */
+  .timeline-head {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    margin: 8px 0 18px;
+  }
+  .timeline-head h2 {
+    margin: 0;
+    font-size: 15px;
+    font-weight: 600;
+    color: var(--text);
+  }
+  .timeline-head .count {
+    font-size: 12px;
+    color: var(--muted);
+  }
+
+  .timeline {
+    position: relative;
+    padding-left: 24px;
+  }
+  .timeline::before {
+    content: "";
+    position: absolute;
+    left: 7px;
+    top: 8px;
+    bottom: 8px;
+    width: 2px;
+    background: linear-gradient(180deg,
+      var(--border-strong), var(--border), transparent);
+    border-radius: 2px;
+  }
+
+  .action {
+    position: relative;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 14px 18px;
+    margin-bottom: 12px;
+    backdrop-filter: blur(8px);
+    transition: border-color 0.15s, transform 0.15s;
+  }
+  .action:hover {
+    border-color: var(--border-strong);
+    transform: translateX(2px);
+  }
+  .action::before {
+    content: "";
+    position: absolute;
+    left: -21px;
+    top: 18px;
+    width: 12px;
+    height: 12px;
+    border-radius: 50%;
+    background: var(--bg-1);
+    border: 2px solid var(--accent);
+    box-shadow: 0 0 0 4px rgba(122, 162, 247, 0.12);
+  }
+  .action.subagent::before { border-color: var(--warn); box-shadow: 0 0 0 4px rgba(224, 175, 104, 0.12); }
+  .action.targeted::before { border-color: var(--success); box-shadow: 0 0 0 4px rgba(158, 206, 106, 0.12); }
+
+  .action-head {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    gap: 12px;
+    margin-bottom: 4px;
+  }
+  .action-seq {
+    font-weight: 600;
+    color: var(--accent);
+    font-size: 14px;
+    letter-spacing: 0.3px;
+  }
+  .action-time {
+    font-size: 11.5px;
+    color: var(--muted);
+    font-variant-numeric: tabular-nums;
+  }
+  .action-instruction {
+    font-style: italic;
+    color: var(--text);
+    margin: 8px 0;
+    padding: 8px 12px;
+    background: rgba(122, 162, 247, 0.06);
+    border-left: 3px solid var(--accent);
+    border-radius: 0 6px 6px 0;
+    font-size: 13.5px;
+  }
+  .action-tool {
+    font-family: "JetBrains Mono", "SF Mono", Menlo, Consolas, monospace;
+    font-size: 12px;
+    color: var(--text-dim);
+    margin: 6px 0;
+    padding: 5px 10px;
+    background: rgba(0, 0, 0, 0.25);
+    border-radius: 6px;
+    word-break: break-word;
+  }
+  .action-tool strong {
+    color: var(--warn);
+    font-weight: 500;
+  }
+  .action-strategies {
+    display: flex;
+    gap: 6px;
+    flex-wrap: wrap;
+    margin: 8px 0 4px;
+  }
+  .strategy-badge {
+    font-size: 10.5px;
+    padding: 3px 9px;
+    border-radius: 999px;
+    background: var(--surface-raised);
+    border: 1px solid var(--border);
+    color: var(--text-dim);
+    letter-spacing: 0.3px;
+    font-weight: 500;
+    text-transform: lowercase;
+  }
+  .strategy-badge.git_snapshot {
+    color: var(--accent);
+    border-color: rgba(122, 162, 247, 0.35);
+    background: rgba(122, 162, 247, 0.08);
+  }
+  .strategy-badge.subagent {
+    color: var(--warn);
+    border-color: rgba(224, 175, 104, 0.35);
+    background: rgba(224, 175, 104, 0.08);
+  }
+  .strategy-badge.pip_freeze,
+  .strategy-badge.npm_list,
+  .strategy-badge.env_snapshot,
+  .strategy-badge.git_tag {
+    color: var(--success);
+    border-color: rgba(158, 206, 106, 0.35);
+    background: rgba(158, 206, 106, 0.08);
+  }
+  .action-files {
+    font-family: "JetBrains Mono", "SF Mono", Menlo, Consolas, monospace;
+    font-size: 11.5px;
+    color: var(--text-dim);
+    margin-top: 8px;
+    word-break: break-all;
+  }
+  .action-files-label {
+    color: var(--muted);
+    margin-right: 6px;
+  }
+  .action-stats {
+    font-family: "JetBrains Mono", "SF Mono", Menlo, Consolas, monospace;
+    font-size: 11.5px;
+    color: var(--success);
+    margin-top: 4px;
+  }
+
+  .empty {
+    text-align: center;
+    color: var(--muted);
+    padding: 60px 20px;
+    border: 1px dashed var(--border);
+    border-radius: var(--radius);
+    background: var(--surface);
+  }
+  .empty-icon {
+    font-size: 28px;
+    display: block;
+    margin-bottom: 12px;
+    opacity: 0.6;
+  }
+
+  /* ── Config form ─────────────────────────────────────────── */
+  .cfg-section {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 4px 20px;
+    margin-bottom: 16px;
+    backdrop-filter: blur(8px);
+  }
+  .cfg-section h2 {
+    margin: 18px 0 4px;
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--muted);
+    letter-spacing: 1.2px;
+    text-transform: uppercase;
+  }
+  .cfg-field {
+    display: flex;
+    align-items: center;
+    padding: 14px 0;
+    border-bottom: 1px solid var(--border);
+    gap: 16px;
+  }
+  .cfg-section .cfg-field:last-child { border-bottom: none; }
+  .cfg-label {
+    flex: 1;
+    min-width: 0;
+  }
+  .cfg-label h3 {
+    margin: 0 0 3px;
+    font-size: 13.5px;
+    font-weight: 500;
+    color: var(--text);
+  }
+  .cfg-label p {
+    margin: 0;
+    font-size: 12px;
+    color: var(--muted);
+    line-height: 1.45;
+  }
+  .cfg-input { flex: 0 0 auto; }
+  .cfg-input input[type="text"],
+  .cfg-input input[type="number"],
+  .cfg-input select {
+    background: var(--bg-2);
+    border: 1px solid var(--border);
+    color: var(--text);
+    padding: 7px 11px;
+    border-radius: 6px;
+    font-size: 13px;
+    min-width: 180px;
+    transition: border-color 0.15s, box-shadow 0.15s;
+  }
+  .cfg-input input:focus,
+  .cfg-input select:focus {
+    outline: none;
+    border-color: var(--accent);
+    box-shadow: 0 0 0 3px rgba(122, 162, 247, 0.15);
+  }
+
+  /* Custom toggle switch */
+  .toggle {
+    position: relative;
+    display: inline-block;
+    width: 42px;
+    height: 24px;
+  }
+  .toggle input { opacity: 0; width: 0; height: 0; }
+  .toggle-slider {
+    position: absolute;
+    cursor: pointer;
+    inset: 0;
+    background: var(--bg-2);
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    transition: background 0.2s;
+  }
+  .toggle-slider::before {
+    content: "";
+    position: absolute;
+    height: 16px;
+    width: 16px;
+    left: 3px;
+    top: 3px;
+    background: var(--muted);
+    border-radius: 50%;
+    transition: transform 0.2s, background 0.2s;
+  }
+  .toggle input:checked + .toggle-slider {
+    background: linear-gradient(90deg, var(--accent), var(--accent-2));
+    border-color: transparent;
+  }
+  .toggle input:checked + .toggle-slider::before {
+    transform: translateX(18px);
+    background: white;
+  }
+
+  textarea {
+    width: 100%;
+    background: var(--bg-2);
+    border: 1px solid var(--border);
+    color: var(--text);
+    padding: 10px 12px;
+    border-radius: 6px;
+    font-family: "JetBrains Mono", "SF Mono", Menlo, Consolas, monospace;
+    font-size: 12px;
+    min-height: 90px;
+    resize: vertical;
+    transition: border-color 0.15s, box-shadow 0.15s;
+  }
+  textarea:focus {
+    outline: none;
+    border-color: var(--accent);
+    box-shadow: 0 0 0 3px rgba(122, 162, 247, 0.15);
+  }
+  .cfg-field.stacked { display: block; }
+  .cfg-field.stacked .cfg-label { margin-bottom: 8px; }
+
+  .cfg-actions {
+    margin-top: 22px;
+    display: flex;
+    gap: 10px;
+    align-items: center;
+    padding: 14px 20px;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    position: sticky;
+    bottom: 20px;
+    backdrop-filter: blur(8px);
+    box-shadow: var(--shadow-lg);
+  }
+  .btn-primary {
+    background: linear-gradient(135deg, var(--accent), var(--accent-2));
+    color: #0a0d14;
+    border: none;
+    padding: 9px 20px;
+    border-radius: 8px;
+    font-weight: 600;
+    font-size: 13px;
+    cursor: pointer;
+    transition: transform 0.1s, box-shadow 0.15s;
+    box-shadow: 0 4px 12px rgba(122, 162, 247, 0.25);
+  }
+  .btn-primary:hover {
+    transform: translateY(-1px);
+    box-shadow: 0 6px 18px rgba(122, 162, 247, 0.4);
+  }
+  .btn-primary:active { transform: translateY(0); }
+
+  .save-msg {
+    font-size: 13px;
+    margin-left: auto;
+    opacity: 0;
+    transition: opacity 0.2s;
+  }
+  .save-msg.visible { opacity: 1; }
+  .save-msg.ok { color: var(--success); }
+  .save-msg.err { color: var(--danger); }
+
+  /* Scrollbar */
+  ::-webkit-scrollbar { width: 10px; height: 10px; }
+  ::-webkit-scrollbar-track { background: var(--bg-0); }
+  ::-webkit-scrollbar-thumb {
+    background: var(--border-strong);
+    border-radius: 5px;
+    border: 2px solid var(--bg-0);
+  }
+  ::-webkit-scrollbar-thumb:hover { background: var(--accent); }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="brand">
+    <div class="brand-logo" aria-hidden="true"></div>
+    <h1>CHATS<span>-Sandbox</span></h1>
+  </div>
+  <div class="status-pills" id="status-pills">
+    <span class="pill"><span class="pill-dot"></span>loading…</span>
+  </div>
+</header>
+
+<nav>
+  <button id="tab-timeline" class="tab active">Timeline</button>
+  <button id="tab-config" class="tab">Config</button>
+  <div class="nav-right">
+    <button id="refresh" class="btn-ghost">↻ Refresh</button>
+  </div>
+</nav>
+
+<main>
+  <div id="panel-timeline" class="panel active">
+    <div class="timeline-head">
+      <h2>Action history</h2>
+      <div class="count" id="action-count"></div>
+    </div>
+    <div id="action-list-wrap">
+      <div id="action-list" class="empty">
+        <span class="empty-icon">◌</span>
+        Loading…
+      </div>
+    </div>
+  </div>
+
+  <div id="panel-config" class="panel">
+    <div id="cfg-form"></div>
+    <div class="cfg-actions">
+      <button class="btn-primary" id="save-btn">Save changes</button>
+      <button class="btn-ghost" id="reload-btn">Discard</button>
+      <span class="save-msg" id="save-msg"></span>
+    </div>
+  </div>
+</main>
+
+<script>
+"use strict";
+
+const $ = (id) => document.getElementById(id);
+
+let currentConfig = null;
+
+// ── Tabs ─────────────────────────────────────────────────────
+function switchTab(name) {
+  for (const id of ["timeline", "config"]) {
+    $("tab-" + id).classList.toggle("active", id === name);
+    $("panel-" + id).classList.toggle("active", id === name);
+  }
+}
+$("tab-timeline").onclick = () => switchTab("timeline");
+$("tab-config").onclick = () => switchTab("config");
+$("refresh").onclick = refreshAll;
+
+// ── Timeline ─────────────────────────────────────────────────
+async function loadActions() {
+  const res = await fetch("/api/actions");
+  const data = await res.json();
+  const wrap = $("action-list-wrap");
+  const countEl = $("action-count");
+
+  if (!data.actions.length) {
+    wrap.innerHTML = '<div class="empty"><span class="empty-icon">◌</span>No actions yet — use Claude Code to trigger one.</div>';
+    countEl.textContent = "";
+    return;
+  }
+
+  countEl.textContent = `${data.actions.length} action${data.actions.length === 1 ? "" : "s"}`;
+
+  // Newest first
+  const sorted = [...data.actions].sort((a, b) => b.seq - a.seq);
+
+  const list = document.createElement("div");
+  list.className = "timeline";
+  for (const a of sorted) {
+    list.appendChild(renderAction(a));
+  }
+  wrap.innerHTML = "";
+  wrap.appendChild(list);
+}
+
+function actionClass(strategies) {
+  if (strategies.includes("subagent")) return "action subagent";
+  if (strategies.some((s) => ["pip_freeze", "npm_list", "env_snapshot", "git_tag"].includes(s))) {
+    return "action targeted";
+  }
+  return "action";
+}
+
+function renderAction(a) {
+  const el = document.createElement("div");
+  el.className = actionClass(a.strategies || []);
+
+  const head = document.createElement("div");
+  head.className = "action-head";
+  head.innerHTML = `<span class="action-seq">#${a.seq}</span><span class="action-time">${escapeHtml(a.timeFormatted)}</span>`;
+  el.appendChild(head);
+
+  if (a.instruction) {
+    const i = document.createElement("div");
+    i.className = "action-instruction";
+    i.textContent = a.instruction;
+    el.appendChild(i);
+  }
+
+  if (a.toolName || a.originalAction) {
+    const t = document.createElement("div");
+    t.className = "action-tool";
+    const toolPart = a.toolName ? `<strong>${escapeHtml(a.toolName)}</strong>` : "";
+    const actionPart = a.originalAction ? escapeHtml(truncate(a.originalAction, 160)) : "";
+    t.innerHTML = toolPart + (toolPart && actionPart ? " — " : "") + actionPart;
+    el.appendChild(t);
+  }
+
+  if (a.strategies && a.strategies.length) {
+    const s = document.createElement("div");
+    s.className = "action-strategies";
+    for (const strat of a.strategies) {
+      const b = document.createElement("span");
+      b.className = "strategy-badge " + strat;
+      b.textContent = strat;
+      s.appendChild(b);
+    }
+    el.appendChild(s);
+  }
+
+  if (a.files && a.files.length) {
+    const f = document.createElement("div");
+    f.className = "action-files";
+    const shown = a.files.slice(0, 5);
+    const extra = a.files.length - shown.length;
+    f.innerHTML = `<span class="action-files-label">files</span>` +
+      escapeHtml(shown.join(", ")) +
+      (extra > 0 ? ` <span class="action-files-label">+${extra} more</span>` : "");
+    el.appendChild(f);
+  }
+
+  if (a.stats) {
+    const s = document.createElement("div");
+    s.className = "action-stats";
+    s.textContent = a.stats;
+    el.appendChild(s);
+  }
+
+  return el;
+}
+
+// ── Config form ──────────────────────────────────────────────
+const CONFIG_SECTIONS = [
+  {
+    title: "Core",
+    fields: [
+      { key: "enabled", type: "bool", title: "Enabled", desc: "Master switch for the sandbox." },
+      { key: "backupMode", type: "select", title: "Backup mode", desc: "smart = rules + precaution, always = every tool call, off = disabled.", options: ["smart", "always", "off"] },
+      { key: "maxActions", type: "number", title: "Max actions", desc: "Oldest action folders are pruned when this is exceeded." },
+      { key: "verbose", type: "bool", title: "Verbose", desc: "Print extra diagnostic messages." },
+      { key: "effectManifest", type: "bool", title: "Effect manifest", desc: "Write a JSONL log of every tool call's effects." },
+    ],
+  },
+  {
+    title: "Subagent (tier-3 backup)",
+    fields: [
+      { key: "subagentEnabled", type: "bool", title: "Enabled", desc: "Use claude -p to back up out-of-workspace effects." },
+      { key: "subagentModel", type: "select", title: "Model", desc: "Which Claude model the backup subagent runs as.", options: ["haiku", "sonnet", "opus", "inherit"] },
+      { key: "subagentPermissionMode", type: "select", title: "Permission mode", desc: "bypassPermissions = full freedom · acceptEdits = filesystem only.", options: ["bypassPermissions", "acceptEdits"] },
+      { key: "subagentTimeoutSeconds", type: "number", title: "Timeout (seconds)", desc: "Max time to wait for the subagent to finish." },
+    ],
+  },
+  {
+    title: "Rules",
+    fields: [
+      { key: "denyPatterns", type: "textarea", title: "Deny patterns", desc: "Regex patterns (one per line) that block tool calls entirely." },
+      { key: "alwaysBackupPatterns", type: "textarea", title: "Always-backup patterns", desc: "Regex patterns (one per line) that always trigger a backup." },
+    ],
+  },
+];
+
+async function loadConfig() {
+  const res = await fetch("/api/config");
+  currentConfig = await res.json();
+  renderConfigForm();
+}
+
+function renderConfigForm() {
+  const container = $("cfg-form");
+  container.innerHTML = "";
+  for (const section of CONFIG_SECTIONS) {
+    const sec = document.createElement("div");
+    sec.className = "cfg-section";
+    const h = document.createElement("h2");
+    h.textContent = section.title;
+    sec.appendChild(h);
+    for (const field of section.fields) {
+      sec.appendChild(renderField(field, currentConfig[field.key]));
+    }
+    container.appendChild(sec);
+  }
+}
+
+function renderField(field, value) {
+  const row = document.createElement("div");
+  row.className = "cfg-field" + (field.type === "textarea" ? " stacked" : "");
+
+  const labelDiv = document.createElement("div");
+  labelDiv.className = "cfg-label";
+  labelDiv.innerHTML = `<h3>${escapeHtml(field.title)}</h3><p>${escapeHtml(field.desc)}</p>`;
+  row.appendChild(labelDiv);
+
+  const inputDiv = document.createElement("div");
+  inputDiv.className = "cfg-input";
+
+  let input;
+  if (field.type === "bool") {
+    const wrap = document.createElement("label");
+    wrap.className = "toggle";
+    input = document.createElement("input");
+    input.type = "checkbox";
+    input.checked = !!value;
+    const slider = document.createElement("span");
+    slider.className = "toggle-slider";
+    wrap.appendChild(input);
+    wrap.appendChild(slider);
+    inputDiv.appendChild(wrap);
+  } else if (field.type === "number") {
+    input = document.createElement("input");
+    input.type = "number";
+    input.value = value ?? 0;
+    input.min = 1;
+    inputDiv.appendChild(input);
+  } else if (field.type === "select") {
+    input = document.createElement("select");
+    for (const opt of field.options) {
+      const o = document.createElement("option");
+      o.value = opt;
+      o.textContent = opt;
+      if (opt === value) o.selected = true;
+      input.appendChild(o);
+    }
+    inputDiv.appendChild(input);
+  } else if (field.type === "textarea") {
+    input = document.createElement("textarea");
+    input.value = Array.isArray(value) ? value.join("\n") : (value ?? "");
+  } else {
+    input = document.createElement("input");
+    input.type = "text";
+    input.value = value ?? "";
+    inputDiv.appendChild(input);
+  }
+
+  input.dataset.key = field.key;
+  input.dataset.type = field.type;
+
+  if (field.type === "textarea") {
+    const wrap = document.createElement("div");
+    wrap.style.marginTop = "4px";
+    wrap.appendChild(input);
+    row.appendChild(wrap);
+  } else {
+    row.appendChild(inputDiv);
+  }
+  return row;
+}
+
+async function saveConfig() {
+  const updates = {};
+  const inputs = $("cfg-form").querySelectorAll("[data-key]");
+  for (const el of inputs) {
+    const key = el.dataset.key;
+    const type = el.dataset.type;
+    if (type === "bool") {
+      updates[key] = el.checked;
+    } else if (type === "number") {
+      updates[key] = parseInt(el.value, 10);
+    } else if (type === "textarea") {
+      updates[key] = el.value.split("\n").map((s) => s.trim()).filter(Boolean);
+    } else {
+      updates[key] = el.value;
+    }
+  }
+
+  const msg = $("save-msg");
+  msg.className = "save-msg visible";
+  msg.textContent = "Saving…";
+
+  try {
+    const res = await fetch("/api/config", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(updates),
+    });
+    const body = await res.json();
+    if (res.ok) {
+      currentConfig = body.config;
+      msg.className = "save-msg visible ok";
+      msg.textContent = "✓ Saved";
+      loadStatus();
+      setTimeout(() => { msg.className = "save-msg"; }, 2000);
+    } else {
+      msg.className = "save-msg visible err";
+      msg.textContent = body.error || `Error ${res.status}`;
+    }
+  } catch (e) {
+    msg.className = "save-msg visible err";
+    msg.textContent = String(e);
+  }
+}
+
+$("save-btn").onclick = saveConfig;
+$("reload-btn").onclick = () => { loadConfig(); const m = $("save-msg"); m.className = "save-msg"; };
+
+// ── Status pills ─────────────────────────────────────────────
+async function loadStatus() {
+  const pills = $("status-pills");
+  try {
+    const res = await fetch("/api/status");
+    const s = await res.json();
+    const parts = [];
+    parts.push(`<span class="pill ${s.enabled ? "on" : "off"}"><span class="pill-dot"></span>${s.enabled ? "enabled" : "disabled"}</span>`);
+    parts.push(`<span class="pill"><span class="pill-dot"></span>mode · ${escapeHtml(s.backupMode)}</span>`);
+    parts.push(`<span class="pill"><span class="pill-dot"></span>${s.actionCount}/${s.maxActions} actions</span>`);
+    const saClass = s.subagentEnabled ? "warn" : "off";
+    const saText = s.subagentEnabled ? `subagent · ${escapeHtml(s.subagentModel)}` : "subagent · off";
+    parts.push(`<span class="pill ${saClass}"><span class="pill-dot"></span>${saText}</span>`);
+    pills.innerHTML = parts.join("");
+  } catch (e) {
+    pills.innerHTML = '<span class="pill off"><span class="pill-dot"></span>error loading status</span>';
+  }
+}
+
+// ── Refresh ──────────────────────────────────────────────────
+async function refreshAll() {
+  const btn = $("refresh");
+  btn.disabled = true;
+  const orig = btn.textContent;
+  btn.textContent = "↻ Refreshing…";
+  await Promise.all([loadActions(), loadStatus()]);
+  btn.textContent = orig;
+  btn.disabled = false;
+}
+
+function escapeHtml(s) {
+  return String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
+}
+
+function truncate(s, n) {
+  s = String(s);
+  return s.length > n ? s.slice(0, n) + "…" : s;
+}
+
+loadStatus();
+loadActions();
+loadConfig();
+</script>
+</body>
+</html>

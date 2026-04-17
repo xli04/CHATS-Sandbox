@@ -751,6 +751,38 @@ function clearCommand(projectRoot: string, _args: string[]): void {
   console.log("\nCleared. Hooks and config are untouched. Run 'chats-sandbox uninstall' to remove those.");
 }
 
+// ── Dashboard ────────────────────────────────────────────────────────
+
+function dashboardCommand(projectRoot: string, args: string[]): void {
+  // Parse --port N (default 7321)
+  let port: number | undefined;
+  const portIdx = args.indexOf("--port");
+  if (portIdx !== -1 && args[portIdx + 1]) {
+    const n = parseInt(args[portIdx + 1], 10);
+    if (!isNaN(n) && n > 0 && n < 65536) port = n;
+    else {
+      console.error(`Invalid --port: ${args[portIdx + 1]}`);
+      process.exit(1);
+    }
+  }
+
+  const { startDashboard } = require("./dashboard/server.js");
+  const pkgRoot = getPackageRoot();
+  const { port: actualPort, close } = startDashboard({ projectRoot, port, pkgRoot });
+
+  const url = `http://127.0.0.1:${actualPort}`;
+  console.log(`CHATS-Sandbox dashboard running at ${url}`);
+  console.log("Press Ctrl+C to stop.\n");
+
+  const shutdown = () => {
+    console.log("\nShutting down dashboard…");
+    close();
+    process.exit(0);
+  };
+  process.on("SIGINT", shutdown);
+  process.on("SIGTERM", shutdown);
+}
+
 // ── Main ─────────────────────────────────────────────────────────────
 
 const args = process.argv.slice(2);
@@ -795,6 +827,9 @@ switch (command) {
   case "clear":
     clearCommand(projectRoot, args.slice(1));
     break;
+  case "dashboard":
+    dashboardCommand(projectRoot, args.slice(1));
+    break;
   default:
     console.log("CHATS-Sandbox — General-purpose sandbox for Claude Code\n");
     console.log("Usage: chats-sandbox <command>\n");
@@ -812,5 +847,6 @@ switch (command) {
     console.log("  restore_direct <N>              Direct jump to action N's snapshot");
     console.log("  diff <N>                        Diff action N vs current state");
     console.log("  clear [--yes]                   Delete all backups, shadow repo, and effect log");
+    console.log("  dashboard [--port N]            Launch the local web dashboard (default port 7321)");
     break;
 }

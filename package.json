@@ -7,7 +7,7 @@
     "chats-sandbox": "dist/cli.js"
   },
   "scripts": {
-    "build": "tsc -p tsconfig.json && tsc -p tsconfig.test.json && chmod +x dist/cli.js",
+    "build": "tsc -p tsconfig.json && tsc -p tsconfig.test.json && mkdir -p dist/dashboard && cp -r src/dashboard/static dist/dashboard/ && chmod +x dist/cli.js",
     "build:src": "tsc -p tsconfig.json",
     "build:test": "tsc -p tsconfig.test.json",
     "dev": "tsc --watch",
