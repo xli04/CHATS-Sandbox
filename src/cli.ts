@@ -115,6 +115,25 @@ function install(projectRoot: string): void {
   ];
 
   settings.hooks = hooks;
+
+  // Deny rules — block Claude from reading/searching/writing our internal
+  // state directory. The dashboard, CLI commands, and hooks all run as
+  // separate processes (not as Claude) so they still have full access.
+  const permissions = (settings.permissions ?? {}) as Record<string, unknown>;
+  const denyList = Array.isArray(permissions.deny) ? (permissions.deny as string[]) : [];
+  const requiredDeny = [
+    "Read(.chats-sandbox/**)",
+    "Edit(.chats-sandbox/**)",
+    "Write(.chats-sandbox/**)",
+    "Glob(.chats-sandbox/**)",
+    "Grep(.chats-sandbox/**)",
+  ];
+  for (const rule of requiredDeny) {
+    if (!denyList.includes(rule)) denyList.push(rule);
+  }
+  permissions.deny = denyList;
+  settings.permissions = permissions;
+
   saveClaudeSettings(projectRoot, settings);
 
   // Create default sandbox config
@@ -181,7 +200,7 @@ function uninstall(projectRoot: string): void {
         const innerHooks = h.hooks as Array<Record<string, unknown>> | undefined;
         if (!innerHooks) return true;
         return !innerHooks.some(
-          (ih) => typeof ih.command === "string" && ih.command.includes("chats-sandbox")
+          (ih) => typeof ih.command === "string" && ih.command.toLowerCase().includes("chats-sandbox")
         );
       });
       if ((hooks[event] as unknown[]).length === 0) {
@@ -191,6 +210,30 @@ function uninstall(projectRoot: string): void {
   }
 
   settings.hooks = hooks;
+
+  // Remove our deny rules from permissions (leave other deny rules alone)
+  const permissions = settings.permissions as Record<string, unknown> | undefined;
+  if (permissions && Array.isArray(permissions.deny)) {
+    const ourDeny = [
+      "Read(.chats-sandbox/**)",
+      "Edit(.chats-sandbox/**)",
+      "Write(.chats-sandbox/**)",
+      "Glob(.chats-sandbox/**)",
+      "Grep(.chats-sandbox/**)",
+    ];
+    permissions.deny = (permissions.deny as string[]).filter(
+      (rule) => !ourDeny.includes(rule)
+    );
+    // Clean up empty deny list
+    if ((permissions.deny as string[]).length === 0) {
+      delete permissions.deny;
+    }
+    // Clean up empty permissions object
+    if (Object.keys(permissions).length === 0) {
+      delete settings.permissions;
+    }
+  }
+
   saveClaudeSettings(projectRoot, settings);
 
   // Remove slash commands
