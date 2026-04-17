@@ -181,6 +181,7 @@ function install(projectRoot: string): void {
   console.log("  /sandbox:backups         List backup artifacts");
   console.log("  /sandbox:config          Show/edit configuration");
   console.log("  /sandbox:clear           Delete all backups and shadow repo");
+  console.log("  /sandbox:dashboard       Launch the local web dashboard");
   console.log("");
   console.log("To configure: chats-sandbox config");
   console.log("To disable:   chats-sandbox uninstall");
@@ -240,7 +241,7 @@ function uninstall(projectRoot: string): void {
   const commandsDir = path.join(projectRoot, ".claude", "commands");
   const sandboxCmds = ["sandbox:status.md", "sandbox:restore.md", "sandbox:restore_direct.md",
     "sandbox:diff.md", "sandbox:backups.md", "sandbox:config.md", "sandbox:history.md",
-    "sandbox:clear.md"];
+    "sandbox:clear.md", "sandbox:dashboard.md"];
   for (const f of sandboxCmds) {
     const p = path.join(commandsDir, f);
     if (fs.existsSync(p)) {
@@ -753,7 +754,7 @@ function clearCommand(projectRoot: string, _args: string[]): void {
 
 // ── Dashboard ────────────────────────────────────────────────────────
 
-function dashboardCommand(projectRoot: string, args: string[]): void {
+async function dashboardCommand(projectRoot: string, args: string[]): Promise<void> {
   // Parse --port N (default 7321)
   let port: number | undefined;
   const portIdx = args.indexOf("--port");
@@ -768,15 +769,22 @@ function dashboardCommand(projectRoot: string, args: string[]): void {
 
   const { startDashboard } = require("./dashboard/server.js");
   const pkgRoot = getPackageRoot();
-  const { port: actualPort, close } = startDashboard({ projectRoot, port, pkgRoot });
 
-  const url = `http://127.0.0.1:${actualPort}`;
+  const handle: { port: number; close: () => void } = await startDashboard({
+    projectRoot, port, pkgRoot,
+  }).catch((e: unknown) => {
+    const msg = e instanceof Error ? e.message : String(e);
+    console.error(msg);
+    process.exit(1);
+  });
+
+  const url = `http://127.0.0.1:${handle.port}`;
   console.log(`CHATS-Sandbox dashboard running at ${url}`);
   console.log("Press Ctrl+C to stop.\n");
 
   const shutdown = () => {
     console.log("\nShutting down dashboard…");
-    close();
+    handle.close();
     process.exit(0);
   };
   process.on("SIGINT", shutdown);

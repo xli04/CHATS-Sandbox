@@ -257,8 +257,14 @@ export function startDashboard(options: {
   projectRoot: string;
   port?: number;
   pkgRoot: string;
-}): { port: number; close: () => void } {
-  const port = options.port ?? DEFAULT_PORT;
+  /** If true, try subsequent ports when the preferred one is busy. Default: true when no explicit port. */
+  autoPort?: boolean;
+  /** Max number of port candidates to try when autoPort is on. Default: 10. */
+  maxPortAttempts?: number;
+}): Promise<{ port: number; close: () => void }> {
+  const requestedPort = options.port ?? DEFAULT_PORT;
+  const autoPort = options.autoPort ?? options.port === undefined;
+  const maxAttempts = options.maxPortAttempts ?? 10;
   const projectRoot = options.projectRoot;
 
   const server = http.createServer((req, res) => {
@@ -301,10 +307,37 @@ export function startDashboard(options: {
     res.end("not found");
   });
 
-  server.listen(port, "127.0.0.1");
-
-  return {
-    port,
-    close: () => server.close(),
-  };
+  return new Promise((resolve, reject) => {
+    let attempt = 0;
+    const tryListen = (port: number): void => {
+      const onError = (err: NodeJS.ErrnoException) => {
+        server.removeListener("listening", onListening);
+        if (err.code === "EADDRINUSE" && autoPort && attempt < maxAttempts - 1) {
+          attempt++;
+          tryListen(port + 1);
+          return;
+        }
+        if (err.code === "EADDRINUSE") {
+          const hint = autoPort
+            ? `tried ${requestedPort}–${requestedPort + attempt}, all busy`
+            : `port ${port} is already in use (another dashboard, or a different process)`;
+          reject(new Error(`Could not start dashboard: ${hint}. ` +
+            `Pass --port <N> to pick a different port, or stop the other process.`));
+          return;
+        }
+        reject(err);
+      };
+      const onListening = () => {
+        server.removeListener("error", onError);
+        resolve({
+          port,
+          close: () => server.close(),
+        });
+      };
+      server.once("error", onError);
+      server.once("listening", onListening);
+      server.listen(port, "127.0.0.1");
+    };
+    tryListen(requestedPort);
+  });
 }
