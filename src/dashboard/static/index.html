@@ -4,8 +4,57 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>CHATS-Sandbox</title>
+<script>
+  // Apply persisted theme before paint to avoid a flash.
+  (function () {
+    try {
+      var t = localStorage.getItem("chats-sandbox-theme") || "light";
+      document.documentElement.setAttribute("data-theme", t === "dark" ? "dark" : "light");
+    } catch (_) {
+      document.documentElement.setAttribute("data-theme", "light");
+    }
+  })();
+</script>
 <style>
-  :root {
+  /* Light theme (default) — airy slate palette with indigo / violet accents */
+  :root,
+  [data-theme="light"] {
+    --bg-0: #f6f7fb;
+    --bg-1: #eef1f8;
+    --bg-2: #ffffff;
+    --surface: rgba(255, 255, 255, 0.78);
+    --surface-solid: #ffffff;
+    --surface-raised: rgba(255, 255, 255, 0.95);
+    --border: rgba(79, 102, 176, 0.14);
+    --border-strong: rgba(79, 102, 176, 0.28);
+    --text: #1b2140;
+    --text-dim: #43507a;
+    --muted: #7a85a8;
+    --accent: #4f6fd4;
+    --accent-2: #8b5cf6;
+    --accent-3: #06b6d4;
+    --success: #16a34a;
+    --warn: #d97706;
+    --danger: #dc2626;
+    --shadow-lg: 0 20px 60px rgba(31, 41, 77, 0.10);
+    --shadow-sm: 0 4px 16px rgba(31, 41, 77, 0.06);
+    --radius: 12px;
+
+    --header-bg: rgba(255, 255, 255, 0.72);
+    --tool-bg: rgba(27, 33, 64, 0.05);
+    --instr-bg: rgba(79, 111, 212, 0.08);
+    --badge-git-bg: rgba(79, 111, 212, 0.10);
+    --badge-sub-bg: rgba(217, 119, 6, 0.12);
+    --badge-targ-bg: rgba(22, 163, 74, 0.10);
+    --ring-accent: rgba(79, 111, 212, 0.18);
+    --ring-warn: rgba(217, 119, 6, 0.18);
+    --ring-success: rgba(22, 163, 74, 0.18);
+    --bg-body-grad-1: rgba(139, 92, 246, 0.12);
+    --bg-body-grad-2: rgba(79, 111, 212, 0.14);
+  }
+
+  /* Dark theme — toggled via [data-theme="dark"] on <html> */
+  [data-theme="dark"] {
     --bg-0: #0a0c12;
     --bg-1: #0f1320;
     --bg-2: #131827;
@@ -25,7 +74,18 @@
     --danger: #f7768e;
     --shadow-lg: 0 20px 60px rgba(0, 0, 0, 0.45);
     --shadow-sm: 0 4px 16px rgba(0, 0, 0, 0.35);
-    --radius: 12px;
+
+    --header-bg: rgba(10, 12, 18, 0.72);
+    --tool-bg: rgba(0, 0, 0, 0.25);
+    --instr-bg: rgba(122, 162, 247, 0.06);
+    --badge-git-bg: rgba(122, 162, 247, 0.08);
+    --badge-sub-bg: rgba(224, 175, 104, 0.08);
+    --badge-targ-bg: rgba(158, 206, 106, 0.08);
+    --ring-accent: rgba(122, 162, 247, 0.12);
+    --ring-warn: rgba(224, 175, 104, 0.12);
+    --ring-success: rgba(158, 206, 106, 0.12);
+    --bg-body-grad-1: rgba(187, 154, 247, 0.10);
+    --bg-body-grad-2: rgba(122, 162, 247, 0.10);
   }
 
   * { box-sizing: border-box; }
@@ -38,8 +98,8 @@
     font-size: 14px;
     line-height: 1.55;
     background:
-      radial-gradient(1200px 800px at 80% -10%, rgba(187, 154, 247, 0.10), transparent 60%),
-      radial-gradient(900px 700px at -10% 110%, rgba(122, 162, 247, 0.10), transparent 55%),
+      radial-gradient(1200px 800px at 80% -10%, var(--bg-body-grad-1), transparent 60%),
+      radial-gradient(900px 700px at -10% 110%, var(--bg-body-grad-2), transparent 55%),
       linear-gradient(180deg, var(--bg-0), var(--bg-1) 40%, var(--bg-0));
     background-attachment: fixed;
     min-height: 100vh;
@@ -58,7 +118,7 @@
     border-bottom: 1px solid var(--border);
     backdrop-filter: blur(14px);
     -webkit-backdrop-filter: blur(14px);
-    background: rgba(10, 12, 18, 0.72);
+    background: var(--header-bg);
     display: flex;
     align-items: center;
     gap: 18px;
@@ -79,7 +139,7 @@
     content: "";
     position: absolute; inset: 6px;
     border-radius: 4px;
-    background: rgba(10, 12, 18, 0.85);
+    background: var(--bg-0);
   }
   .brand h1 {
     margin: 0;
@@ -127,6 +187,31 @@
     0%, 100% { opacity: 1; }
     50% { opacity: 0.45; }
   }
+
+  /* Theme toggle */
+  .theme-btn {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    color: var(--text-dim);
+    width: 34px;
+    height: 34px;
+    border-radius: 999px;
+    cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    transition: all 0.2s;
+    font-size: 15px;
+    line-height: 1;
+    flex: 0 0 auto;
+  }
+  .theme-btn:hover {
+    color: var(--text);
+    border-color: var(--border-strong);
+    background: var(--surface-raised);
+    transform: rotate(12deg);
+  }
+  .theme-icon { display: inline-block; transition: transform 0.3s; }
 
   /* ── Nav / tabs ───────────────────────────────────────────── */
   nav {
@@ -255,10 +340,10 @@
     border-radius: 50%;
     background: var(--bg-1);
     border: 2px solid var(--accent);
-    box-shadow: 0 0 0 4px rgba(122, 162, 247, 0.12);
+    box-shadow: 0 0 0 4px var(--ring-accent);
   }
-  .action.subagent::before { border-color: var(--warn); box-shadow: 0 0 0 4px rgba(224, 175, 104, 0.12); }
-  .action.targeted::before { border-color: var(--success); box-shadow: 0 0 0 4px rgba(158, 206, 106, 0.12); }
+  .action.subagent::before { border-color: var(--warn); box-shadow: 0 0 0 4px var(--ring-warn); }
+  .action.targeted::before { border-color: var(--success); box-shadow: 0 0 0 4px var(--ring-success); }
 
   .action-head {
     display: flex;
@@ -283,7 +368,7 @@
     color: var(--text);
     margin: 8px 0;
     padding: 8px 12px;
-    background: rgba(122, 162, 247, 0.06);
+    background: var(--instr-bg);
     border-left: 3px solid var(--accent);
     border-radius: 0 6px 6px 0;
     font-size: 13.5px;
@@ -294,7 +379,7 @@
     color: var(--text-dim);
     margin: 6px 0;
     padding: 5px 10px;
-    background: rgba(0, 0, 0, 0.25);
+    background: var(--tool-bg);
     border-radius: 6px;
     word-break: break-word;
   }
@@ -321,21 +406,21 @@
   }
   .strategy-badge.git_snapshot {
     color: var(--accent);
-    border-color: rgba(122, 162, 247, 0.35);
-    background: rgba(122, 162, 247, 0.08);
+    border-color: var(--border-strong);
+    background: var(--badge-git-bg);
   }
   .strategy-badge.subagent {
     color: var(--warn);
-    border-color: rgba(224, 175, 104, 0.35);
-    background: rgba(224, 175, 104, 0.08);
+    border-color: var(--border-strong);
+    background: var(--badge-sub-bg);
   }
   .strategy-badge.pip_freeze,
   .strategy-badge.npm_list,
   .strategy-badge.env_snapshot,
   .strategy-badge.git_tag {
     color: var(--success);
-    border-color: rgba(158, 206, 106, 0.35);
-    background: rgba(158, 206, 106, 0.08);
+    border-color: var(--border-strong);
+    background: var(--badge-targ-bg);
   }
   .action-files {
     font-family: "JetBrains Mono", "SF Mono", Menlo, Consolas, monospace;
@@ -428,7 +513,7 @@
   .cfg-input select:focus {
     outline: none;
     border-color: var(--accent);
-    box-shadow: 0 0 0 3px rgba(122, 162, 247, 0.15);
+    box-shadow: 0 0 0 3px var(--ring-accent);
   }
 
   /* Custom toggle switch */
@@ -484,7 +569,7 @@
   textarea:focus {
     outline: none;
     border-color: var(--accent);
-    box-shadow: 0 0 0 3px rgba(122, 162, 247, 0.15);
+    box-shadow: 0 0 0 3px var(--ring-accent);
   }
   .cfg-field.stacked { display: block; }
   .cfg-field.stacked .cfg-label { margin-bottom: 8px; }
@@ -505,7 +590,7 @@
   }
   .btn-primary {
     background: linear-gradient(135deg, var(--accent), var(--accent-2));
-    color: #0a0d14;
+    color: #ffffff;
     border: none;
     padding: 9px 20px;
     border-radius: 8px;
@@ -513,11 +598,11 @@
     font-size: 13px;
     cursor: pointer;
     transition: transform 0.1s, box-shadow 0.15s;
-    box-shadow: 0 4px 12px rgba(122, 162, 247, 0.25);
+    box-shadow: 0 4px 12px var(--ring-accent);
   }
   .btn-primary:hover {
     transform: translateY(-1px);
-    box-shadow: 0 6px 18px rgba(122, 162, 247, 0.4);
+    box-shadow: 0 6px 18px var(--ring-accent);
   }
   .btn-primary:active { transform: translateY(0); }
 
@@ -552,6 +637,9 @@
   <div class="status-pills" id="status-pills">
     <span class="pill"><span class="pill-dot"></span>loading…</span>
   </div>
+  <button id="theme-toggle" class="theme-btn" title="Toggle light / dark theme" aria-label="Toggle theme">
+    <span class="theme-icon" id="theme-icon">☀</span>
+  </button>
 </header>
 
 <nav>
@@ -592,6 +680,24 @@
 const $ = (id) => document.getElementById(id);
 
 let currentConfig = null;
+
+// ── Theme ────────────────────────────────────────────────────
+// Default = light. Persist user choice in localStorage.
+function applyTheme(theme) {
+  document.documentElement.setAttribute("data-theme", theme);
+  const icon = document.getElementById("theme-icon");
+  if (icon) icon.textContent = theme === "dark" ? "☾" : "☀";
+  try { localStorage.setItem("chats-sandbox-theme", theme); } catch { /* private mode */ }
+}
+(function initTheme() {
+  let saved = "light";
+  try { saved = localStorage.getItem("chats-sandbox-theme") || "light"; } catch { /* */ }
+  applyTheme(saved === "dark" ? "dark" : "light");
+})();
+document.getElementById("theme-toggle").addEventListener("click", () => {
+  const cur = document.documentElement.getAttribute("data-theme") === "dark" ? "dark" : "light";
+  applyTheme(cur === "dark" ? "light" : "dark");
+});
 
 // ── Tabs ─────────────────────────────────────────────────────
 function switchTab(name) {
