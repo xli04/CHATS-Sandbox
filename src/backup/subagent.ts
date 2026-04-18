@@ -46,14 +46,6 @@ function isClaudeCliAvailable(): boolean {
   }
 }
 
-function cleanupScratchDir(p: string): void {
-  try {
-    fs.rmSync(p, { recursive: true, force: true });
-  } catch {
-    // best-effort
-  }
-}
-
 /**
  * Write a status message directly to the user's controlling terminal.
  *
@@ -306,6 +298,15 @@ export function runSubagentBackup(
     // ~/.claude/projects/<cwd>/ that shows up in the user's /resume
     // picker and clutters their session history.
     "--no-session-persistence",
+    // Load ONLY user-level settings (~/.claude/settings.json). Skip
+    // project-level settings at the cwd's .claude/settings.json, which
+    // contain our own `Write(.chats-sandbox/**)` deny rules (added by
+    // `chats-sandbox install` to keep Claude out of our internal state).
+    // If the subagent inherits those rules it self-refuses backup writes
+    // to .chats-sandbox/**, returning the recovery-command blueprint
+    // without actually executing it (no external-shadow/ ever created).
+    // User-level settings remain loaded so auth + user prefs work.
+    "--setting-sources", "user",
   ];
   if (permissionMode === "bypassPermissions") {
     // Authoritative: actually skip all permission prompts. Required because
@@ -330,23 +331,6 @@ export function runSubagentBackup(
     `(${ctx.tool_name}${cmdPreview ? `: ${cmdPreview.slice(0, 60)}` : ""})`
   );
 
-  // Run the subagent from a scratch directory so `claude -p` does NOT
-  // pick up the project's .claude/settings.json. If we inherit those
-  // settings, our own `Write(.chats-sandbox/**)` deny rule makes the
-  // subagent politely refuse to create backup artifacts (the model
-  // self-refuses — it sees writes to that path are forbidden and
-  // won't use Bash to work around it either). The prompt we built
-  // already uses absolute paths for every command, so the subagent
-  // doesn't need to be rooted at the real project.
-  // Note: auth tokens live in ~/.claude/ (user home), not in the
-  // project's .claude/, so login is unaffected.
-  const osTmp = require("node:os").tmpdir();
-  const scratchDir = path.join(
-    osTmp,
-    `chats-sandbox-subagent-${process.pid}-${Date.now()}`
-  );
-  fs.mkdirSync(scratchDir, { recursive: true });
-
   const startTime = Date.now();
   let stdout = "";
   let stderr = "";
@@ -356,7 +340,6 @@ export function runSubagentBackup(
     stdout = execFileSync("claude", args, {
       encoding: "utf-8",
       timeout: timeoutMs,
-      cwd: scratchDir,
       env: {
         ...process.env,
         // Recursion guard: the subagent's own tool calls will fire our
@@ -391,10 +374,6 @@ export function runSubagentBackup(
       tellUser(`[CHATS-Sandbox] Subagent failed after ${elapsedSec}s: ${msg.slice(0, 120)}`);
     }
     return null;
-  } finally {
-    // Always clean up the scratch cwd — `finally` runs even when the
-    // try/catch returns early.
-    cleanupScratchDir(scratchDir);
   }
 
   const parsed = parseSubagentOutput(stdout);
@@ -474,6 +453,10 @@ export function invokeRestoreSubagent(
     prompt,
     "--output-format", "json",
     "--no-session-persistence",
+    // Skip project-level settings — see runSubagentBackup for the full
+    // rationale (our own deny rules would cause the subagent to
+    // self-refuse).
+    "--setting-sources", "user",
   ];
   if (permissionMode === "bypassPermissions") {
     args.push("--dangerously-skip-permissions");
@@ -484,13 +467,6 @@ export function invokeRestoreSubagent(
     args.push("--model", config.subagentModel);
   }
 
-  const osTmp = require("node:os").tmpdir();
-  const scratchDir = path.join(
-    osTmp,
-    `chats-sandbox-restore-${process.pid}-${Date.now()}`,
-  );
-  fs.mkdirSync(scratchDir, { recursive: true });
-
   tellUser(
     `[CHATS-Sandbox] Live-restore: invoking ${config.subagentModel} subagent to reverse remote/dynamic state...`,
   );
@@ -500,7 +476,6 @@ export function invokeRestoreSubagent(
     const stdout: string = execFileSync("claude", args, {
       encoding: "utf-8",
       timeout: timeoutMs,
-      cwd: scratchDir,
       env: { ...process.env, CHATS_SANDBOX_NO_HOOK: "1" },
       stdio: ["pipe", "pipe", "pipe"],
       maxBuffer: 4 * 1024 * 1024,
@@ -521,11 +496,5 @@ export function invokeRestoreSubagent(
   } catch (e: unknown) {
     const msg = e instanceof Error ? e.message : String(e);
     return { success: false, detail: msg.slice(0, 500) };
-  } finally {
-    try {
-      fs.rmSync(scratchDir, { recursive: true, force: true });
-    } catch {
-      // best-effort
-    }
   }
 }
