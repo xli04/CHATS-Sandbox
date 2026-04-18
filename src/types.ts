@@ -161,6 +161,11 @@ export interface BackupArtifact {
   originalAction?: string;
   /** Full git commit hash (for git_snapshot strategy — references shared shadow repo) */
   commitHash?: string;
+  /** Subagent-only: if true, the recorded subagentCommands are NOT a
+   *  reliable inverse (e.g. remote state that drifts). On restore, the
+   *  plugin will spawn a fresh subagent to reason about current state
+   *  rather than executing the canned commands. */
+  liveRestore?: boolean;
 }
 
 // ── Effect manifest entry ────────────────────────────────────────────

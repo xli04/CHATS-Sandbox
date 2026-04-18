@@ -31,6 +31,10 @@ interface SubagentResponse {
   recovery_commands: string[];
   /** Optional: paths to backup artifact files the subagent wrote */
   artifact_paths?: string[];
+  /** True when the canned recovery_commands can't be trusted later
+   *  (remote/dynamic state) and restore should spawn a fresh subagent
+   *  instead of replaying the commands. */
+  live_restore?: boolean;
 }
 
 function isClaudeCliAvailable(): boolean {
@@ -141,12 +145,13 @@ Do your best to capture some recoverable state in ${actionDir}, or document clea
 
 After running your backup commands, output a single-line JSON object (no markdown fences, no commentary):
 
-{"description":"...","backup_commands":["cmd1","cmd2"],"recovery_commands":["cmd1","cmd2"],"artifact_paths":["path1"]}
+{"description":"...","backup_commands":["cmd1","cmd2"],"recovery_commands":["cmd1","cmd2"],"artifact_paths":["path1"],"live_restore":false}
 
 - description: short human-readable summary
 - backup_commands: the commands you ACTUALLY RAN to create the backup
 - recovery_commands: commands that would reverse the upcoming action (these will be executed verbatim by chats-sandbox restore)
 - artifact_paths: files you created inside the backup storage directory
+- live_restore: true ONLY when the recovery_commands can't be trusted later because the target state is remote or dynamic — e.g. the upcoming action does a git push (remote history moves), a curl POST/PUT/DELETE to an external API, a docker push to a registry, a kubectl apply to a cluster, a production DB write, etc. In those cases chats-sandbox will spawn a fresh restore subagent instead of replaying your commands blindly. For local file writes (Category A), pip/npm installs (Category C), env mutations (Category D), set live_restore=false.
 
 CRITICAL:
 - DO NOT execute the upcoming action. You only create the backup.
@@ -179,6 +184,7 @@ function parseSubagentOutput(raw: string): SubagentResponse | null {
         artifact_paths: Array.isArray(c.artifact_paths)
           ? (c.artifact_paths as unknown[]).map(String)
           : undefined,
+        live_restore: typeof c.live_restore === "boolean" ? c.live_restore : undefined,
       };
     }
     return null;
@@ -432,6 +438,94 @@ export function runSubagentBackup(
     strategy: "subagent",
     artifactPath: artifactFile,
     subagentCommands: parsed.recovery_commands,
+    liveRestore: parsed.live_restore ?? false,
     originalAction: `${ctx.tool_name}(${String(ctx.tool_input.command ?? JSON.stringify(ctx.tool_input)).slice(0, 200)})`,
   };
+}
+
+/**
+ * Spawn a fresh `claude -p` subagent to perform a restore. Used when
+ * an artifact was tagged `liveRestore: true` by the backup subagent
+ * (i.e. the canned recovery_commands can't be trusted — remote state,
+ * dynamic systems). The subagent reads live state and runs whatever
+ * commands it decides are needed.
+ *
+ * Returns { success, detail }. `detail` contains either the result
+ * text (on success) or the error message (on failure).
+ *
+ * Mirrors the subprocess setup of runSubagentBackup:
+ *   - scratch cwd to escape project .claude/settings.json deny rules
+ *   - CHATS_SANDBOX_NO_HOOK=1 to prevent hook recursion
+ *   - --dangerously-skip-permissions for the bypass path
+ *   - timeout from config.subagentTimeoutSeconds
+ */
+export function invokeRestoreSubagent(
+  prompt: string,
+  config: SandboxConfig,
+): { success: boolean; detail: string } {
+  if (!isClaudeCliAvailable()) {
+    return { success: false, detail: "claude CLI not found in PATH" };
+  }
+
+  const timeoutMs = Math.max(10_000, config.subagentTimeoutSeconds * 1000);
+  const permissionMode = config.subagentPermissionMode ?? "bypassPermissions";
+  const args = [
+    "-p",
+    prompt,
+    "--output-format", "json",
+    "--no-session-persistence",
+  ];
+  if (permissionMode === "bypassPermissions") {
+    args.push("--dangerously-skip-permissions");
+  } else {
+    args.push("--permission-mode", permissionMode);
+  }
+  if (config.subagentModel && config.subagentModel !== "inherit") {
+    args.push("--model", config.subagentModel);
+  }
+
+  const osTmp = require("node:os").tmpdir();
+  const scratchDir = path.join(
+    osTmp,
+    `chats-sandbox-restore-${process.pid}-${Date.now()}`,
+  );
+  fs.mkdirSync(scratchDir, { recursive: true });
+
+  tellUser(
+    `[CHATS-Sandbox] Live-restore: invoking ${config.subagentModel} subagent to reverse remote/dynamic state...`,
+  );
+
+  try {
+    const { execFileSync } = require("node:child_process");
+    const stdout: string = execFileSync("claude", args, {
+      encoding: "utf-8",
+      timeout: timeoutMs,
+      cwd: scratchDir,
+      env: { ...process.env, CHATS_SANDBOX_NO_HOOK: "1" },
+      stdio: ["pipe", "pipe", "pipe"],
+      maxBuffer: 4 * 1024 * 1024,
+    });
+
+    // Extract the result text from the claude -p JSON wrapper for display.
+    let detail = stdout.slice(0, 500);
+    try {
+      const wrapper = JSON.parse(stdout);
+      if (wrapper && typeof wrapper === "object") {
+        const result = (wrapper as Record<string, unknown>).result;
+        if (typeof result === "string") detail = result.slice(0, 500);
+      }
+    } catch {
+      // raw stdout is fine
+    }
+    return { success: true, detail };
+  } catch (e: unknown) {
+    const msg = e instanceof Error ? e.message : String(e);
+    return { success: false, detail: msg.slice(0, 500) };
+  } finally {
+    try {
+      fs.rmSync(scratchDir, { recursive: true, force: true });
+    } catch {
+      // best-effort
+    }
+  }
 }
