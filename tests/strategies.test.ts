@@ -146,6 +146,35 @@ describe("backup strategies", () => {
     assert.ok(dirs.includes(fresh), `fresh folder ${fresh} should survive, got ${JSON.stringify(dirs)}`);
   });
 
+  it("seq numbers grow monotonically across pruning (no collisions)", () => {
+    const config = tmpConfig();
+    config.maxActions = 3;
+
+    // 5 backups → should create action_001 .. action_005 in sequence.
+    // After each, pruning keeps only the 3 newest, but seq assignment
+    // must use (max existing seq) + 1, NOT (length + 1), or we'd reuse
+    // numbers that already survived on disk.
+    for (let i = 0; i < 5; i++) {
+      resetAction();
+      runBackup(makeCtx("Bash", { command: `pip install pkg-${i}` }), config);
+    }
+
+    const backupRoot = path.resolve(config.backupDir);
+    const dirs = fs.readdirSync(backupRoot).filter((d: string) => d.startsWith("action_")).sort();
+
+    // Get the seq number from each folder name: action_NNN_<ts>
+    const seqs = dirs.map((d) => d.split("_")[1]);
+    assert.equal(seqs.length, 3, `expected 3 folders, got ${seqs.length}: ${JSON.stringify(dirs)}`);
+
+    // No duplicates
+    const unique = new Set(seqs);
+    assert.equal(unique.size, seqs.length, `duplicate seqs found: ${JSON.stringify(seqs)}`);
+
+    // Should be the newest three: 003, 004, 005
+    assert.deepEqual([...unique].sort(), ["003", "004", "005"],
+      `expected [003,004,005], got ${JSON.stringify([...unique].sort())}`);
+  });
+
   it("retention: maxTotalSizeMB prunes oldest until under cap", () => {
     const config = tmpConfig();
     config.maxActions = 0;

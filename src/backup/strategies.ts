@@ -42,7 +42,18 @@ function preparePendingAction(config: SandboxConfig): string {
 
   const backupRoot = path.resolve(config.backupDir);
   const existing = listActionDirs(backupRoot);
-  const seq = String(existing.length + 1).padStart(3, "0");
+  // Use (max existing seq) + 1 rather than existing.length + 1 so that
+  // after pruning we don't reuse a seq number that still exists on disk
+  // (e.g. 5 actions pruned to 3 would have picked seq=4 while an action_004
+  // already survived). Seq is display-only and it's fine for it to skip
+  // numbers after pruning — what matters is uniqueness and monotonic
+  // growth so users can reason about "newer" vs "older".
+  let maxSeq = 0;
+  for (const d of existing) {
+    const n = parseInt(d.split("_")[1] ?? "0", 10);
+    if (!isNaN(n) && n > maxSeq) maxSeq = n;
+  }
+  const seq = String(maxSeq + 1).padStart(3, "0");
   const ts = new Date().toISOString().replace(/[-:T]/g, "").slice(0, 14);
   _pendingActionName = `action_${seq}_${ts}`;
   return _pendingActionName;
