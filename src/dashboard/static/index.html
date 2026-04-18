@@ -447,6 +447,34 @@
     padding-top: 6px;
     border-top: 1px solid var(--border);
   }
+  .action-subagent {
+    font-size: 12.5px;
+    color: var(--text);
+    margin: 6px 0;
+    padding: 7px 10px;
+    background: var(--badge-sub-bg);
+    border-left: 3px solid var(--warn);
+    border-radius: 0 6px 6px 0;
+    line-height: 1.45;
+  }
+  .action-subagent-label {
+    font-family: "JetBrains Mono", "SF Mono", Menlo, Consolas, monospace;
+    color: var(--warn);
+    font-weight: 600;
+    margin-right: 4px;
+  }
+  .action-subagent-meta {
+    font-family: "JetBrains Mono", "SF Mono", Menlo, Consolas, monospace;
+    color: var(--muted);
+    font-size: 11px;
+  }
+  .action-subagent-live {
+    color: var(--danger);
+    background: rgba(220, 38, 38, 0.12);
+    padding: 1px 6px;
+    border-radius: 3px;
+    font-weight: 500;
+  }
   .action-meta-label {
     color: var(--text-dim);
     opacity: 0.7;
@@ -795,12 +823,30 @@ function renderAction(a) {
     el.appendChild(s);
   }
 
+  // Subagent summary — shown BEFORE the workspace git_snapshot details,
+  // because when a subagent fired it's usually the more interesting backup
+  // (the workspace snapshot is often just the baseline tree, not the real
+  // change, which lives in the external project).
+  if (a.subagent) {
+    const s = document.createElement("div");
+    s.className = "action-subagent";
+    const parts = [`<span class="action-subagent-label">subagent →</span> ${escapeHtml(a.subagent.description || "out-of-workspace backup")}`];
+    const meta = [];
+    if (a.subagent.externalShadowFileCount > 0) meta.push(`${a.subagent.externalShadowFileCount} files snapshotted`);
+    if (a.subagent.recoveryCommandCount > 0) meta.push(`${a.subagent.recoveryCommandCount} recovery cmds`);
+    if (a.subagent.liveRestore) meta.push(`<span class="action-subagent-live">live-restore</span>`);
+    if (meta.length) parts.push(`<span class="action-subagent-meta">${meta.join(" · ")}</span>`);
+    s.innerHTML = parts.join("<br>");
+    el.appendChild(s);
+  }
+
   if (a.files && a.files.length) {
     const f = document.createElement("div");
     f.className = "action-files";
+    const labelText = a.subagent ? "workspace files" : "files";
     const shown = a.files.slice(0, 5);
     const extra = a.files.length - shown.length;
-    f.innerHTML = `<span class="action-files-label">files</span>` +
+    f.innerHTML = `<span class="action-files-label">${labelText}</span>` +
       escapeHtml(shown.join(", ")) +
       (extra > 0 ? ` <span class="action-files-label">+${extra} more</span>` : "");
     el.appendChild(f);
@@ -809,7 +855,9 @@ function renderAction(a) {
   if (a.stats) {
     const s = document.createElement("div");
     s.className = "action-stats";
-    s.textContent = a.stats;
+    // When a subagent also fired, prefix the workspace stats so it's
+    // clear this refers to the project snapshot (not the external one).
+    s.textContent = a.subagent ? `workspace: ${a.stats}` : a.stats;
     el.appendChild(s);
   }
 

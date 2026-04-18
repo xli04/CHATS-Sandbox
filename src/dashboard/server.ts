@@ -33,6 +33,18 @@ interface ActionSummary {
   originalAction: string;
   sizeBytes: number;
   ageMs: number;
+  /** When a `subagent` artifact is present, summarize what it did.
+   *  Undefined when no subagent fired for this action. */
+  subagent?: {
+    description: string;
+    /** Number of tracked files in the external-shadow/ snapshot. */
+    externalShadowFileCount: number;
+    /** How many recovery commands were recorded. */
+    recoveryCommandCount: number;
+    /** true when the backup subagent flagged this as requiring a
+     *  live-restore subagent (e.g. remote/dynamic state). */
+    liveRestore: boolean;
+  };
 }
 
 const DEFAULT_PORT = 7321;
@@ -157,6 +169,39 @@ function buildActionSummary(
   const { dirSize } = require("../backup/strategies.js");
   const sizeBytes = dirSize(dir);
 
+  // If a subagent artifact exists, build a separate summary — the
+  // `files` / `stats` above describe only the workspace git_snapshot,
+  // which is confusing when the "real" backup happened out-of-workspace.
+  let subagent: ActionSummary["subagent"] | undefined;
+  const subagentArtifact = artifacts.find((a) => a.strategy === "subagent");
+  if (subagentArtifact) {
+    const shadowDir = path.join(dir, "external-shadow");
+    let externalShadowFileCount = 0;
+    if (fs.existsSync(shadowDir)) {
+      try {
+        const env = { ...process.env, GIT_DIR: shadowDir };
+        const opts = { encoding: "utf-8" as const, timeout: 10_000, env, stdio: "pipe" as const };
+        const out = execSync("git ls-tree -r --name-only HEAD", opts).trim();
+        externalShadowFileCount = out ? out.split("\n").filter((f) => f.length > 0).length : 0;
+      } catch {
+        // fall back to object-file count as a loose proxy
+        try {
+          externalShadowFileCount = fs.readdirSync(path.join(shadowDir, "objects"))
+            .filter((d) => /^[0-9a-f]{2}$/.test(d))
+            .reduce((sum, d) => sum + fs.readdirSync(path.join(shadowDir, "objects", d)).length, 0);
+        } catch { /* */ }
+      }
+    }
+    subagent = {
+      description: String(subagentArtifact.description ?? "").replace(/^Subagent backup:\s*/, ""),
+      externalShadowFileCount,
+      recoveryCommandCount: Array.isArray(subagentArtifact.subagentCommands)
+        ? (subagentArtifact.subagentCommands as unknown[]).length
+        : 0,
+      liveRestore: Boolean(subagentArtifact.liveRestore),
+    };
+  }
+
   // Age, parsed from the YYYYMMDDHHMMSS suffix in the folder name.
   let ageMs = 0;
   if (tsRaw.length >= 14) {
@@ -183,6 +228,7 @@ function buildActionSummary(
     originalAction,
     sizeBytes,
     ageMs,
+    subagent,
   };
 }
 
