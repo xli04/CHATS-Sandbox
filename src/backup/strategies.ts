@@ -456,7 +456,31 @@ function gitSnapshotBackup(
     }
 
     if (!hasChanges) {
-      return null; // No change → no snapshot (this is the fix for read-only noise)
+      // Workspace hasn't drifted since the last snapshot. But the
+      // UPCOMING tool call may still be a write, so we need an artifact
+      // that records "this action's pre-state" — otherwise the action
+      // folder never gets materialized and the action is silently
+      // untracked (no way to restore). Return a pointer artifact that
+      // references the current HEAD; all the pre-state this action
+      // would need is already stored there from the previous action.
+      let head = "";
+      try {
+        head = execSync("git rev-parse HEAD", { ...execOpts, stdio: "pipe" }).trim();
+      } catch {
+        // No HEAD yet AND no changes → truly empty repo, nothing to snapshot.
+        return null;
+      }
+      if (!head) return null;
+      return {
+        id: head.slice(0, 8),
+        timestamp: new Date().toISOString(),
+        trigger: "rule",
+        toolName: ctx.tool_name,
+        description: `git add -A snapshot (pointer → ${head.slice(0, 8)}, no workspace drift since previous action)`,
+        strategy: "git_snapshot",
+        artifactPath: shadowDir,
+        commitHash: head,
+      };
     }
 
     const reason = `before ${ctx.tool_name}`;
@@ -588,10 +612,21 @@ export interface BackupResult {
  * Action folders are created LAZILY — only if a real artifact is produced.
  * Read-only actions produce no artifact → no folder → no noise.
  */
+/** Tools that never modify state — they don't need backup at all. */
+const READ_ONLY_TOOLS = new Set(["Read", "Glob", "Grep", "WebFetch", "WebSearch", "TodoWrite"]);
+
 export function runBackup(
   ctx: HookContext,
   config: SandboxConfig
 ): BackupResult {
+  // Read-only tools (Read/Glob/Grep/etc.) can't mutate anything, so
+  // there's nothing to back up. Short-circuit cleanly so they don't
+  // pay the git-ls-tree cost and don't create folders when nothing
+  // actually happened.
+  if (READ_ONLY_TOOLS.has(ctx.tool_name)) {
+    return { artifacts: [], needsSubagent: false };
+  }
+
   // Reserve a pending action name but don't create the folder yet.
   preparePendingAction(config);
   const result: BackupResult = { artifacts: [], needsSubagent: false };
