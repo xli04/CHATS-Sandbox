@@ -257,15 +257,16 @@ export function runSubagentBackup(
 
   // Invoke `claude -p` with:
   //   --output-format json       : structured output with a `result` field
-  //   --permission-mode <mode>   : controls what tool calls the subagent
-  //                                can run without prompting. Default is
-  //                                "bypassPermissions" — full freedom for
-  //                                git push, curl, ssh, etc. Configurable
-  //                                to "acceptEdits" for a smaller blast
-  //                                radius (filesystem ops only).
-  //                                Without any permission mode, claude -p
-  //                                denies all Bash tool use in headless
-  //                                mode and fails with "permission_denials".
+  //   --permission-mode <mode> or --dangerously-skip-permissions:
+  //     Controls tool-call gating in the subagent. In headless `claude -p`,
+  //     some CLI versions silently ignore `--permission-mode bypassPermissions`
+  //     and still prompt for Bash — which means our subagent asks the user
+  //     for permission and fails. `--dangerously-skip-permissions` is the
+  //     authoritative override that actually skips the permission prompt
+  //     in every version, so when the user selects "bypassPermissions" we
+  //     pass that flag instead. For "acceptEdits" we still use
+  //     --permission-mode (it's the narrower, documented path and works
+  //     reliably for the filesystem-only subset).
   //   --no-session-persistence   : don't save the subagent's transcript
   //                                to ~/.claude/projects/<cwd>/<uuid>.jsonl.
   //                                Prevents pollution of the user's
@@ -286,13 +287,20 @@ export function runSubagentBackup(
     "-p",
     prompt,
     "--output-format", "json",
-    "--permission-mode", permissionMode,
     // Don't persist the subagent's session to disk. Without this, every
     // sandbox-triggered backup creates a .jsonl file in
     // ~/.claude/projects/<cwd>/ that shows up in the user's /resume
     // picker and clutters their session history.
     "--no-session-persistence",
   ];
+  if (permissionMode === "bypassPermissions") {
+    // Authoritative: actually skip all permission prompts. Required because
+    // `--permission-mode bypassPermissions` is silently downgraded on some
+    // `claude -p` versions and ends up denying Bash anyway.
+    args.push("--dangerously-skip-permissions");
+  } else {
+    args.push("--permission-mode", permissionMode);
+  }
   if (config.subagentModel && config.subagentModel !== "inherit") {
     args.push("--model", config.subagentModel);
   }
@@ -360,10 +368,12 @@ export function runSubagentBackup(
     // Detect permission denial (subagent couldn't run bash) and warn clearly
     if (stdout.includes("permission_denials") || stdout.includes("permission denied") ||
         stdout.includes("approval is needed") || stdout.includes("cannot proceed")) {
-      logDebug("DIAGNOSIS: subagent was denied tool permissions. Use --permission-mode acceptEdits.");
+      logDebug("DIAGNOSIS: subagent was denied tool permissions despite bypass flag. " +
+        "This usually means a stale `claude` CLI version — upgrade and retry.");
       tellUser(
         "[CHATS-Sandbox] Subagent could not run backup commands (tool permission denied). " +
-        "Try: chats-sandbox config set subagentPermissionMode bypassPermissions"
+        "Upgrade the `claude` CLI (npm i -g @anthropic-ai/claude-code) or set " +
+        "subagentPermissionMode=acceptEdits for filesystem-only backups."
       );
     } else {
       tellUser("[CHATS-Sandbox] Subagent returned unparseable output — backup skipped.");
