@@ -84,7 +84,7 @@ function materializeActionDir(config: SandboxConfig): string {
     // best-effort
   }
 
-  pruneActions(backupRoot, config.maxActions);
+  pruneActions(backupRoot, config);
 
   return dirPath;
 }
@@ -107,17 +107,99 @@ function listActionDirs(backupRoot: string): string[] {
     .sort();
 }
 
-function pruneActions(backupRoot: string, max: number): void {
-  const dirs = listActionDirs(backupRoot);
-  while (dirs.length > max) {
-    const oldest = dirs.shift()!;
-    const fullPath = path.join(backupRoot, oldest);
+/**
+ * Prune old action folders according to the three retention knobs:
+ *   1. maxAgeHours    — drop anything older than this (if > 0)
+ *   2. maxActions     — keep newest N folders (if > 0)
+ *   3. maxTotalSizeMB — drop oldest until total size ≤ cap (if > 0)
+ *
+ * A knob set to 0 is disabled. Folders are listed chronologically
+ * (oldest first) because names start with `action_NNN_<timestamp>`.
+ */
+function pruneActions(backupRoot: string, config: SandboxConfig): void {
+  let dirs = listActionDirs(backupRoot);
+
+  // 1. Age-based pruning
+  if (config.maxAgeHours > 0) {
+    const cutoffMs = Date.now() - config.maxAgeHours * 3600 * 1000;
+    const kept: string[] = [];
+    for (const d of dirs) {
+      const ts = parseActionTimestamp(d);
+      if (ts !== null && ts < cutoffMs) {
+        removeDir(path.join(backupRoot, d));
+      } else {
+        kept.push(d);
+      }
+    }
+    dirs = kept;
+  }
+
+  // 2. Count-based pruning
+  if (config.maxActions > 0) {
+    while (dirs.length > config.maxActions) {
+      const oldest = dirs.shift()!;
+      removeDir(path.join(backupRoot, oldest));
+    }
+  }
+
+  // 3. Size-based pruning (most expensive — do it last, and only on what survived)
+  if (config.maxTotalSizeMB > 0) {
+    const capBytes = config.maxTotalSizeMB * 1024 * 1024;
+    const sizes = dirs.map((d) => ({ name: d, size: dirSize(path.join(backupRoot, d)) }));
+    let total = sizes.reduce((sum, s) => sum + s.size, 0);
+    while (total > capBytes && sizes.length > 0) {
+      const oldest = sizes.shift()!;
+      removeDir(path.join(backupRoot, oldest.name));
+      total -= oldest.size;
+    }
+  }
+}
+
+function removeDir(p: string): void {
+  try {
+    fs.rmSync(p, { recursive: true, force: true });
+  } catch {
+    // best-effort
+  }
+}
+
+/** Parse the YYYYMMDDHHMMSS timestamp out of an `action_NNN_<ts>` folder name. */
+function parseActionTimestamp(dirName: string): number | null {
+  const parts = dirName.split("_");
+  const ts = parts.slice(2).join("_");
+  if (ts.length < 14) return null;
+  // ts is like 20260418103022 (local time). Parse as UTC-ish; the exact
+  // zone doesn't matter for relative age checks.
+  const y = parseInt(ts.slice(0, 4), 10);
+  const mo = parseInt(ts.slice(4, 6), 10) - 1;
+  const d = parseInt(ts.slice(6, 8), 10);
+  const h = parseInt(ts.slice(8, 10), 10);
+  const mi = parseInt(ts.slice(10, 12), 10);
+  const s = parseInt(ts.slice(12, 14), 10);
+  if ([y, mo, d, h, mi, s].some(Number.isNaN)) return null;
+  return new Date(y, mo, d, h, mi, s).getTime();
+}
+
+/** Recursively sum file sizes under a directory. Exported for the
+ *  dashboard and CLI status reporting. */
+export function dirSize(p: string): number {
+  let total = 0;
+  const walk = (q: string): void => {
     try {
-      fs.rmSync(fullPath, { recursive: true, force: true });
+      const entries = fs.readdirSync(q, { withFileTypes: true });
+      for (const e of entries) {
+        const full = path.join(q, e.name);
+        if (e.isDirectory()) walk(full);
+        else if (e.isFile()) {
+          try { total += fs.statSync(full).size; } catch { /* */ }
+        }
+      }
     } catch {
       // best-effort
     }
-  }
+  };
+  walk(p);
+  return total;
 }
 
 // ── Shared shadow git repo ───────────────────────────────────────────

@@ -274,8 +274,14 @@ function setConfigValue(
   // Type coercion
   if (k === "enabled" || k === "effectManifest" || k === "verbose" || k === "subagentEnabled") {
     (config as unknown as Record<string, unknown>)[k] = value === "true";
-  } else if (k === "maxActions" || k === "subagentTimeoutSeconds") {
-    (config as unknown as Record<string, unknown>)[k] = parseInt(value, 10);
+  } else if (k === "maxActions" || k === "subagentTimeoutSeconds" ||
+             k === "maxTotalSizeMB" || k === "maxAgeHours") {
+    const n = parseInt(value, 10);
+    if (isNaN(n) || n < 0) {
+      console.error(`Invalid ${k}: ${value}. Must be a non-negative integer (0 = disabled).`);
+      process.exit(1);
+    }
+    (config as unknown as Record<string, unknown>)[k] = n;
   } else if (k === "backupMode") {
     if (!["always", "smart", "off"].includes(value)) {
       console.error(`Invalid backupMode: ${value}. Use: always | smart | off`);
@@ -313,7 +319,14 @@ function showStatus(projectRoot: string): void {
   console.log("CHATS-Sandbox Status:");
   console.log(`  Enabled:       ${config.enabled}`);
   console.log(`  Backup mode:   ${config.backupMode}`);
-  console.log(`  Actions:  ${actions.length} / ${config.maxActions} folders`);
+  const maxActionsStr = config.maxActions > 0 ? `${config.maxActions}` : "∞";
+  console.log(`  Actions:       ${actions.length} / ${maxActionsStr} folders`);
+  // Retention summary — show only the enabled knobs
+  const retention: string[] = [];
+  if (config.maxActions > 0) retention.push(`count=${config.maxActions}`);
+  if (config.maxTotalSizeMB > 0) retention.push(`size=${config.maxTotalSizeMB}MB`);
+  if (config.maxAgeHours > 0) retention.push(`age=${config.maxAgeHours}h`);
+  console.log(`  Retention:     ${retention.length ? retention.join(", ") : "unlimited (no caps)"}`);
   console.log(`  Artifacts:     ${manifest.length} total`);
   console.log(`  Effect log:    ${config.effectManifest ? config.effectLogPath : "disabled"}`);
   console.log(`  Subagent:      ${config.subagentEnabled ? `enabled (${config.subagentModel}, ${config.subagentPermissionMode ?? "bypassPermissions"})` : "disabled"}`);

@@ -31,6 +31,8 @@ interface ActionSummary {
   stats: string;
   toolName: string;
   originalAction: string;
+  sizeBytes: number;
+  ageMs: number;
 }
 
 const DEFAULT_PORT = 7321;
@@ -151,6 +153,23 @@ function buildActionSummary(
     ? artifacts[0].timestamp as string
     : new Date().toISOString();
 
+  // Size of the action folder (excludes the shared shadow repo).
+  const { dirSize } = require("../backup/strategies.js");
+  const sizeBytes = dirSize(dir);
+
+  // Age, parsed from the YYYYMMDDHHMMSS suffix in the folder name.
+  let ageMs = 0;
+  if (tsRaw.length >= 14) {
+    const y = parseInt(tsRaw.slice(0, 4), 10);
+    const mo = parseInt(tsRaw.slice(4, 6), 10) - 1;
+    const d = parseInt(tsRaw.slice(6, 8), 10);
+    const h = parseInt(tsRaw.slice(8, 10), 10);
+    const mi = parseInt(tsRaw.slice(10, 12), 10);
+    const s = parseInt(tsRaw.slice(12, 14), 10);
+    const ms = new Date(y, mo, d, h, mi, s).getTime();
+    if (!isNaN(ms)) ageMs = Math.max(0, Date.now() - ms);
+  }
+
   return {
     name: dirName,
     seq,
@@ -162,6 +181,8 @@ function buildActionSummary(
     stats: stat,
     toolName,
     originalAction,
+    sizeBytes,
+    ageMs,
   };
 }
 
@@ -210,6 +231,15 @@ function handlePostConfig(
       jsonResponse(res, 400, { error: "invalid backupMode" });
       return;
     }
+    for (const k of ["maxActions", "maxTotalSizeMB", "maxAgeHours", "subagentTimeoutSeconds"] as const) {
+      if (updates[k] !== undefined) {
+        const v = updates[k];
+        if (typeof v !== "number" || !Number.isFinite(v) || v < 0) {
+          jsonResponse(res, 400, { error: `invalid ${k}: must be a non-negative number` });
+          return;
+        }
+      }
+    }
     if (updates.subagentModel && !["haiku", "sonnet", "opus", "inherit"].includes(updates.subagentModel)) {
       jsonResponse(res, 400, { error: "invalid subagentModel" });
       return;
@@ -235,16 +265,23 @@ function handleGetStatus(
 ): void {
   const backupRoot = path.resolve(config.backupDir);
   let actionCount = 0;
+  let totalBytes = 0;
   if (fs.existsSync(backupRoot)) {
-    actionCount = fs.readdirSync(backupRoot)
-      .filter((d: string) => d.startsWith("action_"))
-      .length;
+    const dirs = fs.readdirSync(backupRoot).filter((d: string) => d.startsWith("action_"));
+    actionCount = dirs.length;
+      const { dirSize } = require("../backup/strategies.js");
+    for (const d of dirs) {
+      totalBytes += dirSize(path.join(backupRoot, d));
+    }
   }
   jsonResponse(res, 200, {
     enabled: config.enabled,
     backupMode: config.backupMode,
     actionCount,
     maxActions: config.maxActions,
+    maxTotalSizeMB: config.maxTotalSizeMB,
+    maxAgeHours: config.maxAgeHours,
+    totalSizeBytes: totalBytes,
     subagentEnabled: config.subagentEnabled,
     subagentModel: config.subagentModel,
     subagentPermissionMode: config.subagentPermissionMode,

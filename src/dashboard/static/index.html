@@ -439,6 +439,19 @@
     color: var(--success);
     margin-top: 4px;
   }
+  .action-meta {
+    font-family: "JetBrains Mono", "SF Mono", Menlo, Consolas, monospace;
+    font-size: 11px;
+    color: var(--muted);
+    margin-top: 8px;
+    padding-top: 6px;
+    border-top: 1px solid var(--border);
+  }
+  .action-meta-label {
+    color: var(--text-dim);
+    opacity: 0.7;
+    margin-right: 2px;
+  }
 
   .empty {
     text-align: center;
@@ -800,7 +813,36 @@ function renderAction(a) {
     el.appendChild(s);
   }
 
+  // Size + age (footer-ish line)
+  const meta = document.createElement("div");
+  meta.className = "action-meta";
+  const parts = [];
+  if (typeof a.sizeBytes === "number") parts.push(`<span class="action-meta-label">size</span> ${formatBytes(a.sizeBytes)}`);
+  if (typeof a.ageMs === "number" && a.ageMs > 0) parts.push(`<span class="action-meta-label">age</span> ${formatAge(a.ageMs)}`);
+  if (parts.length) {
+    meta.innerHTML = parts.join(" · ");
+    el.appendChild(meta);
+  }
+
   return el;
+}
+
+function formatBytes(n) {
+  if (n < 1024) return n + " B";
+  if (n < 1024 * 1024) return (n / 1024).toFixed(1) + " KB";
+  if (n < 1024 * 1024 * 1024) return (n / (1024 * 1024)).toFixed(2) + " MB";
+  return (n / (1024 * 1024 * 1024)).toFixed(2) + " GB";
+}
+
+function formatAge(ms) {
+  const s = Math.floor(ms / 1000);
+  if (s < 60) return s + "s ago";
+  const m = Math.floor(s / 60);
+  if (m < 60) return m + "m ago";
+  const h = Math.floor(m / 60);
+  if (h < 24) return h + "h ago";
+  const d = Math.floor(h / 24);
+  return d + "d ago";
 }
 
 // ── Config form ──────────────────────────────────────────────
@@ -810,9 +852,16 @@ const CONFIG_SECTIONS = [
     fields: [
       { key: "enabled", type: "bool", title: "Enabled", desc: "Master switch for the sandbox." },
       { key: "backupMode", type: "select", title: "Backup mode", desc: "smart = rules + precaution, always = every tool call, off = disabled.", options: ["smart", "always", "off"] },
-      { key: "maxActions", type: "number", title: "Max actions", desc: "Oldest action folders are pruned when this is exceeded." },
       { key: "verbose", type: "bool", title: "Verbose", desc: "Print extra diagnostic messages." },
       { key: "effectManifest", type: "bool", title: "Effect manifest", desc: "Write a JSONL log of every tool call's effects." },
+    ],
+  },
+  {
+    title: "Retention",
+    fields: [
+      { key: "maxActions", type: "number", title: "Max action count", desc: "Keep at most this many action folders. 0 = no count cap." },
+      { key: "maxTotalSizeMB", type: "number", title: "Max total size (MB)", desc: "Cap the combined size of action folders. Oldest pruned first. 0 = disabled." },
+      { key: "maxAgeHours", type: "number", title: "Max age (hours)", desc: "Drop action folders older than this. 0 = disabled." },
     ],
   },
   {
@@ -975,7 +1024,16 @@ async function loadStatus() {
     const parts = [];
     parts.push(`<span class="pill ${s.enabled ? "on" : "off"}"><span class="pill-dot"></span>${s.enabled ? "enabled" : "disabled"}</span>`);
     parts.push(`<span class="pill"><span class="pill-dot"></span>mode · ${escapeHtml(s.backupMode)}</span>`);
-    parts.push(`<span class="pill"><span class="pill-dot"></span>${s.actionCount}/${s.maxActions} actions</span>`);
+    const actionCap = s.maxActions > 0 ? `/${s.maxActions}` : "";
+    parts.push(`<span class="pill"><span class="pill-dot"></span>${s.actionCount}${actionCap} actions</span>`);
+    if (typeof s.totalSizeBytes === "number") {
+      const sizeTxt = formatBytes(s.totalSizeBytes) +
+        (s.maxTotalSizeMB > 0 ? ` / ${s.maxTotalSizeMB} MB` : "");
+      parts.push(`<span class="pill"><span class="pill-dot"></span>${sizeTxt}</span>`);
+    }
+    if (s.maxAgeHours > 0) {
+      parts.push(`<span class="pill"><span class="pill-dot"></span>max age · ${s.maxAgeHours}h</span>`);
+    }
     const saClass = s.subagentEnabled ? "warn" : "off";
     const saText = s.subagentEnabled ? `subagent · ${escapeHtml(s.subagentModel)}` : "subagent · off";
     parts.push(`<span class="pill ${saClass}"><span class="pill-dot"></span>${saText}</span>`);

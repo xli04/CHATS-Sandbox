@@ -52,8 +52,15 @@ export interface SandboxConfig {
   backupMode: BackupMode;
   /** Directory for backup artifacts */
   backupDir: string;
-  /** Max action folders to keep before pruning oldest */
+  /** Max action folders to keep before pruning oldest. 0 = disabled. */
   maxActions: number;
+  /** Max total size of action folders in MB. 0 = disabled. Oldest pruned
+   *  first until the total is under the cap. Does NOT include the shared
+   *  shadow git repo (that has its own lifecycle). */
+  maxTotalSizeMB: number;
+  /** Max age of action folders in hours. 0 = disabled. Folders older
+   *  than this are pruned, regardless of count. */
+  maxAgeHours: number;
   /** Enable effect manifest logging */
   effectManifest: boolean;
   /** Path to effect log */
@@ -86,6 +93,10 @@ export const DEFAULT_CONFIG: SandboxConfig = {
   backupMode: "smart",
   backupDir: ".chats-sandbox/backups",
   maxActions: 50,
+  // Size and age retention default OFF — keep maxActions as the only
+  // enabled limit unless the user opts in.
+  maxTotalSizeMB: 0,
+  maxAgeHours: 0,
   effectManifest: true,
   effectLogPath: ".chats-sandbox/effects.jsonl",
   // Deny is opt-in. Claude Code and the underlying model already refuse
