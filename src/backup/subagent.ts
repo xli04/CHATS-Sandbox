@@ -42,6 +42,14 @@ function isClaudeCliAvailable(): boolean {
   }
 }
 
+function cleanupScratchDir(p: string): void {
+  try {
+    fs.rmSync(p, { recursive: true, force: true });
+  } catch {
+    // best-effort
+  }
+}
+
 /**
  * Write a status message directly to the user's controlling terminal.
  *
@@ -316,6 +324,23 @@ export function runSubagentBackup(
     `(${ctx.tool_name}${cmdPreview ? `: ${cmdPreview.slice(0, 60)}` : ""})`
   );
 
+  // Run the subagent from a scratch directory so `claude -p` does NOT
+  // pick up the project's .claude/settings.json. If we inherit those
+  // settings, our own `Write(.chats-sandbox/**)` deny rule makes the
+  // subagent politely refuse to create backup artifacts (the model
+  // self-refuses — it sees writes to that path are forbidden and
+  // won't use Bash to work around it either). The prompt we built
+  // already uses absolute paths for every command, so the subagent
+  // doesn't need to be rooted at the real project.
+  // Note: auth tokens live in ~/.claude/ (user home), not in the
+  // project's .claude/, so login is unaffected.
+  const osTmp = require("node:os").tmpdir();
+  const scratchDir = path.join(
+    osTmp,
+    `chats-sandbox-subagent-${process.pid}-${Date.now()}`
+  );
+  fs.mkdirSync(scratchDir, { recursive: true });
+
   const startTime = Date.now();
   let stdout = "";
   let stderr = "";
@@ -325,6 +350,7 @@ export function runSubagentBackup(
     stdout = execFileSync("claude", args, {
       encoding: "utf-8",
       timeout: timeoutMs,
+      cwd: scratchDir,
       env: {
         ...process.env,
         // Recursion guard: the subagent's own tool calls will fire our
@@ -359,6 +385,10 @@ export function runSubagentBackup(
       tellUser(`[CHATS-Sandbox] Subagent failed after ${elapsedSec}s: ${msg.slice(0, 120)}`);
     }
     return null;
+  } finally {
+    // Always clean up the scratch cwd — `finally` runs even when the
+    // try/catch returns early.
+    cleanupScratchDir(scratchDir);
   }
 
   const parsed = parseSubagentOutput(stdout);
