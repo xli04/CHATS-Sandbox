@@ -285,9 +285,10 @@
   /* ── Timeline ─────────────────────────────────────────────── */
   .timeline-head {
     display: flex;
-    align-items: baseline;
+    align-items: center;
     justify-content: space-between;
     margin: 8px 0 18px;
+    gap: 12px;
   }
   .timeline-head h2 {
     margin: 0;
@@ -298,6 +299,83 @@
   .timeline-head .count {
     font-size: 12px;
     color: var(--muted);
+    margin-right: auto;
+    margin-left: 8px;
+  }
+
+  /* View-mode segmented control */
+  .view-toggle {
+    display: inline-flex;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 2px;
+    gap: 2px;
+  }
+  .view-toggle button {
+    background: transparent;
+    color: var(--muted);
+    border: none;
+    padding: 4px 12px;
+    border-radius: 6px;
+    font-size: 12px;
+    cursor: pointer;
+    font-weight: 500;
+    transition: all 0.15s;
+  }
+  .view-toggle button:hover { color: var(--text-dim); }
+  .view-toggle button.active {
+    background: var(--surface-raised);
+    color: var(--text);
+    box-shadow: 0 1px 3px var(--shadow-sm);
+  }
+
+  /* Concise-card variant — tight two-row layout */
+  .action.concise {
+    padding: 10px 14px;
+    margin-bottom: 6px;
+  }
+  .action.concise .action-c-row1 {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    font-size: 12px;
+    color: var(--muted);
+    margin-bottom: 2px;
+  }
+  .action.concise .action-seq {
+    font-size: 13px;
+  }
+  .action.concise .action-c-time {
+    font-variant-numeric: tabular-nums;
+  }
+  .action.concise .action-c-age {
+    color: var(--muted);
+  }
+  .action.concise .action-c-instruction {
+    color: var(--text);
+    font-size: 13px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-style: italic;
+    opacity: 0.88;
+  }
+  .action.concise .action-c-badges {
+    margin-left: auto;
+    display: flex;
+    gap: 4px;
+    flex-wrap: nowrap;
+  }
+  .action.concise .strategy-badge {
+    font-size: 9.5px;
+    padding: 1px 6px;
+  }
+  .action.concise .action-c-tool {
+    font-family: "JetBrains Mono", "SF Mono", Menlo, Consolas, monospace;
+    font-size: 11px;
+    color: var(--warn);
+    font-weight: 500;
   }
 
   .timeline {
@@ -696,6 +774,10 @@
     <div class="timeline-head">
       <h2>Action history</h2>
       <div class="count" id="action-count"></div>
+      <div class="view-toggle" role="tablist" aria-label="Card density">
+        <button id="view-concise" class="active" role="tab" aria-selected="true">Concise</button>
+        <button id="view-detail" role="tab" aria-selected="false">Detail</button>
+      </div>
     </div>
     <div id="action-list-wrap">
       <div id="action-list" class="empty">
@@ -721,6 +803,25 @@
 const $ = (id) => document.getElementById(id);
 
 let currentConfig = null;
+
+// ── View-mode (concise vs detail) ────────────────────────────
+// Persisted in localStorage; default = concise.
+let viewMode = "concise";
+try {
+  const saved = localStorage.getItem("chats-sandbox-view");
+  if (saved === "detail" || saved === "concise") viewMode = saved;
+} catch { /* private mode */ }
+
+function applyViewMode(mode) {
+  viewMode = mode;
+  try { localStorage.setItem("chats-sandbox-view", mode); } catch { /* */ }
+  const cBtn = document.getElementById("view-concise");
+  const dBtn = document.getElementById("view-detail");
+  if (cBtn) { cBtn.classList.toggle("active", mode === "concise"); cBtn.setAttribute("aria-selected", mode === "concise"); }
+  if (dBtn) { dBtn.classList.toggle("active", mode === "detail"); dBtn.setAttribute("aria-selected", mode === "detail"); }
+  // Re-render the timeline if it's already populated.
+  if (typeof loadActions === "function") loadActions();
+}
 
 // ── Theme ────────────────────────────────────────────────────
 // Default = light. Persist user choice in localStorage.
@@ -750,6 +851,19 @@ function switchTab(name) {
 $("tab-timeline").onclick = () => switchTab("timeline");
 $("tab-config").onclick = () => switchTab("config");
 $("refresh").onclick = refreshAll;
+$("view-concise").onclick = () => applyViewMode("concise");
+$("view-detail").onclick = () => applyViewMode("detail");
+// Sync the toggle's DOM state with the persisted value — without
+// re-triggering loadActions (the existing boot sequence at the bottom
+// already calls it once).
+{
+  const cBtn = $("view-concise");
+  const dBtn = $("view-detail");
+  cBtn.classList.toggle("active", viewMode === "concise");
+  dBtn.classList.toggle("active", viewMode === "detail");
+  cBtn.setAttribute("aria-selected", String(viewMode === "concise"));
+  dBtn.setAttribute("aria-selected", String(viewMode === "detail"));
+}
 
 // ── Timeline ─────────────────────────────────────────────────
 async function loadActions() {
@@ -787,6 +901,59 @@ function actionClass(strategies) {
 }
 
 function renderAction(a) {
+  return viewMode === "concise" ? renderActionConcise(a) : renderActionDetail(a);
+}
+
+function renderActionConcise(a) {
+  const el = document.createElement("div");
+  el.className = actionClass(a.strategies || []) + " concise";
+
+  // Row 1: #seq · time · tool · badges · age
+  const row1 = document.createElement("div");
+  row1.className = "action-c-row1";
+  row1.innerHTML =
+    `<span class="action-seq">#${a.seq}</span>` +
+    `<span class="action-c-time">${escapeHtml(a.timeFormatted)}</span>`;
+  if (a.toolName) {
+    const tool = document.createElement("span");
+    tool.className = "action-c-tool";
+    tool.textContent = a.toolName;
+    row1.appendChild(tool);
+  }
+  if (a.strategies && a.strategies.length) {
+    const badges = document.createElement("div");
+    badges.className = "action-c-badges";
+    for (const strat of a.strategies) {
+      const b = document.createElement("span");
+      b.className = "strategy-badge " + strat;
+      b.textContent = strat;
+      badges.appendChild(b);
+    }
+    row1.appendChild(badges);
+  } else {
+    row1.innerHTML += `<span class="action-c-badges"></span>`;
+  }
+  if (typeof a.ageMs === "number" && a.ageMs > 0) {
+    const age = document.createElement("span");
+    age.className = "action-c-age";
+    age.textContent = formatAge(a.ageMs);
+    row1.appendChild(age);
+  }
+  el.appendChild(row1);
+
+  // Row 2: instruction (single-line ellipsis)
+  if (a.instruction) {
+    const i = document.createElement("div");
+    i.className = "action-c-instruction";
+    i.textContent = a.instruction;
+    i.title = a.instruction;
+    el.appendChild(i);
+  }
+
+  return el;
+}
+
+function renderActionDetail(a) {
   const el = document.createElement("div");
   el.className = actionClass(a.strategies || []);
 
