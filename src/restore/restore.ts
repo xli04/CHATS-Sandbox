@@ -575,9 +575,20 @@ export function listRestorableActions(config: SandboxConfig): Array<{
     let artifacts: BackupArtifact[] = [];
     if (fs.existsSync(metaPath)) {
       try {
-        artifacts = JSON.parse(fs.readFileSync(metaPath, "utf-8"));
+        const parsed = JSON.parse(fs.readFileSync(metaPath, "utf-8"));
+        // Guard against metadata.json that's a non-array (bad write, manual
+        // edit, legacy single-object format). restoreActionLoop's
+        // `for (const artifact of inter.artifacts)` would otherwise blow up
+        // with "not iterable" on a plain object.
+        if (Array.isArray(parsed)) {
+          artifacts = parsed as BackupArtifact[];
+        } else if (parsed && typeof parsed === "object") {
+          // Best-effort: wrap a single-object metadata as a one-element array.
+          artifacts = [parsed as BackupArtifact];
+        }
+        // Anything else (primitive, null) → leave as [].
       } catch {
-        // skip corrupt
+        // corrupt JSON — leave as []
       }
     }
     return { name, artifacts };

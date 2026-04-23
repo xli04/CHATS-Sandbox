@@ -768,7 +768,15 @@ function writeMetadata(actionDir: string, artifact: BackupArtifact): void {
 
   if (fs.existsSync(metaPath)) {
     try {
-      entries = JSON.parse(fs.readFileSync(metaPath, "utf-8"));
+      const parsed = JSON.parse(fs.readFileSync(metaPath, "utf-8"));
+      if (Array.isArray(parsed)) {
+        entries = parsed as BackupArtifact[];
+      } else if (parsed && typeof parsed === "object") {
+        // Salvage: wrap a stray single-object metadata into a one-element
+        // array rather than nuke it. Next write will normalize it.
+        entries = [parsed as BackupArtifact];
+      }
+      // else: primitive/null — start fresh.
     } catch {
       entries = [];
     }
