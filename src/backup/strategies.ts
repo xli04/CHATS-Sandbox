@@ -600,6 +600,10 @@ export interface BackupResult {
   needsSubagent: boolean;
   /** Reason the subagent is needed */
   subagentReason?: string;
+  /** When a tier-0 policy rule rewrote the command, this is the new
+   *  tool_input the hook should return as updatedInput. Undefined when
+   *  no rewrite happened. */
+  updatedInput?: Record<string, unknown>;
 }
 
 /**
@@ -630,6 +634,38 @@ export function runBackup(
   // Reserve a pending action name but don't create the folder yet.
   preparePendingAction(config);
   const result: BackupResult = { artifacts: [], needsSubagent: false };
+
+  // ── Tier 0: policy rewrite ────────────────────────────────────────
+  // Destructive ops (rm, etc.) are rewritten into reversible equivalents
+  // (mv to per-action trash) before the original command ever runs. Huge
+  // files stay O(1) because we're just renaming inodes; no copy into the
+  // shadow repo. If any rule fires, it REPLACES the rest of the pipeline
+  // for this action — we don't also want tier-2 to snapshot the workspace
+  // (the file is already safe in trash, and snapshot would just record
+  // the trashed state).
+  const { applyPolicyRules } = require("./policy_rules.js");
+  const pendingDir = path.join(path.resolve(config.backupDir), _pendingActionName ?? "");
+  const trashDir = path.join(pendingDir, "trash");
+  const policyResult = applyPolicyRules(ctx, trashDir);
+  if (policyResult) {
+    const dir = materializeActionDir(config);
+    const artifact: BackupArtifact = {
+      id: policyResult.ruleId.slice(0, 8),
+      timestamp: new Date().toISOString(),
+      trigger: "rule",
+      toolName: ctx.tool_name,
+      description: policyResult.description,
+      strategy: "policy_rewrite",
+      artifactPath: trashDir,
+      recoveryCommands: policyResult.recoveryCommands,
+      policyRuleId: policyResult.ruleId,
+      originalAction: `${ctx.tool_name}(${String(ctx.tool_input.command ?? "").slice(0, 200)})`,
+    };
+    result.artifacts.push(artifact);
+    result.updatedInput = policyResult.updatedInput;
+    writeMetadata(dir, artifact);
+    return result;
+  }
 
   const outsideWorkspace = touchesOutsideWorkspace(ctx);
 

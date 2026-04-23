@@ -27,7 +27,8 @@ export interface PreToolHookOutput {
     /** "allow" | "deny" | "ask" */
     permissionDecision?: "allow" | "deny" | "ask";
     permissionDecisionReason?: string;
-    /** Replace tool input before execution */
+    /** Replace tool input before execution — Claude Code honors this to
+     *  swap in our tier-0 rewrite (rm → mv-to-trash, etc.). */
     updatedInput?: Record<string, unknown>;
     /** Extra context injected into the conversation */
     additionalContext?: string;
@@ -150,7 +151,7 @@ export interface BackupArtifact {
   /** Human-readable description of what was backed up */
   description: string;
   /** Strategy used */
-  strategy: "file_copy" | "git_tag" | "pip_freeze" | "npm_list" | "env_snapshot" | "git_snapshot" | "subagent";
+  strategy: "file_copy" | "git_tag" | "pip_freeze" | "npm_list" | "env_snapshot" | "git_snapshot" | "subagent" | "policy_rewrite";
   /** Where the backup artifact lives */
   artifactPath: string;
   /** Size in bytes (if applicable) */
@@ -166,6 +167,11 @@ export interface BackupArtifact {
    *  plugin will spawn a fresh subagent to reason about current state
    *  rather than executing the canned commands. */
   liveRestore?: boolean;
+  /** policy_rewrite-only: commands that reverse the rewrite. Runs via
+   *  execSync on restore — same contract as subagent's recovery_commands. */
+  recoveryCommands?: string[];
+  /** policy_rewrite-only: the rule id that fired (for debugging, UI). */
+  policyRuleId?: string;
 }
 
 // ── Effect manifest entry ────────────────────────────────────────────

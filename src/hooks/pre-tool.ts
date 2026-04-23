@@ -111,11 +111,14 @@ async function main(): Promise<void> {
       // non-fatal
     }
 
-    // Allow the tool call, inject backup info as context
+    // Allow the tool call, inject backup info as context.
+    // If a tier-0 policy rule rewrote the command (e.g. rm → mv to trash),
+    // propagate the updatedInput so Claude runs the rewritten form.
     const output: PreToolHookOutput = {
       hookSpecificOutput: {
         hookEventName: "PreToolUse",
         additionalContext: contextMsg,
+        ...(backupResult.updatedInput ? { updatedInput: backupResult.updatedInput } : {}),
       },
     };
     process.stdout.write(JSON.stringify(output));

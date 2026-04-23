@@ -295,9 +295,46 @@ export function restoreArtifact(
       return restoreGitSnapshot(artifact);
     case "subagent":
       return restoreSubagent(artifact, config);
+    case "policy_rewrite":
+      return restorePolicyRewrite(artifact);
     default:
       return { success: false, description: `Unknown strategy: ${artifact.strategy}` };
   }
+}
+
+/**
+ * Reverse a tier-0 policy rewrite (e.g. rm → mv-to-trash). The pre-recorded
+ * recoveryCommands are run verbatim via execSync, same contract as the
+ * subagent path's replay mode.
+ */
+function restorePolicyRewrite(artifact: BackupArtifact): RestoreResult {
+  const commands = artifact.recoveryCommands ?? [];
+  if (commands.length === 0) {
+    return {
+      success: false,
+      description: `policy_rewrite artifact ${artifact.id} has no recovery commands`,
+    };
+  }
+  const cwd = process.cwd();
+  const executed: string[] = [];
+  for (const cmd of commands) {
+    try {
+      execSync(cmd, { encoding: "utf-8", timeout: 30_000, cwd, stdio: ["pipe", "pipe", "pipe"] });
+      executed.push(cmd);
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : String(e);
+      return {
+        success: false,
+        description:
+          `Policy restore partially ran (${executed.length}/${commands.length}): ` +
+          `failed on "${cmd.slice(0, 80)}": ${msg.slice(0, 200)}`,
+      };
+    }
+  }
+  return {
+    success: true,
+    description: `Policy restore (${artifact.policyRuleId}): ran ${executed.length} recovery command(s) — ${artifact.description}`,
+  };
 }
 
 // ── Helpers ──────────────────────────────────────────────────────────
