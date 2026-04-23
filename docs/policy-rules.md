@@ -30,6 +30,44 @@ destructive tool call. Four tiers run in priority order:
 Tier 0 is the cheapest and most deterministic of the four. We want rich
 coverage so common destructive ops never escalate into tiers 2/3.
 
+## Scope: tier-0 is for LOCAL destructive ops only
+
+**Remote state belongs to tier-3 (the subagent), not tier-0.** Don't write
+tier-0 rules for anything whose effect propagates beyond the local
+machine and whose recovery requires reasoning about current (possibly
+drifted) remote state. Specifically, skip:
+
+- Cloud CLIs: `aws`, `gcloud`, `az`, `doctl`, `oci`, `linode-cli`
+- REST DELETEs: `curl -X DELETE`, `httpie DELETE`, `gh` write ops to github.com
+- IaC that applies to external infra: `terraform apply/destroy`, `pulumi destroy`
+- Production DB clients talking over the network to hosted DBs (psql/mysql targeting a remote host — hard to even detect locally)
+- Anything under **production Kubernetes clusters** beyond the single-resource case already covered (no cluster-wide sweeps, no `kubectl delete namespace`, etc.)
+- Push-style operations that notify remote services: `git push --force` to a shared remote, `docker push` to a registry, `helm push`, `aws s3 sync --delete` to a bucket
+
+Tier-0 wins because `mv` is O(1) and local. Remote ops don't have that
+property: "save state locally, restore remotely" introduces a
+reconciliation problem the subagent is better suited to handle at
+restore time (it can read live remote state, compare, and choose the
+right repair). A canned command from a pre-recorded artifact is often
+stale by the time restore runs.
+
+**Rules of thumb for deciding if an op is in-scope:**
+
+- **In scope** — it runs entirely against the local kernel / local
+  filesystem / local daemon state (local Docker engine, local cron
+  table, local firewall, etc.). Recovery is deterministic.
+- **Out of scope** — it makes a network call to something we don't
+  control, OR the recovery requires reading current remote state to
+  decide what to do.
+
+Borderline cases already shipped that are fine because recovery is
+canned (not remote-reasoning): `git-push-force` records the old remote
+sha via `git ls-remote`, recovery force-pushes it back. `kubectl-delete`
+for a single namespaced resource dumps manifest and re-applies. These
+are "remote but canned." Future rules in the same class are OK if the
+recovery is truly a one-liner replay; anything needing the subagent to
+reason should be left to tier-3.
+
 ## The core principle
 
 Tier-0 is **delete-centric**. Not every tool call needs a rule — in fact
@@ -176,57 +214,123 @@ Read the full file for:
    long-lived location. The action folder's retention sweep is what
    makes soft-delete eventually become hard-delete — don't bypass it.
 
-## Categories worth targeting
+## Categories worth targeting (local only)
+
+Already shipped, don't re-implement: `rm`, `chmod`, `chown`,
+`outside-workspace-write-new`, `git-reset-hard`, `git-branch-delete-force`,
+`git-stash-drop`, `git-push-force`, `docker-rm`, `docker-volume-rm`,
+`docker-image-rm`, `kubectl-delete` (single namespaced resource).
 
 Ranked by impact × ease:
 
-### High impact, high confidence
-- `git reset --hard <ref>` — record HEAD sha before, recovery is `git reset --hard <old-sha>`.
-- `git branch -D <name>` — tag the sha first, recovery recreates the branch.
-- `git stash drop` — pre-save the stash to a ref before running.
-- `git push --force[ | --force-with-lease] <remote> <ref>` — record
-  remote ref sha via `git ls-remote` first; recovery force-pushes the
-  old sha back. Mark `liveRestore: true` because the remote may have
-  moved again by the time restore runs.
-- `docker rm <container>` — `docker commit <id> chats-recovery-<id>`
-  first; recovery runs the committed image with the original name.
-  Preserves the filesystem; does NOT preserve running state.
-- `docker volume rm <vol>` — `docker run --rm -v <vol>:/v busybox tar c
-  /v > $TRASH/<vol>.tar` first; recovery creates a new volume and
-  restores the tar.
-- `docker image rm <ref>` — `docker save <ref> > $TRASH/<ref>.tar`
-  first; recovery `docker load -i`.
-- `kubectl delete <kind>/<name>` — `kubectl get <kind>/<name> -o yaml >
-  $TRASH/<name>.yml` first; recovery `kubectl apply -f` that file.
-  Works for most namespaced resources; skip for cluster-wide deletes of
-  critical resources (namespaces, CRDs).
+### High impact, high confidence — write these next
 
-### Medium impact
-- `chmod <mode> <path>` — save `stat --format=%a <path>` before;
-  recovery runs `chmod <old-mode> <path>`.
-- `chown <spec> <path>` — save `stat --format=%u:%g`; recovery `chown <old>`.
-- `truncate --size=0 <file>` — mv to trash first, then let truncate run.
-- `ln -sf <src> <dst>` where dst exists — mv dst to trash first.
-- `gcloud ... delete` / `aws ... delete` — best-effort describe-to-yaml
-  and save; mark `liveRestore: true`.
+- **`truncate --size=0 <file>` / `truncate -s 0 <file>`** — atomic file
+  zeroing. Rule: `mv` file to trash first, then rewrite the command to
+  `true`. Same shape as `rm-to-trash`.
+- **`shred <file>` / `shred -u <file>`** — securely overwrite (and
+  optionally unlink). Destructive by design, recoverable only if we
+  preempt. Same `mv`-to-trash pattern. Reject recursive (`-r`).
+- **`dd of=<file> …` / `dd if=/dev/zero of=<path>`** — overwrites
+  destination. `mv` existing destination to trash first; the user's
+  `dd` still runs against the now-nonexistent path (creates a fresh
+  file).
+- **`ln -sf <src> <dst>`** where `dst` already exists — symlink
+  overwrite. `mv dst` to trash first.
+- **`docker system prune -f` / `docker system prune -af`** — THE
+  classic "oh shit" docker command. Pre-snapshot `docker ps -aq --filter status=exited`,
+  `docker images -q --filter dangling=true`, `docker volume ls -q --filter dangling=true`,
+  `docker network ls -q`, save per-object metadata (inspect output) to
+  trash, then let prune run. Recovery replays `docker load`,
+  `docker volume create`, `docker network create` for each saved
+  object that was actually pruned. Same idea for `docker builder prune`.
+- **`docker compose down`** (without `-v`, which we'd handle like
+  volume rm) — remove containers + networks. Dump `docker compose config`
+  to trash first; recovery `docker compose up -d` from the saved
+  compose file.
+- **`helm uninstall <release>`** — local helm client operating against
+  a reachable cluster. Rule: `helm get manifest <rel> > trash/manifest.yaml`,
+  `helm get values <rel> > trash/values.yaml`, `helm get hooks <rel> > trash/hooks.yaml`.
+  Recovery: `helm install <rel> -f trash/values.yaml <chart>` (chart
+  reference recorded separately from `helm list --filter`).
+- **`iptables -F` / `iptables -X` / `nft flush ruleset`** — wipes local
+  firewall rules. Pre-save with `iptables-save > trash/rules.v4` (or
+  `nft list ruleset > trash/nft.conf`); recovery `iptables-restore` /
+  `nft -f trash/nft.conf`. Requires root — return null otherwise.
 
-### Lower impact / higher complexity
-- SQL `DROP TABLE <t>` — depends on DB client. For `psql` / `mysql`:
-  rewrite to `ALTER TABLE <t> RENAME TO _chats_trash_<t>_<ts>`, preserve
-  data. Recovery renames back. Mark `confidence: "medium"` — works only
-  when the connection string is passed in a standard flag form you can
-  parse.
-- `DELETE FROM <t> WHERE <pred>` — far harder; usually requires
-  snapshotting matched rows via `CREATE TABLE _undo AS SELECT ... WHERE
-  <pred>` before the delete. Rarely worth a dedicated rule.
-- `systemctl stop <svc>` / `launchctl unload` — not really destructive
-  (state is re-enterable by starting), but can lose runtime state.
-  Probably skip.
+### Medium impact — worth having
+
+- **`git filter-repo` / `git filter-branch`** — local history rewrite.
+  Pre-save every ref tip: `git for-each-ref --format='%(refname) %(objectname)' > trash/refs.txt`.
+  Recovery iterates and runs `git update-ref <ref> <sha>` per line.
+- **`git reflog expire --expire=now --all`** / **`git gc --prune=now`**
+  — destroys the safety net itself. Pre-save reflog via
+  `git reflog --all --date=raw > trash/reflog.txt`. Recovery is
+  best-effort (the reflog format isn't trivial to restore mechanically);
+  mark `confidence: "medium"` and include a human-readable note in
+  the description.
+- **`rm -rf node_modules` / `rm -rf target/` / `rm -rf build/`** —
+  technically covered by `rm-to-trash`, but these directories can be
+  gigabytes. If we pre-archive them with `tar cf` into trash with
+  hard-link mode (`--hard-dereference=no`, on same FS preserves
+  inodes), recovery is cheaper than re-downloading. Match by
+  well-known cleanup targets: `node_modules`, `target`, `build`,
+  `dist`, `.next`, `.nuxt`, `__pycache__`, `.pytest_cache`, `coverage`.
+  Fall through to the normal `rm-to-trash` if no match.
+- **`make clean` / `cargo clean` / `npm run clean`** — invoke arbitrary
+  cleanup. Record `pwd` + the command, offer no direct recovery (most
+  of these are re-build-from-scratch anyway). Mark `confidence: "low"`.
+  Or skip entirely — often not worth a rule.
+- **SQL against a LOCAL socket only** (`psql` / `mysql` / `sqlite3`
+  without a host flag, or with `-h localhost` / `-h 127.0.0.1`):
+  - `DROP TABLE <t>` → rewrite to `ALTER TABLE <t> RENAME TO _chats_trash_<t>_<ts>` (Postgres/MySQL). Recovery renames back.
+  - `DELETE FROM <t> WHERE <pred>` → `CREATE TABLE _chats_undo_<ts> AS SELECT * FROM <t> WHERE <pred>`, then delete. Recovery `INSERT INTO <t> SELECT * FROM _chats_undo_<ts>`.
+  - Out of scope when `-h <remote-host>` is present (that's tier-3).
+
+### Niche but interesting (write if a specific pain point motivates)
+
+- **`rsync --delete` / `rsync --delete-after`** — destination-side file
+  deletion. `rsync` itself has a `--backup --backup-dir=<trash>` flag
+  pair; the rule rewrites to add those flags. O(1) rename on the same
+  FS, zero extra I/O.
+- **`tar --delete`** on an archive — archive manipulation. Copy the
+  archive to trash first, then run. `cp` is O(N) here but archives
+  are usually smaller than the files they contain, so worth it.
+- **Redis `FLUSHDB` / `FLUSHALL`** — local Redis only. Pre-dump via
+  `redis-cli --rdb trash/dump.rdb` or `redis-cli BGSAVE` +
+  `cp /var/lib/redis/dump.rdb trash/`. Recovery reloads the rdb.
+- **MongoDB `db.collection.drop()` / `deleteMany`** via `mongosh` on
+  `localhost` — pre-dump with `mongodump --out trash/...` Recovery via
+  `mongorestore`.
+- **Shell-redirection truncation** (`> file`, `>| file`) — not a
+  command, it's bash syntax. Hard to safely match with a regex; the
+  false-positive rate on things like `log > output.txt` inside a
+  larger command is high. Probably skip unless you can constrain to
+  a narrow form (e.g., command starts with `>`).
+- **`update-alternatives --remove`** (Debian-alternative switching) —
+  capture current selection with `update-alternatives --query` first;
+  recovery restores via `--install`.
+- **`apt purge` / `dpkg --remove`** — package system destruction.
+  Tier-1 already captures `pip freeze` / `npm list`; could add
+  `dpkg --get-selections` for `apt`. Record before, recovery is
+  `apt install <list>` or `xargs -a selections dpkg --set-selections`.
+
+### Explicitly out of scope (tier-3 handles)
+
+- **Cloud provider CLIs**: `aws`, `gcloud`, `az`, `doctl`, `oci`, `linode-cli`
+- **HTTP DELETEs**: `curl -X DELETE`, `httpie DELETE`
+- **IaC against remote**: `terraform destroy/apply`, `pulumi destroy`
+- **Push-to-remote**: `docker push`, `helm push`, `git push` without `--force` (push itself isn't destructive — tier-3 handles)
+- **Remote package registries**: `npm unpublish`, `cargo yank`, `pip` pushing to PyPI
+- **Remote database hosts**: any DB client with `-h <non-local-host>`
+- **Cluster-wide kubectl**: `kubectl delete namespace`, `kubectl delete crd`, `kubectl delete --all`, `kubectl delete -l <selector>`, `kubectl delete --all-namespaces`
+- **Things that are "really destructive but not data":** `systemctl stop`, `launchctl unload`, `killall` — service state is re-enterable, not data-lost. Skip.
 
 ## Your task
 
-Given the categories listed by the user (or "all high-impact categories"
-if none listed), generate a single TypeScript module:
+Given the categories listed by the user (or "all high-impact categories
+from the 'High impact, high confidence — write these next' section" if
+none listed), generate a single TypeScript module:
 
 - File: `src/backup/policy_rules_extra.ts` (or a name the user asks for).
 - Exports a `const EXTRA_RULES: PolicyRule[]` that includes every new
