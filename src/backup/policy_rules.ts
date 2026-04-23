@@ -24,6 +24,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { execSync } from "node:child_process";
 import type { HookContext } from "../types.js";
+import { EXTRA_RULES } from "./policy_rules_extra.js";
 
 export interface PolicyRuleResult {
   /** The rewritten tool input. Plugin returns this as `updatedInput` to
@@ -246,6 +247,10 @@ export const POLICY_RULES: PolicyRule[] = [
       };
     },
   },
+  // Extra rules (git, chmod, chown, docker, kubectl, outside-workspace Write).
+  // Loaded from policy_rules_extra.ts to keep this file focused on the core
+  // rm machinery. Ordering matters — first match wins in applyPolicyRules().
+  ...EXTRA_RULES,
 ];
 
 /**
