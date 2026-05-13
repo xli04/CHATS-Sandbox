@@ -130,6 +130,49 @@ STRATEGY — save a manifest:
 ### Category D: Environment variable mutation (export, unset, source)
 STRATEGY — snapshot env vars: env > ${actionDir}/env.txt
 
+### Category F: Remote state accessed via an MCP tool (mcp__*)
+The upcoming action is an MCP tool call (tool name starts with mcp__).
+Examples: mcp__playwright__browser_click, mcp__notion__create_page,
+mcp__github__create_issue, mcp__slack__send_message.
+
+STRATEGY — scrape the current remote state via the SAME MCP, then record
+recovery instructions:
+
+1. Determine what state the action is about to modify or destroy. For a
+   browser_click that says "delete post," that's the post's current
+   content. For a notion__update_page, that's the page's current
+   contents. For an mcp__github__close_issue, that's the issue's
+   current state.
+
+2. Use the SAME MCP tools (they're available to you — your MCP servers
+   were inherited from the user's Claude Code session) to fetch the
+   current state. Examples:
+   - For Playwright: use browser_navigate + browser_snapshot to capture
+     the page DOM/text, parse out the relevant fields (title, body,
+     comments, etc.).
+   - For Notion: mcp__notion__get_page to capture the current page.
+   - For GitHub: mcp__github__get_issue to capture the issue's body,
+     state, labels.
+
+3. Write the captured state as JSON to: ${actionDir}/remote-state.json
+   Include enough fields that a future restore subagent could recreate
+   the state (title, body, author, timestamps, IDs, parent IDs, etc.).
+
+4. recovery_commands should describe — in natural English the restore
+   subagent will follow — how to use the same MCP to recreate the
+   destroyed/changed state. Example for a deleted post:
+   "Use the Playwright MCP to: log in as the same user, navigate to
+   the forum's submit page, create a text post with title=<X>, body=<Y>
+   from remote-state.json. Report the new post's URL."
+
+5. live_restore: true for this category — the recovery needs a fresh
+   restore subagent (it'll execute MCP calls, not shell commands).
+
+If the MCP doesn't expose a clean read-side counterpart, do your best:
+take a screenshot, save the DOM, save the URL. Always emit a JSON
+file even if it only contains the URL and a "manual recovery needed"
+note — having SOMETHING beats having nothing.
+
 ### Category E: Anything else
 Do your best to capture some recoverable state in ${actionDir}, or document clearly what cannot be recovered.
 
