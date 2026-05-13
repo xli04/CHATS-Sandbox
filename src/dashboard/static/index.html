@@ -5,843 +5,575 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>CHATS-Sandbox</title>
 <script>
-  // Apply persisted theme before paint to avoid a flash.
   (function () {
     try {
       var t = localStorage.getItem("chats-sandbox-theme") || "light";
       document.documentElement.setAttribute("data-theme", t === "dark" ? "dark" : "light");
-    } catch (_) {
-      document.documentElement.setAttribute("data-theme", "light");
-    }
+    } catch (_) { document.documentElement.setAttribute("data-theme", "light"); }
   })();
 </script>
 <style>
-  /* Light theme (default) — airy slate palette with indigo / violet accents */
-  :root,
-  [data-theme="light"] {
-    --bg-0: #f6f7fb;
-    --bg-1: #eef1f8;
-    --bg-2: #ffffff;
-    --surface: rgba(255, 255, 255, 0.78);
-    --surface-solid: #ffffff;
-    --surface-raised: rgba(255, 255, 255, 0.95);
-    --border: rgba(79, 102, 176, 0.14);
-    --border-strong: rgba(79, 102, 176, 0.28);
-    --text: #1b2140;
-    --text-dim: #43507a;
-    --muted: #7a85a8;
-    --accent: #4f6fd4;
-    --accent-2: #8b5cf6;
-    --accent-3: #06b6d4;
-    --success: #16a34a;
-    --warn: #d97706;
-    --danger: #dc2626;
-    --shadow-lg: 0 20px 60px rgba(31, 41, 77, 0.10);
-    --shadow-sm: 0 4px 16px rgba(31, 41, 77, 0.06);
-    --radius: 12px;
+  /* ── meta-agent-benchmark-inspired palette mapped onto our colors.
+     Restrained color: page is near-monochrome, accents only on numbers,
+     links, action buttons, and strategy markers. Hard edges, no shadows
+     on cards, generous whitespace, monospace for technical terms. */
 
-    --header-bg: rgba(255, 255, 255, 0.72);
-    --tool-bg: rgba(27, 33, 64, 0.05);
-    --instr-bg: rgba(79, 111, 212, 0.08);
-    --badge-git-bg: rgba(79, 111, 212, 0.10);
-    --badge-sub-bg: rgba(217, 119, 6, 0.12);
-    --badge-targ-bg: rgba(22, 163, 74, 0.10);
-    --ring-accent: rgba(79, 111, 212, 0.18);
-    --ring-warn: rgba(217, 119, 6, 0.18);
-    --ring-success: rgba(22, 163, 74, 0.18);
-    --bg-body-grad-1: rgba(139, 92, 246, 0.12);
-    --bg-body-grad-2: rgba(79, 111, 212, 0.14);
+  :root, [data-theme="light"] {
+    --bg:         #ffffff;
+    --bg-soft:    #f7f7f5;
+    --line:       #e5e5e3;
+    --line-strong:#cdcdc9;
+    --text:       #1a1a1a;
+    --text-dim:   #4a4a4a;
+    --muted:      #8a8a86;
+    --accent:     #0f8c89;   /* teal */
+    --accent-2:   #6c5ce7;   /* violet — used sparingly */
+    --success:    #2e7d32;
+    --warn:       #b06000;
+    --danger:     #b00020;
+    --shadow:     none;
+    --hover-bg:   #faf9f5;
   }
-
-  /* Dark theme — toggled via [data-theme="dark"] on <html> */
   [data-theme="dark"] {
-    --bg-0: #0a0c12;
-    --bg-1: #0f1320;
-    --bg-2: #131827;
-    --surface: rgba(24, 28, 44, 0.72);
-    --surface-solid: #181c2c;
-    --surface-raised: rgba(34, 40, 62, 0.85);
-    --border: rgba(122, 162, 247, 0.12);
-    --border-strong: rgba(122, 162, 247, 0.24);
-    --text: #e6e8f0;
-    --text-dim: #b0b6cb;
-    --muted: #6b7390;
-    --accent: #7aa2f7;
-    --accent-2: #bb9af7;
-    --accent-3: #7dcfff;
-    --success: #9ece6a;
-    --warn: #e0af68;
-    --danger: #f7768e;
-    --shadow-lg: 0 20px 60px rgba(0, 0, 0, 0.45);
-    --shadow-sm: 0 4px 16px rgba(0, 0, 0, 0.35);
-
-    --header-bg: rgba(10, 12, 18, 0.72);
-    --tool-bg: rgba(0, 0, 0, 0.25);
-    --instr-bg: rgba(122, 162, 247, 0.06);
-    --badge-git-bg: rgba(122, 162, 247, 0.08);
-    --badge-sub-bg: rgba(224, 175, 104, 0.08);
-    --badge-targ-bg: rgba(158, 206, 106, 0.08);
-    --ring-accent: rgba(122, 162, 247, 0.12);
-    --ring-warn: rgba(224, 175, 104, 0.12);
-    --ring-success: rgba(158, 206, 106, 0.12);
-    --bg-body-grad-1: rgba(187, 154, 247, 0.10);
-    --bg-body-grad-2: rgba(122, 162, 247, 0.10);
+    --bg:         #0e0e10;
+    --bg-soft:    #16171a;
+    --line:       #28292c;
+    --line-strong:#3a3b3f;
+    --text:       #ebebec;
+    --text-dim:   #b9b9bc;
+    --muted:      #76777b;
+    --accent:     #5eead4;
+    --accent-2:   #a78bfa;
+    --success:    #86efac;
+    --warn:       #fbbf24;
+    --danger:     #fca5a5;
+    --shadow:     none;
+    --hover-bg:   #1a1b1f;
   }
 
   * { box-sizing: border-box; }
-
   html, body { height: 100%; }
   body {
     margin: 0;
+    background: var(--bg);
     color: var(--text);
-    font-family: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
-    font-size: 14px;
+    font-family: -apple-system, BlinkMacSystemFont, "Inter", system-ui, "Segoe UI", sans-serif;
+    font-size: 15px;
     line-height: 1.55;
-    background:
-      radial-gradient(1200px 800px at 80% -10%, var(--bg-body-grad-1), transparent 60%),
-      radial-gradient(900px 700px at -10% 110%, var(--bg-body-grad-2), transparent 55%),
-      linear-gradient(180deg, var(--bg-0), var(--bg-1) 40%, var(--bg-0));
-    background-attachment: fixed;
-    min-height: 100vh;
+    -webkit-font-smoothing: antialiased;
   }
-
-  code, pre, .mono {
+  code, pre, .mono, .num {
     font-family: "JetBrains Mono", "SF Mono", Menlo, Consolas, ui-monospace, monospace;
+    font-size: 0.9em;
   }
+  a { color: var(--accent); text-decoration: none; }
+  a:hover { text-decoration: underline; }
 
-  /* ── Header ───────────────────────────────────────────────── */
-  header {
-    position: sticky;
-    top: 0;
-    z-index: 10;
-    padding: 18px 32px;
-    border-bottom: 1px solid var(--border);
-    backdrop-filter: blur(14px);
-    -webkit-backdrop-filter: blur(14px);
-    background: var(--header-bg);
+  /* ── Top header — minimal masthead, numbered like an outline ───── */
+  header.masthead {
+    border-bottom: 1px solid var(--line);
+    padding: 18px 32px 14px;
     display: flex;
-    align-items: center;
-    gap: 18px;
+    align-items: baseline;
+    gap: 24px;
+    background: var(--bg);
   }
   .brand {
     display: flex;
-    align-items: center;
-    gap: 12px;
-  }
-  .brand-logo {
-    width: 30px; height: 30px;
-    border-radius: 8px;
-    background: linear-gradient(135deg, var(--accent), var(--accent-2) 60%, var(--accent-3));
-    box-shadow: 0 0 24px rgba(122, 162, 247, 0.45);
-    position: relative;
-  }
-  .brand-logo::after {
-    content: "";
-    position: absolute; inset: 6px;
-    border-radius: 4px;
-    background: var(--bg-0);
-  }
-  .brand h1 {
-    margin: 0;
+    align-items: baseline;
+    gap: 8px;
+    font-weight: 600;
     font-size: 16px;
-    font-weight: 600;
-    letter-spacing: 0.2px;
+    letter-spacing: -0.01em;
   }
-  .brand h1 span {
-    background: linear-gradient(90deg, var(--accent), var(--accent-2));
-    -webkit-background-clip: text;
-    background-clip: text;
-    color: transparent;
-  }
-  .status-pills {
+  .brand .sigil { color: var(--accent); font-family: "JetBrains Mono", monospace; }
+  .brand small { color: var(--muted); font-weight: 400; font-size: 13px; margin-left: 4px; }
+  .masthead nav {
+    display: flex;
+    gap: 18px;
     margin-left: auto;
-    display: flex;
-    gap: 8px;
-    flex-wrap: wrap;
+    align-items: baseline;
   }
-  .pill {
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
-    padding: 4px 10px;
-    border-radius: 999px;
-    background: var(--surface);
-    border: 1px solid var(--border);
-    font-size: 11.5px;
-    color: var(--text-dim);
-    letter-spacing: 0.2px;
-  }
-  .pill-dot {
-    width: 6px; height: 6px;
-    border-radius: 50%;
-    background: var(--muted);
-  }
-  .pill.on .pill-dot {
-    background: var(--success);
-    box-shadow: 0 0 8px var(--success);
-    animation: pulse 2s ease-in-out infinite;
-  }
-  .pill.warn .pill-dot { background: var(--warn); box-shadow: 0 0 8px var(--warn); }
-  .pill.off .pill-dot { background: var(--muted); }
-  @keyframes pulse {
-    0%, 100% { opacity: 1; }
-    50% { opacity: 0.45; }
-  }
-
-  /* Theme toggle */
-  .theme-btn {
-    background: var(--surface);
-    border: 1px solid var(--border);
-    color: var(--text-dim);
-    width: 34px;
-    height: 34px;
-    border-radius: 999px;
-    cursor: pointer;
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    transition: all 0.2s;
-    font-size: 15px;
-    line-height: 1;
-    flex: 0 0 auto;
-  }
-  .theme-btn:hover {
-    color: var(--text);
-    border-color: var(--border-strong);
-    background: var(--surface-raised);
-    transform: rotate(12deg);
-  }
-  .theme-icon { display: inline-block; transition: transform 0.3s; }
-
-  /* ── Nav / tabs ───────────────────────────────────────────── */
-  nav {
-    display: flex;
-    align-items: center;
-    gap: 4px;
-    padding: 10px 32px 0;
-    max-width: 1080px;
-    margin: 0 auto;
-  }
-  .tab {
+  .masthead nav button {
     background: transparent;
-    color: var(--muted);
-    border: 1px solid transparent;
-    padding: 9px 16px;
-    font-size: 13.5px;
-    cursor: pointer;
-    border-radius: 10px 10px 0 0;
-    transition: color 0.15s, background 0.15s;
-    font-weight: 500;
-  }
-  .tab:hover { color: var(--text-dim); }
-  .tab.active {
-    color: var(--text);
-    background: var(--surface);
-    border-color: var(--border);
-    border-bottom-color: transparent;
-  }
-  .tab.active::after {
-    content: "";
-    display: block;
-    height: 2px;
-    margin-top: 7px;
-    margin-bottom: -10px;
-    background: linear-gradient(90deg, var(--accent), var(--accent-2));
-    border-radius: 2px;
-  }
-  .nav-right {
-    margin-left: auto;
-    display: flex;
-    gap: 8px;
-  }
-  .btn-ghost {
-    background: var(--surface);
-    color: var(--text-dim);
-    border: 1px solid var(--border);
-    padding: 7px 14px;
-    border-radius: 8px;
-    font-size: 12.5px;
-    cursor: pointer;
-    transition: all 0.15s;
-  }
-  .btn-ghost:hover {
-    color: var(--text);
-    border-color: var(--border-strong);
-    background: var(--surface-raised);
-  }
-
-  main {
-    padding: 24px 32px 80px;
-    max-width: 1080px;
-    margin: 0 auto;
-  }
-  .panel { display: none; animation: fadeIn 0.25s ease; }
-  .panel.active { display: block; }
-  @keyframes fadeIn {
-    from { opacity: 0; transform: translateY(4px); }
-    to { opacity: 1; transform: translateY(0); }
-  }
-
-  /* ── Timeline ─────────────────────────────────────────────── */
-  .timeline-head {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    margin: 8px 0 18px;
-    gap: 12px;
-  }
-  .timeline-head h2 {
-    margin: 0;
-    font-size: 15px;
-    font-weight: 600;
-    color: var(--text);
-  }
-  .timeline-head .count {
-    font-size: 12px;
-    color: var(--muted);
-    margin-right: auto;
-    margin-left: 8px;
-  }
-
-  /* View-mode segmented control */
-  .view-toggle {
-    display: inline-flex;
-    background: var(--surface);
-    border: 1px solid var(--border);
-    border-radius: 8px;
-    padding: 2px;
-    gap: 2px;
-  }
-  .view-toggle button {
-    background: transparent;
-    color: var(--muted);
     border: none;
-    padding: 4px 12px;
-    border-radius: 6px;
-    font-size: 12px;
+    color: var(--text-dim);
+    font-size: 14px;
     cursor: pointer;
-    font-weight: 500;
-    transition: all 0.15s;
+    padding: 0;
+    font-family: inherit;
   }
-  .view-toggle button:hover { color: var(--text-dim); }
-  .view-toggle button.active {
-    background: var(--surface-raised);
-    color: var(--text);
-    box-shadow: 0 1px 3px var(--shadow-sm);
-  }
+  .masthead nav button:hover { color: var(--text); }
+  .masthead nav button.active { color: var(--text); font-weight: 600; }
+  .masthead nav button.active::before { content: "→ "; color: var(--accent); }
 
-  /* Concise-card variant — tight two-row layout */
-  .action.concise {
-    padding: 10px 14px;
-    margin-bottom: 6px;
+  .icon-btn {
+    background: transparent;
+    border: 1px solid var(--line);
+    color: var(--text-dim);
+    cursor: pointer;
+    padding: 4px 10px;
+    font-size: 12.5px;
+    font-family: inherit;
+    transition: background 0.12s, color 0.12s;
   }
-  .action.concise .action-c-row1 {
+  .icon-btn:hover { background: var(--hover-bg); color: var(--text); border-color: var(--line-strong); }
+
+  /* ── Layout ─────────────────────────────────────────────────── */
+  main {
+    max-width: 1000px;
+    margin: 0 auto;
+    padding: 28px 32px 80px;
+  }
+  .panel { display: none; }
+  .panel.active { display: block; }
+
+  /* ── Section markers — "00 Status" / "01 Timeline" style ─────── */
+  .section-head {
+    margin-top: 28px;
+    margin-bottom: 14px;
     display: flex;
-    align-items: center;
-    gap: 10px;
-    font-size: 12px;
-    color: var(--muted);
-    margin-bottom: 2px;
-  }
-  .action.concise .action-seq {
-    font-size: 13px;
-  }
-  .action.concise .action-c-time {
-    font-variant-numeric: tabular-nums;
-  }
-  .action.concise .action-c-age {
-    color: var(--muted);
-  }
-  .action.concise .action-c-instruction {
-    color: var(--text);
-    font-size: 13px;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-    font-style: italic;
-    opacity: 0.88;
-  }
-  .action.concise .action-c-badges {
-    margin-left: auto;
-    display: flex;
-    gap: 4px;
-    flex-wrap: nowrap;
-  }
-  .action.concise .strategy-badge {
-    font-size: 9.5px;
-    padding: 1px 6px;
-  }
-  .action.concise .action-c-tool {
-    font-family: "JetBrains Mono", "SF Mono", Menlo, Consolas, monospace;
-    font-size: 11px;
-    color: var(--warn);
-    font-weight: 500;
-  }
-
-  .timeline {
-    position: relative;
-    padding-left: 24px;
-  }
-  .timeline::before {
-    content: "";
-    position: absolute;
-    left: 7px;
-    top: 8px;
-    bottom: 8px;
-    width: 2px;
-    background: linear-gradient(180deg,
-      var(--border-strong), var(--border), transparent);
-    border-radius: 2px;
-  }
-
-  .action {
-    position: relative;
-    background: var(--surface);
-    border: 1px solid var(--border);
-    border-radius: var(--radius);
-    padding: 14px 18px;
-    margin-bottom: 12px;
-    backdrop-filter: blur(8px);
-    transition: border-color 0.15s, transform 0.15s;
-  }
-  .action:hover {
-    border-color: var(--border-strong);
-    transform: translateX(2px);
-  }
-  .action::before {
-    content: "";
-    position: absolute;
-    left: -21px;
-    top: 18px;
-    width: 12px;
-    height: 12px;
-    border-radius: 50%;
-    background: var(--bg-1);
-    border: 2px solid var(--accent);
-    box-shadow: 0 0 0 4px var(--ring-accent);
-  }
-  .action.subagent::before { border-color: var(--warn); box-shadow: 0 0 0 4px var(--ring-warn); }
-  .action.targeted::before { border-color: var(--success); box-shadow: 0 0 0 4px var(--ring-success); }
-
-  .action-head {
-    display: flex;
-    justify-content: space-between;
     align-items: baseline;
     gap: 12px;
+    border-bottom: 1px solid var(--line);
+    padding-bottom: 6px;
+  }
+  .section-head .num {
+    color: var(--muted);
+    font-weight: 400;
+    letter-spacing: 0;
+  }
+  .section-head h2 {
+    margin: 0;
+    font-size: 18px;
+    font-weight: 600;
+    letter-spacing: -0.01em;
+  }
+  .section-head .meta {
+    margin-left: auto;
+    color: var(--muted);
+    font-size: 13px;
+  }
+  .section-head h2:first-child { margin-top: 0; }
+
+  /* ── Status row — key/value pairs in a compact grid ─────────── */
+  .status-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+    gap: 0;
+    border-top: 1px solid var(--line);
+    border-left: 1px solid var(--line);
+  }
+  .status-cell {
+    padding: 10px 14px;
+    border-right: 1px solid var(--line);
+    border-bottom: 1px solid var(--line);
+  }
+  .status-cell .label {
+    display: block;
+    font-size: 11.5px;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--muted);
     margin-bottom: 4px;
   }
-  .action-seq {
-    font-weight: 600;
-    color: var(--accent);
-    font-size: 14px;
-    letter-spacing: 0.3px;
+  .status-cell .value {
+    font-size: 16px;
+    font-weight: 500;
   }
-  .action-time {
-    font-size: 11.5px;
+  .status-cell .value.dim { color: var(--text-dim); font-weight: 400; }
+  .status-cell .value .accent { color: var(--accent); }
+  .status-cell .badge { font-size: 11px; padding: 1px 6px; border: 1px solid var(--line-strong); color: var(--text-dim); }
+  .status-cell .badge.on  { color: var(--success); border-color: var(--success); }
+  .status-cell .badge.off { color: var(--muted); }
+
+  /* ── Action list — flat table-style rows ─────────────────────── */
+  .action-list { margin-top: 4px; }
+  .action {
+    border-bottom: 1px solid var(--line);
+    padding: 14px 0;
+    display: grid;
+    grid-template-columns: 60px 70px 1fr auto;
+    gap: 14px;
+    align-items: baseline;
+    cursor: pointer;
+    transition: background 0.12s;
+  }
+  .action:hover { background: var(--hover-bg); }
+  .action:first-child { border-top: 1px solid var(--line); }
+  .action.expanded { background: var(--bg-soft); }
+
+  .action .seq {
+    font-family: "JetBrains Mono", monospace;
+    font-size: 14px;
+    color: var(--accent);
+    font-weight: 500;
+    padding-left: 4px;
+  }
+  .action .time {
+    font-family: "JetBrains Mono", monospace;
+    font-size: 12px;
     color: var(--muted);
     font-variant-numeric: tabular-nums;
   }
-  .action-instruction {
-    font-style: italic;
+  .action .body { min-width: 0; }
+  .action .instr {
     color: var(--text);
-    margin: 8px 0;
-    padding: 8px 12px;
-    background: var(--instr-bg);
-    border-left: 3px solid var(--accent);
-    border-radius: 0 6px 6px 0;
-    font-size: 13.5px;
+    font-size: 14.5px;
+    line-height: 1.45;
+    margin-bottom: 6px;
   }
-  .action-tool {
-    font-family: "JetBrains Mono", "SF Mono", Menlo, Consolas, monospace;
-    font-size: 12px;
-    color: var(--text-dim);
-    margin: 6px 0;
-    padding: 5px 10px;
-    background: var(--tool-bg);
-    border-radius: 6px;
-    word-break: break-word;
-  }
-  .action-tool strong {
-    color: var(--warn);
-    font-weight: 500;
-  }
-  .action-strategies {
+  .action .instr.empty { color: var(--muted); font-style: italic; }
+  .action .tags {
     display: flex;
-    gap: 6px;
+    gap: 8px;
     flex-wrap: wrap;
-    margin: 8px 0 4px;
-  }
-  .strategy-badge {
-    font-size: 10.5px;
-    padding: 3px 9px;
-    border-radius: 999px;
-    background: var(--surface-raised);
-    border: 1px solid var(--border);
-    color: var(--text-dim);
-    letter-spacing: 0.3px;
-    font-weight: 500;
-    text-transform: lowercase;
-  }
-  .strategy-badge.git_snapshot {
-    color: var(--accent);
-    border-color: var(--border-strong);
-    background: var(--badge-git-bg);
-  }
-  .strategy-badge.subagent {
-    color: var(--warn);
-    border-color: var(--border-strong);
-    background: var(--badge-sub-bg);
-  }
-  .strategy-badge.pip_freeze,
-  .strategy-badge.npm_list,
-  .strategy-badge.env_snapshot,
-  .strategy-badge.git_tag {
-    color: var(--success);
-    border-color: var(--border-strong);
-    background: var(--badge-targ-bg);
-  }
-  .action-files {
-    font-family: "JetBrains Mono", "SF Mono", Menlo, Consolas, monospace;
     font-size: 11.5px;
     color: var(--text-dim);
-    margin-top: 8px;
-    word-break: break-all;
+    align-items: center;
   }
-  .action-files-label {
+  .action .tags .tool {
+    font-family: "JetBrains Mono", monospace;
+    color: var(--warn);
+  }
+  .action .tags .strat {
+    padding: 1px 6px;
+    border: 1px solid var(--line-strong);
+    color: var(--text-dim);
+    font-family: "JetBrains Mono", monospace;
+    font-size: 10.5px;
+  }
+  .action .tags .strat.git_snapshot { color: var(--accent); border-color: var(--accent); }
+  .action .tags .strat.subagent     { color: var(--warn); border-color: var(--warn); }
+  .action .tags .strat.policy_rewrite,
+  .action .tags .strat.pip_freeze,
+  .action .tags .strat.npm_list,
+  .action .tags .strat.env_snapshot,
+  .action .tags .strat.git_tag      { color: var(--success); border-color: var(--success); }
+  .action .controls {
+    display: flex;
+    gap: 6px;
+    align-items: center;
+    white-space: nowrap;
+    opacity: 0.6;
+    transition: opacity 0.12s;
+  }
+  .action:hover .controls,
+  .action.expanded .controls { opacity: 1; }
+  .action .size {
+    font-family: "JetBrains Mono", monospace;
+    font-size: 11.5px;
     color: var(--muted);
     margin-right: 6px;
   }
-  .action-stats {
-    font-family: "JetBrains Mono", "SF Mono", Menlo, Consolas, monospace;
-    font-size: 11.5px;
-    color: var(--success);
-    margin-top: 4px;
-  }
-  .action-meta {
-    font-family: "JetBrains Mono", "SF Mono", Menlo, Consolas, monospace;
-    font-size: 11px;
-    color: var(--muted);
-    margin-top: 8px;
-    padding-top: 6px;
-    border-top: 1px solid var(--border);
-  }
-  .action-subagent {
-    font-size: 12.5px;
-    color: var(--text);
-    margin: 6px 0;
-    padding: 7px 10px;
-    background: var(--badge-sub-bg);
-    border-left: 3px solid var(--warn);
-    border-radius: 0 6px 6px 0;
-    line-height: 1.45;
-  }
-  .action-subagent-label {
-    font-family: "JetBrains Mono", "SF Mono", Menlo, Consolas, monospace;
-    color: var(--warn);
-    font-weight: 600;
-    margin-right: 4px;
-  }
-  .action-subagent-meta {
-    font-family: "JetBrains Mono", "SF Mono", Menlo, Consolas, monospace;
-    color: var(--muted);
-    font-size: 11px;
-  }
-  .action-subagent-live {
-    color: var(--danger);
-    background: rgba(220, 38, 38, 0.12);
-    padding: 1px 6px;
-    border-radius: 3px;
-    font-weight: 500;
-  }
-  .action-meta-label {
-    color: var(--text-dim);
-    opacity: 0.7;
-    margin-right: 2px;
-  }
 
-  .empty {
-    text-align: center;
-    color: var(--muted);
-    padding: 60px 20px;
-    border: 1px dashed var(--border);
-    border-radius: var(--radius);
-    background: var(--surface);
+  /* Expanded detail — appears when row is clicked */
+  .action .detail {
+    grid-column: 2 / -1;
+    margin-top: 10px;
+    padding: 12px 14px;
+    background: var(--bg);
+    border: 1px solid var(--line);
+    border-left: 3px solid var(--accent);
+    font-size: 13px;
+    line-height: 1.55;
+    display: none;
   }
-  .empty-icon {
-    font-size: 28px;
-    display: block;
-    margin-bottom: 12px;
-    opacity: 0.6;
+  .action.expanded .detail { display: block; }
+  .action .detail h4 {
+    margin: 0 0 4px;
+    font-size: 11.5px;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--muted);
+    font-weight: 600;
+  }
+  .action .detail h4:not(:first-child) { margin-top: 12px; }
+  .action .detail .kv {
+    font-family: "JetBrains Mono", monospace;
+    font-size: 12px;
+    color: var(--text-dim);
+    word-break: break-all;
+  }
+  .action .detail .file-list { color: var(--text-dim); }
+  .action .detail .file-list code { color: var(--text); }
+  .action .detail pre {
+    margin: 6px 0 0;
+    padding: 10px;
+    background: var(--bg-soft);
+    border: 1px solid var(--line);
+    overflow-x: auto;
+    font-size: 12px;
+    line-height: 1.45;
+    max-height: 360px;
+    overflow-y: auto;
+    white-space: pre;
+  }
+  .diff-add { color: var(--success); }
+  .diff-del { color: var(--danger); }
+  .diff-hdr { color: var(--accent); }
+
+  .action .detail .actions-bar {
+    margin-top: 10px;
+    display: flex;
+    gap: 8px;
   }
 
   /* ── Config form ─────────────────────────────────────────── */
-  .cfg-section {
-    background: var(--surface);
-    border: 1px solid var(--border);
-    border-radius: var(--radius);
-    padding: 4px 20px;
-    margin-bottom: 16px;
-    backdrop-filter: blur(8px);
-  }
-  .cfg-section h2 {
-    margin: 18px 0 4px;
-    font-size: 12px;
+  .cfg-section { margin-bottom: 26px; }
+  .cfg-section h3 {
+    margin: 0 0 10px;
+    font-size: 13px;
     font-weight: 600;
-    color: var(--muted);
-    letter-spacing: 1.2px;
+    letter-spacing: 0.04em;
     text-transform: uppercase;
+    color: var(--muted);
   }
   .cfg-field {
-    display: flex;
+    display: grid;
+    grid-template-columns: 1fr 220px;
+    gap: 18px;
     align-items: center;
-    padding: 14px 0;
-    border-bottom: 1px solid var(--border);
-    gap: 16px;
+    padding: 11px 0;
+    border-bottom: 1px solid var(--line);
   }
-  .cfg-section .cfg-field:last-child { border-bottom: none; }
-  .cfg-label {
-    flex: 1;
-    min-width: 0;
-  }
-  .cfg-label h3 {
-    margin: 0 0 3px;
-    font-size: 13.5px;
-    font-weight: 500;
+  .cfg-field.stacked { grid-template-columns: 1fr; }
+  .cfg-field.stacked .cfg-input { margin-top: 6px; }
+  .cfg-label .title { font-size: 14px; font-weight: 500; }
+  .cfg-label .desc { font-size: 12.5px; color: var(--muted); margin-top: 2px; }
+  .cfg-input input[type=text], .cfg-input input[type=number], .cfg-input select {
+    background: var(--bg);
+    border: 1px solid var(--line);
     color: var(--text);
+    padding: 6px 10px;
+    font-size: 14px;
+    font-family: inherit;
+    width: 100%;
   }
-  .cfg-label p {
-    margin: 0;
-    font-size: 12px;
-    color: var(--muted);
-    line-height: 1.45;
-  }
-  .cfg-input { flex: 0 0 auto; }
-  .cfg-input input[type="text"],
-  .cfg-input input[type="number"],
-  .cfg-input select {
-    background: var(--bg-2);
-    border: 1px solid var(--border);
-    color: var(--text);
-    padding: 7px 11px;
-    border-radius: 6px;
-    font-size: 13px;
-    min-width: 180px;
-    transition: border-color 0.15s, box-shadow 0.15s;
-  }
-  .cfg-input input:focus,
-  .cfg-input select:focus {
-    outline: none;
+  .cfg-input input:focus, .cfg-input select:focus {
+    outline: 1px solid var(--accent);
+    outline-offset: 0;
     border-color: var(--accent);
-    box-shadow: 0 0 0 3px var(--ring-accent);
   }
-
-  /* Custom toggle switch */
   .toggle {
-    position: relative;
-    display: inline-block;
-    width: 42px;
-    height: 24px;
+    position: relative; display: inline-block; width: 40px; height: 22px;
   }
   .toggle input { opacity: 0; width: 0; height: 0; }
   .toggle-slider {
-    position: absolute;
-    cursor: pointer;
-    inset: 0;
-    background: var(--bg-2);
-    border: 1px solid var(--border);
-    border-radius: 999px;
-    transition: background 0.2s;
+    position: absolute; cursor: pointer; inset: 0;
+    background: var(--bg-soft);
+    border: 1px solid var(--line);
+    transition: background 0.15s, border-color 0.15s;
   }
   .toggle-slider::before {
-    content: "";
-    position: absolute;
-    height: 16px;
-    width: 16px;
-    left: 3px;
-    top: 3px;
+    content: ""; position: absolute;
+    width: 14px; height: 14px;
+    left: 3px; top: 3px;
     background: var(--muted);
-    border-radius: 50%;
-    transition: transform 0.2s, background 0.2s;
+    transition: transform 0.15s, background 0.15s;
   }
-  .toggle input:checked + .toggle-slider {
-    background: linear-gradient(90deg, var(--accent), var(--accent-2));
-    border-color: transparent;
-  }
-  .toggle input:checked + .toggle-slider::before {
-    transform: translateX(18px);
-    background: white;
-  }
-
+  .toggle input:checked + .toggle-slider { background: var(--accent); border-color: var(--accent); }
+  .toggle input:checked + .toggle-slider::before { transform: translateX(18px); background: var(--bg); }
   textarea {
     width: 100%;
-    background: var(--bg-2);
-    border: 1px solid var(--border);
+    background: var(--bg);
+    border: 1px solid var(--line);
     color: var(--text);
-    padding: 10px 12px;
-    border-radius: 6px;
-    font-family: "JetBrains Mono", "SF Mono", Menlo, Consolas, monospace;
-    font-size: 12px;
+    padding: 8px 10px;
+    font-family: "JetBrains Mono", monospace;
+    font-size: 12.5px;
     min-height: 90px;
     resize: vertical;
-    transition: border-color 0.15s, box-shadow 0.15s;
   }
-  textarea:focus {
-    outline: none;
-    border-color: var(--accent);
-    box-shadow: 0 0 0 3px var(--ring-accent);
-  }
-  .cfg-field.stacked { display: block; }
-  .cfg-field.stacked .cfg-label { margin-bottom: 8px; }
-
+  textarea:focus { outline: 1px solid var(--accent); border-color: var(--accent); }
   .cfg-actions {
-    margin-top: 22px;
+    margin-top: 18px;
     display: flex;
-    gap: 10px;
+    gap: 8px;
     align-items: center;
-    padding: 14px 20px;
-    background: var(--surface);
-    border: 1px solid var(--border);
-    border-radius: var(--radius);
-    position: sticky;
-    bottom: 20px;
-    backdrop-filter: blur(8px);
-    box-shadow: var(--shadow-lg);
+    padding-top: 16px;
+    border-top: 1px solid var(--line);
   }
-  .btn-primary {
-    background: linear-gradient(135deg, var(--accent), var(--accent-2));
-    color: #ffffff;
-    border: none;
-    padding: 9px 20px;
-    border-radius: 8px;
-    font-weight: 600;
+  .btn {
+    background: var(--bg);
+    border: 1px solid var(--line);
+    color: var(--text);
+    padding: 6px 14px;
     font-size: 13px;
     cursor: pointer;
-    transition: transform 0.1s, box-shadow 0.15s;
-    box-shadow: 0 4px 12px var(--ring-accent);
+    font-family: inherit;
   }
-  .btn-primary:hover {
-    transform: translateY(-1px);
-    box-shadow: 0 6px 18px var(--ring-accent);
-  }
-  .btn-primary:active { transform: translateY(0); }
-
+  .btn:hover { background: var(--hover-bg); border-color: var(--line-strong); }
+  .btn.primary { background: var(--accent); border-color: var(--accent); color: white; }
+  .btn.primary:hover { background: var(--accent); opacity: 0.9; }
+  .btn.danger { color: var(--danger); border-color: var(--danger); }
+  .btn.danger:hover { background: var(--danger); color: white; }
   .save-msg {
     font-size: 13px;
     margin-left: auto;
-    opacity: 0;
-    transition: opacity 0.2s;
+    color: var(--muted);
   }
-  .save-msg.visible { opacity: 1; }
   .save-msg.ok { color: var(--success); }
   .save-msg.err { color: var(--danger); }
 
+  /* ── Empty state ─────────────────────────────────────────── */
+  .empty {
+    text-align: center;
+    padding: 60px 20px;
+    color: var(--muted);
+    border: 1px dashed var(--line);
+  }
+
+  /* ── Modal (confirm restore) ─────────────────────────────── */
+  .modal-backdrop {
+    position: fixed; inset: 0;
+    background: rgba(0,0,0,0.4);
+    display: none;
+    align-items: center;
+    justify-content: center;
+    z-index: 100;
+  }
+  .modal-backdrop.show { display: flex; }
+  .modal {
+    background: var(--bg);
+    border: 1px solid var(--line-strong);
+    width: min(520px, 90vw);
+    padding: 22px 26px;
+  }
+  .modal h3 {
+    margin: 0 0 6px;
+    font-size: 16px;
+    font-weight: 600;
+  }
+  .modal p { margin: 6px 0; color: var(--text-dim); font-size: 13.5px; line-height: 1.5; }
+  .modal .modal-actions {
+    margin-top: 20px;
+    display: flex;
+    gap: 8px;
+    justify-content: flex-end;
+  }
+  .toast {
+    position: fixed;
+    bottom: 24px;
+    right: 24px;
+    background: var(--bg);
+    border: 1px solid var(--line-strong);
+    border-left: 3px solid var(--accent);
+    padding: 12px 16px;
+    font-size: 13.5px;
+    color: var(--text);
+    max-width: 460px;
+    z-index: 110;
+    transform: translateY(20px);
+    opacity: 0;
+    transition: transform 0.18s, opacity 0.18s;
+  }
+  .toast.show { opacity: 1; transform: translateY(0); }
+  .toast.err { border-left-color: var(--danger); }
+  .toast.ok  { border-left-color: var(--success); }
+
   /* Scrollbar */
   ::-webkit-scrollbar { width: 10px; height: 10px; }
-  ::-webkit-scrollbar-track { background: var(--bg-0); }
-  ::-webkit-scrollbar-thumb {
-    background: var(--border-strong);
-    border-radius: 5px;
-    border: 2px solid var(--bg-0);
-  }
-  ::-webkit-scrollbar-thumb:hover { background: var(--accent); }
+  ::-webkit-scrollbar-track { background: var(--bg); }
+  ::-webkit-scrollbar-thumb { background: var(--line-strong); }
+  ::-webkit-scrollbar-thumb:hover { background: var(--muted); }
 </style>
 </head>
 <body>
 
-<header>
+<header class="masthead">
   <div class="brand">
-    <div class="brand-logo" aria-hidden="true"></div>
-    <h1>CHATS<span>-Sandbox</span></h1>
+    <span class="sigil">∎</span>
+    CHATS-Sandbox
+    <small>action timeline + restore</small>
   </div>
-  <div class="status-pills" id="status-pills">
-    <span class="pill"><span class="pill-dot"></span>loading…</span>
-  </div>
-  <button id="theme-toggle" class="theme-btn" title="Toggle light / dark theme" aria-label="Toggle theme">
-    <span class="theme-icon" id="theme-icon">☀</span>
-  </button>
+  <nav>
+    <button id="tab-timeline" class="active">Timeline</button>
+    <button id="tab-config">Config</button>
+    <button id="refresh" class="icon-btn" style="margin-left: 14px;">↻ Refresh</button>
+    <button id="theme-toggle" class="icon-btn" title="Toggle theme">☼</button>
+  </nav>
 </header>
 
-<nav>
-  <button id="tab-timeline" class="tab active">Timeline</button>
-  <button id="tab-config" class="tab">Config</button>
-  <div class="nav-right">
-    <button id="refresh" class="btn-ghost">↻ Refresh</button>
-  </div>
-</nav>
-
 <main>
+  <!-- ── Timeline panel ──────────────────────────────────────── -->
   <div id="panel-timeline" class="panel active">
-    <div class="timeline-head">
-      <h2>Action history</h2>
-      <div class="count" id="action-count"></div>
-      <div class="view-toggle" role="tablist" aria-label="Card density">
-        <button id="view-concise" class="active" role="tab" aria-selected="true">Concise</button>
-        <button id="view-detail" role="tab" aria-selected="false">Detail</button>
-      </div>
+    <div class="section-head">
+      <span class="num">00</span>
+      <h2>Status</h2>
+      <span class="meta" id="status-meta">loading…</span>
     </div>
-    <div id="action-list-wrap">
-      <div id="action-list" class="empty">
-        <span class="empty-icon">◌</span>
-        Loading…
-      </div>
+    <div class="status-grid" id="status-grid"></div>
+
+    <div class="section-head">
+      <span class="num">01</span>
+      <h2>Actions</h2>
+      <span class="meta" id="action-count"></span>
+    </div>
+    <div class="action-list" id="action-list">
+      <div class="empty">Loading…</div>
     </div>
   </div>
 
+  <!-- ── Config panel ────────────────────────────────────────── -->
   <div id="panel-config" class="panel">
+    <div class="section-head">
+      <span class="num">00</span>
+      <h2>Configuration</h2>
+      <span class="meta">edit and save</span>
+    </div>
     <div id="cfg-form"></div>
     <div class="cfg-actions">
-      <button class="btn-primary" id="save-btn">Save changes</button>
-      <button class="btn-ghost" id="reload-btn">Discard</button>
+      <button class="btn primary" id="save-btn">Save changes</button>
+      <button class="btn" id="reload-btn">Discard</button>
       <span class="save-msg" id="save-msg"></span>
     </div>
   </div>
 </main>
 
+<!-- Restore confirmation modal -->
+<div class="modal-backdrop" id="modal-restore">
+  <div class="modal">
+    <h3 id="modal-title">Restore action</h3>
+    <p id="modal-desc"></p>
+    <p style="font-size:12.5px; color:var(--muted);">
+      <strong>Reverse-loop</strong> walks back through every intermediate action,
+      undoing each in turn — safer but slower.<br>
+      <strong>Direct jump</strong> applies just this action's snapshot — fast, but
+      only covers what this action backed up.
+    </p>
+    <div class="modal-actions">
+      <button class="btn" id="modal-cancel">Cancel</button>
+      <button class="btn" id="modal-direct">Direct jump</button>
+      <button class="btn primary" id="modal-loop">Reverse-loop</button>
+    </div>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+
 <script>
 "use strict";
-
 const $ = (id) => document.getElementById(id);
 
-let currentConfig = null;
-
-// ── View-mode (concise vs detail) ────────────────────────────
-// Persisted in localStorage; default = concise.
-let viewMode = "concise";
-try {
-  const saved = localStorage.getItem("chats-sandbox-view");
-  if (saved === "detail" || saved === "concise") viewMode = saved;
-} catch { /* private mode */ }
-
-function applyViewMode(mode) {
-  viewMode = mode;
-  try { localStorage.setItem("chats-sandbox-view", mode); } catch { /* */ }
-  const cBtn = document.getElementById("view-concise");
-  const dBtn = document.getElementById("view-detail");
-  if (cBtn) { cBtn.classList.toggle("active", mode === "concise"); cBtn.setAttribute("aria-selected", mode === "concise"); }
-  if (dBtn) { dBtn.classList.toggle("active", mode === "detail"); dBtn.setAttribute("aria-selected", mode === "detail"); }
-  // Re-render the timeline if it's already populated.
-  if (typeof loadActions === "function") loadActions();
+// ── Theme ───────────────────────────────────────────────
+function applyTheme(mode) {
+  document.documentElement.setAttribute("data-theme", mode);
+  try { localStorage.setItem("chats-sandbox-theme", mode); } catch {}
+  const btn = $("theme-toggle");
+  if (btn) btn.textContent = mode === "dark" ? "☾" : "☼";
 }
-
-// ── Theme ────────────────────────────────────────────────────
-// Default = light. Persist user choice in localStorage.
-function applyTheme(theme) {
-  document.documentElement.setAttribute("data-theme", theme);
-  const icon = document.getElementById("theme-icon");
-  if (icon) icon.textContent = theme === "dark" ? "☾" : "☀";
-  try { localStorage.setItem("chats-sandbox-theme", theme); } catch { /* private mode */ }
-}
-(function initTheme() {
+(function init() {
   let saved = "light";
-  try { saved = localStorage.getItem("chats-sandbox-theme") || "light"; } catch { /* */ }
-  applyTheme(saved === "dark" ? "dark" : "light");
+  try { saved = localStorage.getItem("chats-sandbox-theme") || "light"; } catch {}
+  applyTheme(saved);
 })();
-document.getElementById("theme-toggle").addEventListener("click", () => {
+$("theme-toggle").onclick = () => {
   const cur = document.documentElement.getAttribute("data-theme") === "dark" ? "dark" : "light";
   applyTheme(cur === "dark" ? "light" : "dark");
-});
+};
 
-// ── Tabs ─────────────────────────────────────────────────────
+// ── Tabs ────────────────────────────────────────────────
 function switchTab(name) {
   for (const id of ["timeline", "config"]) {
     $("tab-" + id).classList.toggle("active", id === name);
@@ -849,435 +581,364 @@ function switchTab(name) {
   }
 }
 $("tab-timeline").onclick = () => switchTab("timeline");
-$("tab-config").onclick = () => switchTab("config");
-$("refresh").onclick = refreshAll;
-$("view-concise").onclick = () => applyViewMode("concise");
-$("view-detail").onclick = () => applyViewMode("detail");
-// Sync the toggle's DOM state with the persisted value — without
-// re-triggering loadActions (the existing boot sequence at the bottom
-// already calls it once).
-{
-  const cBtn = $("view-concise");
-  const dBtn = $("view-detail");
-  cBtn.classList.toggle("active", viewMode === "concise");
-  dBtn.classList.toggle("active", viewMode === "detail");
-  cBtn.setAttribute("aria-selected", String(viewMode === "concise"));
-  dBtn.setAttribute("aria-selected", String(viewMode === "detail"));
+$("tab-config").onclick   = () => switchTab("config");
+$("refresh").onclick      = refreshAll;
+
+// ── Status ──────────────────────────────────────────────
+async function loadStatus() {
+  try {
+    const s = await (await fetch("/api/status")).json();
+    const cells = [];
+    cells.push(["Enabled", `<span class="badge ${s.enabled ? "on" : "off"}">${s.enabled ? "yes" : "no"}</span>`]);
+    cells.push(["Mode", `<code class="mono">${escapeHtml(s.backupMode)}</code>`]);
+    cells.push(["Actions", `<span class="value"><span class="accent">${s.actionCount}</span>${s.maxActions > 0 ? ` / ${s.maxActions}` : ""}</span>`]);
+    cells.push(["Disk used", `<span class="num">${formatBytes(s.totalSizeBytes || 0)}</span>${s.maxTotalSizeMB > 0 ? ` <span class="value dim">/ ${s.maxTotalSizeMB} MB</span>` : ""}`]);
+    if (s.maxAgeHours > 0) cells.push(["Max age", `<span class="num">${s.maxAgeHours}h</span>`]);
+    cells.push(["Subagent", s.subagentEnabled
+      ? `<span class="value"><code class="mono">${escapeHtml(s.subagentModel)}</code></span>`
+      : `<span class="badge off">off</span>`]);
+
+    $("status-grid").innerHTML = cells.map(([k, v]) =>
+      `<div class="status-cell"><span class="label">${escapeHtml(k)}</span><div class="value">${v}</div></div>`
+    ).join("");
+    $("status-meta").textContent = `${s.actionCount} action${s.actionCount === 1 ? "" : "s"} recorded`;
+  } catch (e) {
+    $("status-grid").innerHTML = `<div class="status-cell">error loading status</div>`;
+  }
 }
 
-// ── Timeline ─────────────────────────────────────────────────
-async function loadActions() {
-  const res = await fetch("/api/actions");
-  const data = await res.json();
-  const wrap = $("action-list-wrap");
-  const countEl = $("action-count");
+// ── Action list ─────────────────────────────────────────
+let currentActions = [];
 
-  if (!data.actions.length) {
-    wrap.innerHTML = '<div class="empty"><span class="empty-icon">◌</span>No actions yet — use Claude Code to trigger one.</div>';
-    countEl.textContent = "";
+async function loadActions() {
+  try {
+    const d = await (await fetch("/api/actions")).json();
+    currentActions = d.actions || [];
+  } catch (e) {
+    currentActions = [];
+  }
+  renderActions();
+}
+
+function renderActions() {
+  const list = $("action-list");
+  if (!currentActions.length) {
+    list.innerHTML = `<div class="empty">No actions yet — use Claude Code to trigger one.</div>`;
+    $("action-count").textContent = "";
     return;
   }
+  $("action-count").textContent = `${currentActions.length} action${currentActions.length === 1 ? "" : "s"}`;
+  const sorted = [...currentActions].sort((a, b) => b.seq - a.seq);
+  list.innerHTML = sorted.map(renderAction).join("");
 
-  countEl.textContent = `${data.actions.length} action${data.actions.length === 1 ? "" : "s"}`;
-
-  // Newest first
-  const sorted = [...data.actions].sort((a, b) => b.seq - a.seq);
-
-  const list = document.createElement("div");
-  list.className = "timeline";
-  for (const a of sorted) {
-    list.appendChild(renderAction(a));
+  // Wire row clicks
+  for (const row of list.querySelectorAll(".action")) {
+    row.addEventListener("click", (ev) => {
+      if (ev.target.closest("button")) return; // ignore button clicks
+      const seq = row.dataset.seq;
+      const wasExpanded = row.classList.contains("expanded");
+      // Collapse siblings, toggle this one
+      for (const r of list.querySelectorAll(".action.expanded")) r.classList.remove("expanded");
+      if (!wasExpanded) {
+        row.classList.add("expanded");
+        loadDiffInto(row, seq);
+      }
+    });
   }
-  wrap.innerHTML = "";
-  wrap.appendChild(list);
-}
-
-function actionClass(strategies) {
-  if (strategies.includes("subagent")) return "action subagent";
-  if (strategies.some((s) => ["pip_freeze", "npm_list", "env_snapshot", "git_tag"].includes(s))) {
-    return "action targeted";
+  // Wire button clicks
+  for (const btn of list.querySelectorAll(".btn-restore")) {
+    btn.addEventListener("click", (ev) => {
+      ev.stopPropagation();
+      openRestoreModal(parseInt(btn.dataset.seq, 10));
+    });
   }
-  return "action";
 }
 
 function renderAction(a) {
-  return viewMode === "concise" ? renderActionConcise(a) : renderActionDetail(a);
+  const strats = (a.strategies || [])
+    .map((s) => `<span class="strat ${escapeAttr(s)}">${escapeHtml(s)}</span>`).join("");
+  const toolBadge = a.toolName ? `<span class="tool">${escapeHtml(a.toolName)}</span>` : "";
+  const instr = a.instruction
+    ? `<div class="instr">${escapeHtml(truncate(a.instruction, 200))}</div>`
+    : `<div class="instr empty">(no instruction recorded)</div>`;
+  const size = typeof a.sizeBytes === "number" ? `<span class="size">${formatBytes(a.sizeBytes)}</span>` : "";
+
+  return `<div class="action" data-seq="${a.seq}">
+    <div class="seq">#${String(a.seq).padStart(3, "0")}</div>
+    <div class="time">${escapeHtml(formatShortTime(a.timeFormatted))}</div>
+    <div class="body">
+      ${instr}
+      <div class="tags">${toolBadge}${strats}</div>
+    </div>
+    <div class="controls">
+      ${size}
+      <button class="btn btn-restore" data-seq="${a.seq}">Restore</button>
+    </div>
+    <div class="detail" id="detail-${a.seq}">
+      <h4>Loading…</h4>
+    </div>
+  </div>`;
 }
 
-function renderActionConcise(a) {
-  const el = document.createElement("div");
-  el.className = actionClass(a.strategies || []) + " concise";
+async function loadDiffInto(row, seq) {
+  const detail = row.querySelector(".detail");
+  detail.innerHTML = `<h4>Loading diff…</h4>`;
+  const a = currentActions.find((x) => x.seq === parseInt(seq, 10));
+  if (!a) return;
+  try {
+    const d = await (await fetch(`/api/actions/${seq}/diff`)).json();
+    const blocks = [];
 
-  // Row 1: #seq · time · tool · badges · age
-  const row1 = document.createElement("div");
-  row1.className = "action-c-row1";
-  row1.innerHTML =
-    `<span class="action-seq">#${a.seq}</span>` +
-    `<span class="action-c-time">${escapeHtml(a.timeFormatted)}</span>`;
-  if (a.toolName) {
-    const tool = document.createElement("span");
-    tool.className = "action-c-tool";
-    tool.textContent = a.toolName;
-    row1.appendChild(tool);
-  }
-  if (a.strategies && a.strategies.length) {
-    const badges = document.createElement("div");
-    badges.className = "action-c-badges";
-    for (const strat of a.strategies) {
-      const b = document.createElement("span");
-      b.className = "strategy-badge " + strat;
-      b.textContent = strat;
-      badges.appendChild(b);
+    if (a.originalAction) {
+      blocks.push(`<h4>Original action</h4><div class="kv">${escapeHtml(a.originalAction)}</div>`);
     }
-    row1.appendChild(badges);
+    if (a.subagent) {
+      blocks.push(`<h4>Subagent</h4><div class="kv">${escapeHtml(a.subagent.description || "")}` +
+        ` <span style="color:var(--muted)">— ${a.subagent.externalShadowFileCount || 0} file(s), ` +
+        `${a.subagent.recoveryCommandCount || 0} recovery cmd(s)${a.subagent.liveRestore ? ", live-restore" : ""}</span></div>`);
+    }
+    if (a.files && a.files.length) {
+      const shown = a.files.slice(0, 8);
+      const extra = a.files.length - shown.length;
+      blocks.push(`<h4>Workspace files</h4><div class="file-list">` +
+        shown.map((f) => `<code>${escapeHtml(f)}</code>`).join(", ") +
+        (extra > 0 ? ` <span style="color:var(--muted)">+${extra} more</span>` : "") +
+        `</div>`);
+    }
+    if (a.stats) {
+      blocks.push(`<h4>Stats</h4><div class="kv">${escapeHtml(a.stats)}</div>`);
+    }
+    if (d.diff) {
+      blocks.push(`<h4>Diff vs current</h4><pre>${colorizeDiff(d.diff)}</pre>`);
+    } else if (d.note) {
+      blocks.push(`<h4>Diff</h4><div class="kv">${escapeHtml(d.note)}</div>`);
+    }
+
+    blocks.push(`<div class="actions-bar">
+      <button class="btn primary btn-restore" data-seq="${a.seq}">Restore to this state</button>
+    </div>`);
+
+    detail.innerHTML = blocks.join("");
+    // Rewire the new restore button
+    detail.querySelector(".btn-restore").addEventListener("click", (ev) => {
+      ev.stopPropagation();
+      openRestoreModal(a.seq);
+    });
+  } catch (e) {
+    detail.innerHTML = `<div class="kv">error loading diff: ${escapeHtml(String(e))}</div>`;
+  }
+}
+
+function colorizeDiff(diff) {
+  return escapeHtml(diff).split("\n").map((line) => {
+    if (line.startsWith("+++") || line.startsWith("---")) return `<span class="diff-hdr">${line}</span>`;
+    if (line.startsWith("@@")) return `<span class="diff-hdr">${line}</span>`;
+    if (line.startsWith("+")) return `<span class="diff-add">${line}</span>`;
+    if (line.startsWith("-")) return `<span class="diff-del">${line}</span>`;
+    return line;
+  }).join("\n");
+}
+
+// ── Restore modal ────────────────────────────────────────
+let restoreSeq = null;
+function openRestoreModal(seq) {
+  restoreSeq = seq;
+  const a = currentActions.find((x) => x.seq === seq);
+  $("modal-title").textContent = `Restore action #${String(seq).padStart(3, "0")}`;
+  $("modal-desc").textContent = a && a.instruction
+    ? `Pre-state of: "${truncate(a.instruction, 140)}"`
+    : `Pre-state of action #${seq}.`;
+  $("modal-restore").classList.add("show");
+}
+function closeRestoreModal() {
+  $("modal-restore").classList.remove("show");
+  restoreSeq = null;
+}
+$("modal-cancel").onclick = closeRestoreModal;
+$("modal-restore").addEventListener("click", (ev) => {
+  if (ev.target === $("modal-restore")) closeRestoreModal();
+});
+$("modal-direct").onclick = () => doRestore("direct");
+$("modal-loop").onclick   = () => doRestore("loop");
+
+async function doRestore(mode) {
+  if (restoreSeq === null) return;
+  const seq = restoreSeq;
+  closeRestoreModal();
+  toast(`Restoring action #${seq} (${mode})…`);
+  try {
+    const r = await fetch(`/api/restore/${seq}`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ mode }),
+    });
+    const d = await r.json();
+    if (r.ok) {
+      const okCount = (d.results || []).filter((x) => x.success).length;
+      const total   = (d.results || []).length;
+      toast(`Restore #${seq} done — ${okCount}/${total} steps succeeded.`, "ok");
+      await refreshAll();
+    } else {
+      toast(`Restore failed: ${d.error || r.status}`, "err");
+    }
+  } catch (e) {
+    toast(`Restore failed: ${e}`, "err");
+  }
+}
+
+// ── Config form (carried over from previous version, minor restyle) ──
+const CONFIG_SECTIONS = [
+  { title: "Core", fields: [
+    { key: "enabled", type: "bool", title: "Enabled", desc: "Master switch for the sandbox." },
+    { key: "backupMode", type: "select", title: "Backup mode", desc: "smart = rules + precaution, always = every tool call, off = disabled.", options: ["smart", "always", "off"] },
+    { key: "verbose", type: "bool", title: "Verbose", desc: "Print extra diagnostic messages." },
+    { key: "effectManifest", type: "bool", title: "Effect manifest", desc: "Write a JSONL log of every tool call's effects." },
+  ]},
+  { title: "Retention", fields: [
+    { key: "maxActions", type: "number", title: "Max action count", desc: "Keep at most this many action folders. 0 = no count cap." },
+    { key: "maxTotalSizeMB", type: "number", title: "Max total size (MB)", desc: "Cap the combined size of action folders. 0 = disabled." },
+    { key: "maxAgeHours", type: "number", title: "Max age (hours)", desc: "Drop folders older than this. 0 = disabled." },
+  ]},
+  { title: "Subagent (tier-3 backup)", fields: [
+    { key: "subagentEnabled", type: "bool", title: "Enabled", desc: "Spawn claude -p for out-of-workspace / remote backups." },
+    { key: "subagentModel", type: "select", title: "Model", desc: "Which Claude model the backup subagent runs as.", options: ["haiku", "sonnet", "opus", "inherit"] },
+    { key: "subagentPermissionMode", type: "select", title: "Permission mode", desc: "bypassPermissions = full freedom · acceptEdits = filesystem only.", options: ["bypassPermissions", "acceptEdits"] },
+    { key: "subagentTimeoutSeconds", type: "number", title: "Timeout (seconds)", desc: "Max time to wait for the subagent to finish." },
+  ]},
+  { title: "Rules", fields: [
+    { key: "denyPatterns", type: "textarea", title: "Deny patterns", desc: "Regex patterns (one per line) that block tool calls." },
+    { key: "alwaysBackupPatterns", type: "textarea", title: "Always-backup patterns", desc: "Regex patterns (one per line) that always trigger backup." },
+  ]},
+];
+
+let currentConfig = null;
+async function loadConfig() {
+  currentConfig = await (await fetch("/api/config")).json();
+  renderConfigForm();
+}
+function renderConfigForm() {
+  const c = $("cfg-form");
+  c.innerHTML = "";
+  for (const s of CONFIG_SECTIONS) {
+    const sec = document.createElement("div");
+    sec.className = "cfg-section";
+    const h = document.createElement("h3");
+    h.textContent = s.title;
+    sec.appendChild(h);
+    for (const f of s.fields) sec.appendChild(renderField(f, currentConfig[f.key]));
+    c.appendChild(sec);
+  }
+}
+function renderField(field, value) {
+  const row = document.createElement("div");
+  row.className = "cfg-field" + (field.type === "textarea" ? " stacked" : "");
+  const label = document.createElement("div");
+  label.className = "cfg-label";
+  label.innerHTML = `<div class="title">${escapeHtml(field.title)}</div><div class="desc">${escapeHtml(field.desc)}</div>`;
+  row.appendChild(label);
+  const inputWrap = document.createElement("div");
+  inputWrap.className = "cfg-input";
+  let input;
+  if (field.type === "bool") {
+    const wrap = document.createElement("label");
+    wrap.className = "toggle";
+    input = document.createElement("input"); input.type = "checkbox"; input.checked = !!value;
+    const sl = document.createElement("span"); sl.className = "toggle-slider";
+    wrap.appendChild(input); wrap.appendChild(sl);
+    inputWrap.appendChild(wrap);
+  } else if (field.type === "number") {
+    input = document.createElement("input"); input.type = "number"; input.value = value ?? 0; input.min = 0;
+    inputWrap.appendChild(input);
+  } else if (field.type === "select") {
+    input = document.createElement("select");
+    for (const opt of field.options) {
+      const o = document.createElement("option"); o.value = opt; o.textContent = opt;
+      if (opt === value) o.selected = true;
+      input.appendChild(o);
+    }
+    inputWrap.appendChild(input);
+  } else if (field.type === "textarea") {
+    input = document.createElement("textarea");
+    input.value = Array.isArray(value) ? value.join("\n") : (value ?? "");
   } else {
-    row1.innerHTML += `<span class="action-c-badges"></span>`;
+    input = document.createElement("input"); input.type = "text"; input.value = value ?? "";
+    inputWrap.appendChild(input);
   }
-  if (typeof a.ageMs === "number" && a.ageMs > 0) {
-    const age = document.createElement("span");
-    age.className = "action-c-age";
-    age.textContent = formatAge(a.ageMs);
-    row1.appendChild(age);
-  }
-  el.appendChild(row1);
-
-  // Row 2: instruction (single-line ellipsis)
-  if (a.instruction) {
-    const i = document.createElement("div");
-    i.className = "action-c-instruction";
-    i.textContent = a.instruction;
-    i.title = a.instruction;
-    el.appendChild(i);
-  }
-
-  return el;
+  input.dataset.key = field.key; input.dataset.type = field.type;
+  if (field.type === "textarea") row.appendChild(input);
+  else row.appendChild(inputWrap);
+  return row;
 }
-
-function renderActionDetail(a) {
-  const el = document.createElement("div");
-  el.className = actionClass(a.strategies || []);
-
-  const head = document.createElement("div");
-  head.className = "action-head";
-  head.innerHTML = `<span class="action-seq">#${a.seq}</span><span class="action-time">${escapeHtml(a.timeFormatted)}</span>`;
-  el.appendChild(head);
-
-  if (a.instruction) {
-    const i = document.createElement("div");
-    i.className = "action-instruction";
-    i.textContent = a.instruction;
-    el.appendChild(i);
+async function saveConfig() {
+  const updates = {};
+  for (const el of $("cfg-form").querySelectorAll("[data-key]")) {
+    const key = el.dataset.key, type = el.dataset.type;
+    if (type === "bool") updates[key] = el.checked;
+    else if (type === "number") updates[key] = parseInt(el.value, 10);
+    else if (type === "textarea") updates[key] = el.value.split("\n").map((x) => x.trim()).filter(Boolean);
+    else updates[key] = el.value;
   }
-
-  if (a.toolName || a.originalAction) {
-    const t = document.createElement("div");
-    t.className = "action-tool";
-    const toolPart = a.toolName ? `<strong>${escapeHtml(a.toolName)}</strong>` : "";
-    const actionPart = a.originalAction ? escapeHtml(truncate(a.originalAction, 160)) : "";
-    t.innerHTML = toolPart + (toolPart && actionPart ? " — " : "") + actionPart;
-    el.appendChild(t);
-  }
-
-  if (a.strategies && a.strategies.length) {
-    const s = document.createElement("div");
-    s.className = "action-strategies";
-    for (const strat of a.strategies) {
-      const b = document.createElement("span");
-      b.className = "strategy-badge " + strat;
-      b.textContent = strat;
-      s.appendChild(b);
+  const msg = $("save-msg");
+  msg.className = "save-msg"; msg.textContent = "Saving…";
+  try {
+    const r = await fetch("/api/config", {
+      method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify(updates),
+    });
+    const body = await r.json();
+    if (r.ok) {
+      currentConfig = body.config;
+      msg.className = "save-msg ok"; msg.textContent = "✓ Saved";
+      loadStatus();
+      setTimeout(() => { msg.textContent = ""; msg.className = "save-msg"; }, 2200);
+    } else {
+      msg.className = "save-msg err"; msg.textContent = body.error || `Error ${r.status}`;
     }
-    el.appendChild(s);
+  } catch (e) {
+    msg.className = "save-msg err"; msg.textContent = String(e);
   }
+}
+$("save-btn").onclick = saveConfig;
+$("reload-btn").onclick = () => { loadConfig(); $("save-msg").textContent = ""; };
 
-  // Subagent summary — shown BEFORE the workspace git_snapshot details,
-  // because when a subagent fired it's usually the more interesting backup
-  // (the workspace snapshot is often just the baseline tree, not the real
-  // change, which lives in the external project).
-  if (a.subagent) {
-    const s = document.createElement("div");
-    s.className = "action-subagent";
-    const parts = [`<span class="action-subagent-label">subagent →</span> ${escapeHtml(a.subagent.description || "out-of-workspace backup")}`];
-    const meta = [];
-    if (a.subagent.externalShadowFileCount > 0) meta.push(`${a.subagent.externalShadowFileCount} files snapshotted`);
-    if (a.subagent.recoveryCommandCount > 0) meta.push(`${a.subagent.recoveryCommandCount} recovery cmds`);
-    if (a.subagent.liveRestore) meta.push(`<span class="action-subagent-live">live-restore</span>`);
-    if (meta.length) parts.push(`<span class="action-subagent-meta">${meta.join(" · ")}</span>`);
-    s.innerHTML = parts.join("<br>");
-    el.appendChild(s);
-  }
-
-  if (a.files && a.files.length) {
-    const f = document.createElement("div");
-    f.className = "action-files";
-    const labelText = a.subagent ? "workspace files" : "files";
-    const shown = a.files.slice(0, 5);
-    const extra = a.files.length - shown.length;
-    f.innerHTML = `<span class="action-files-label">${labelText}</span>` +
-      escapeHtml(shown.join(", ")) +
-      (extra > 0 ? ` <span class="action-files-label">+${extra} more</span>` : "");
-    el.appendChild(f);
-  }
-
-  if (a.stats) {
-    const s = document.createElement("div");
-    s.className = "action-stats";
-    // When a subagent also fired, prefix the workspace stats so it's
-    // clear this refers to the project snapshot (not the external one).
-    s.textContent = a.subagent ? `workspace: ${a.stats}` : a.stats;
-    el.appendChild(s);
-  }
-
-  // Size + age (footer-ish line)
-  const meta = document.createElement("div");
-  meta.className = "action-meta";
-  const parts = [];
-  if (typeof a.sizeBytes === "number") parts.push(`<span class="action-meta-label">size</span> ${formatBytes(a.sizeBytes)}`);
-  if (typeof a.ageMs === "number" && a.ageMs > 0) parts.push(`<span class="action-meta-label">age</span> ${formatAge(a.ageMs)}`);
-  if (parts.length) {
-    meta.innerHTML = parts.join(" · ");
-    el.appendChild(meta);
-  }
-
-  return el;
+// ── Refresh + toast ─────────────────────────────────────
+async function refreshAll() {
+  const btn = $("refresh"); btn.disabled = true;
+  const orig = btn.textContent; btn.textContent = "↻ …";
+  await Promise.all([loadStatus(), loadActions()]);
+  btn.textContent = orig; btn.disabled = false;
 }
 
+let toastTimer = null;
+function toast(msg, kind) {
+  const t = $("toast");
+  t.className = "toast" + (kind ? " " + kind : "") + " show";
+  t.textContent = msg;
+  if (toastTimer) clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => { t.classList.remove("show"); }, 3500);
+}
+
+// ── Utils ───────────────────────────────────────────────
+function escapeHtml(s) {
+  return String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
+}
+function escapeAttr(s) { return escapeHtml(s).replace(/\s/g, "-"); }
+function truncate(s, n) { s = String(s); return s.length > n ? s.slice(0, n) + "…" : s; }
 function formatBytes(n) {
+  if (!n) return "0 B";
   if (n < 1024) return n + " B";
   if (n < 1024 * 1024) return (n / 1024).toFixed(1) + " KB";
   if (n < 1024 * 1024 * 1024) return (n / (1024 * 1024)).toFixed(2) + " MB";
   return (n / (1024 * 1024 * 1024)).toFixed(2) + " GB";
 }
-
-function formatAge(ms) {
-  const s = Math.floor(ms / 1000);
-  if (s < 60) return s + "s ago";
-  const m = Math.floor(s / 60);
-  if (m < 60) return m + "m ago";
-  const h = Math.floor(m / 60);
-  if (h < 24) return h + "h ago";
-  const d = Math.floor(h / 24);
-  return d + "d ago";
+function formatShortTime(s) {
+  // Input format: "2026-05-13 13:32" — show date and time on two lines
+  if (!s) return "";
+  const parts = s.split(" ");
+  return parts.length === 2 ? `${parts[1]}\n${parts[0]}` : s;
 }
 
-// ── Config form ──────────────────────────────────────────────
-const CONFIG_SECTIONS = [
-  {
-    title: "Core",
-    fields: [
-      { key: "enabled", type: "bool", title: "Enabled", desc: "Master switch for the sandbox." },
-      { key: "backupMode", type: "select", title: "Backup mode", desc: "smart = rules + precaution, always = every tool call, off = disabled.", options: ["smart", "always", "off"] },
-      { key: "verbose", type: "bool", title: "Verbose", desc: "Print extra diagnostic messages." },
-      { key: "effectManifest", type: "bool", title: "Effect manifest", desc: "Write a JSONL log of every tool call's effects." },
-    ],
-  },
-  {
-    title: "Retention",
-    fields: [
-      { key: "maxActions", type: "number", title: "Max action count", desc: "Keep at most this many action folders. 0 = no count cap." },
-      { key: "maxTotalSizeMB", type: "number", title: "Max total size (MB)", desc: "Cap the combined size of action folders. Oldest pruned first. 0 = disabled." },
-      { key: "maxAgeHours", type: "number", title: "Max age (hours)", desc: "Drop action folders older than this. 0 = disabled." },
-    ],
-  },
-  {
-    title: "Subagent (tier-3 backup)",
-    fields: [
-      { key: "subagentEnabled", type: "bool", title: "Enabled", desc: "Use claude -p to back up out-of-workspace effects." },
-      { key: "subagentModel", type: "select", title: "Model", desc: "Which Claude model the backup subagent runs as.", options: ["haiku", "sonnet", "opus", "inherit"] },
-      { key: "subagentPermissionMode", type: "select", title: "Permission mode", desc: "bypassPermissions = full freedom · acceptEdits = filesystem only.", options: ["bypassPermissions", "acceptEdits"] },
-      { key: "subagentTimeoutSeconds", type: "number", title: "Timeout (seconds)", desc: "Max time to wait for the subagent to finish." },
-    ],
-  },
-  {
-    title: "Rules",
-    fields: [
-      { key: "denyPatterns", type: "textarea", title: "Deny patterns", desc: "Regex patterns (one per line) that block tool calls entirely." },
-      { key: "alwaysBackupPatterns", type: "textarea", title: "Always-backup patterns", desc: "Regex patterns (one per line) that always trigger a backup." },
-    ],
-  },
-];
-
-async function loadConfig() {
-  const res = await fetch("/api/config");
-  currentConfig = await res.json();
-  renderConfigForm();
-}
-
-function renderConfigForm() {
-  const container = $("cfg-form");
-  container.innerHTML = "";
-  for (const section of CONFIG_SECTIONS) {
-    const sec = document.createElement("div");
-    sec.className = "cfg-section";
-    const h = document.createElement("h2");
-    h.textContent = section.title;
-    sec.appendChild(h);
-    for (const field of section.fields) {
-      sec.appendChild(renderField(field, currentConfig[field.key]));
-    }
-    container.appendChild(sec);
-  }
-}
-
-function renderField(field, value) {
-  const row = document.createElement("div");
-  row.className = "cfg-field" + (field.type === "textarea" ? " stacked" : "");
-
-  const labelDiv = document.createElement("div");
-  labelDiv.className = "cfg-label";
-  labelDiv.innerHTML = `<h3>${escapeHtml(field.title)}</h3><p>${escapeHtml(field.desc)}</p>`;
-  row.appendChild(labelDiv);
-
-  const inputDiv = document.createElement("div");
-  inputDiv.className = "cfg-input";
-
-  let input;
-  if (field.type === "bool") {
-    const wrap = document.createElement("label");
-    wrap.className = "toggle";
-    input = document.createElement("input");
-    input.type = "checkbox";
-    input.checked = !!value;
-    const slider = document.createElement("span");
-    slider.className = "toggle-slider";
-    wrap.appendChild(input);
-    wrap.appendChild(slider);
-    inputDiv.appendChild(wrap);
-  } else if (field.type === "number") {
-    input = document.createElement("input");
-    input.type = "number";
-    input.value = value ?? 0;
-    input.min = 1;
-    inputDiv.appendChild(input);
-  } else if (field.type === "select") {
-    input = document.createElement("select");
-    for (const opt of field.options) {
-      const o = document.createElement("option");
-      o.value = opt;
-      o.textContent = opt;
-      if (opt === value) o.selected = true;
-      input.appendChild(o);
-    }
-    inputDiv.appendChild(input);
-  } else if (field.type === "textarea") {
-    input = document.createElement("textarea");
-    input.value = Array.isArray(value) ? value.join("\n") : (value ?? "");
-  } else {
-    input = document.createElement("input");
-    input.type = "text";
-    input.value = value ?? "";
-    inputDiv.appendChild(input);
-  }
-
-  input.dataset.key = field.key;
-  input.dataset.type = field.type;
-
-  if (field.type === "textarea") {
-    const wrap = document.createElement("div");
-    wrap.style.marginTop = "4px";
-    wrap.appendChild(input);
-    row.appendChild(wrap);
-  } else {
-    row.appendChild(inputDiv);
-  }
-  return row;
-}
-
-async function saveConfig() {
-  const updates = {};
-  const inputs = $("cfg-form").querySelectorAll("[data-key]");
-  for (const el of inputs) {
-    const key = el.dataset.key;
-    const type = el.dataset.type;
-    if (type === "bool") {
-      updates[key] = el.checked;
-    } else if (type === "number") {
-      updates[key] = parseInt(el.value, 10);
-    } else if (type === "textarea") {
-      updates[key] = el.value.split("\n").map((s) => s.trim()).filter(Boolean);
-    } else {
-      updates[key] = el.value;
-    }
-  }
-
-  const msg = $("save-msg");
-  msg.className = "save-msg visible";
-  msg.textContent = "Saving…";
-
-  try {
-    const res = await fetch("/api/config", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify(updates),
-    });
-    const body = await res.json();
-    if (res.ok) {
-      currentConfig = body.config;
-      msg.className = "save-msg visible ok";
-      msg.textContent = "✓ Saved";
-      loadStatus();
-      setTimeout(() => { msg.className = "save-msg"; }, 2000);
-    } else {
-      msg.className = "save-msg visible err";
-      msg.textContent = body.error || `Error ${res.status}`;
-    }
-  } catch (e) {
-    msg.className = "save-msg visible err";
-    msg.textContent = String(e);
-  }
-}
-
-$("save-btn").onclick = saveConfig;
-$("reload-btn").onclick = () => { loadConfig(); const m = $("save-msg"); m.className = "save-msg"; };
-
-// ── Status pills ─────────────────────────────────────────────
-async function loadStatus() {
-  const pills = $("status-pills");
-  try {
-    const res = await fetch("/api/status");
-    const s = await res.json();
-    const parts = [];
-    parts.push(`<span class="pill ${s.enabled ? "on" : "off"}"><span class="pill-dot"></span>${s.enabled ? "enabled" : "disabled"}</span>`);
-    parts.push(`<span class="pill"><span class="pill-dot"></span>mode · ${escapeHtml(s.backupMode)}</span>`);
-    const actionCap = s.maxActions > 0 ? `/${s.maxActions}` : "";
-    parts.push(`<span class="pill"><span class="pill-dot"></span>${s.actionCount}${actionCap} actions</span>`);
-    if (typeof s.totalSizeBytes === "number") {
-      const sizeTxt = formatBytes(s.totalSizeBytes) +
-        (s.maxTotalSizeMB > 0 ? ` / ${s.maxTotalSizeMB} MB` : "");
-      parts.push(`<span class="pill"><span class="pill-dot"></span>${sizeTxt}</span>`);
-    }
-    if (s.maxAgeHours > 0) {
-      parts.push(`<span class="pill"><span class="pill-dot"></span>max age · ${s.maxAgeHours}h</span>`);
-    }
-    const saClass = s.subagentEnabled ? "warn" : "off";
-    const saText = s.subagentEnabled ? `subagent · ${escapeHtml(s.subagentModel)}` : "subagent · off";
-    parts.push(`<span class="pill ${saClass}"><span class="pill-dot"></span>${saText}</span>`);
-    pills.innerHTML = parts.join("");
-  } catch (e) {
-    pills.innerHTML = '<span class="pill off"><span class="pill-dot"></span>error loading status</span>';
-  }
-}
-
-// ── Refresh ──────────────────────────────────────────────────
-async function refreshAll() {
-  const btn = $("refresh");
-  btn.disabled = true;
-  const orig = btn.textContent;
-  btn.textContent = "↻ Refreshing…";
-  await Promise.all([loadActions(), loadStatus()]);
-  btn.textContent = orig;
-  btn.disabled = false;
-}
-
-function escapeHtml(s) {
-  return String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
-}
-
-function truncate(s, n) {
-  s = String(s);
-  return s.length > n ? s.slice(0, n) + "…" : s;
-}
-
+// Boot
 loadStatus();
 loadActions();
 loadConfig();

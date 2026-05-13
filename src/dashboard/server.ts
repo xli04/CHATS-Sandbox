@@ -334,6 +334,110 @@ function handleGetStatus(
   });
 }
 
+function handlePostRestore(
+  req: http.IncomingMessage,
+  res: http.ServerResponse,
+  config: SandboxConfig,
+  projectRoot: string,
+  seq: number,
+): void {
+  const chunks: Buffer[] = [];
+  req.on("data", (c: Buffer) => chunks.push(c));
+  req.on("end", () => {
+    const raw = Buffer.concat(chunks).toString("utf-8");
+    let body: { mode?: string } = {};
+    if (raw.trim()) {
+      try { body = JSON.parse(raw); }
+      catch { jsonResponse(res, 400, { error: "invalid JSON" }); return; }
+    }
+    const mode = body.mode === "loop" ? "loop" : "direct";
+
+    // Find the action folder with this seq.
+    const backupRoot = path.resolve(config.backupDir);
+    if (!fs.existsSync(backupRoot)) {
+      jsonResponse(res, 404, { error: "no backups directory" });
+      return;
+    }
+    const seqStr = String(seq).padStart(3, "0");
+    const match = fs.readdirSync(backupRoot)
+      .find((d: string) => d.startsWith(`action_${seqStr}_`));
+    if (!match) {
+      jsonResponse(res, 404, { error: `action #${seq} not found` });
+      return;
+    }
+
+    try {
+      // Lazy import — restore depends on subagent which depends on
+      // child_process, keep it out of the dashboard hot path.
+      // eslint-disable-next-line @typescript-eslint/no-require-imports
+      const restore = require("../restore/restore.js");
+      const fn = mode === "loop" ? restore.restoreActionLoop : restore.restoreActionDirect;
+      // Run restore from projectRoot — chdir for the duration of the call.
+      const prevCwd = process.cwd();
+      process.chdir(projectRoot);
+      let results;
+      try {
+        results = fn(match, config);
+      } finally {
+        process.chdir(prevCwd);
+      }
+      jsonResponse(res, 200, { ok: true, mode, action: match, results });
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : String(e);
+      jsonResponse(res, 500, { error: `restore failed: ${msg.slice(0, 500)}` });
+    }
+  });
+}
+
+function handleGetDiff(
+  res: http.ServerResponse,
+  config: SandboxConfig,
+  projectRoot: string,
+  seq: number,
+): void {
+  const backupRoot = path.resolve(config.backupDir);
+  const seqStr = String(seq).padStart(3, "0");
+  const match = fs.existsSync(backupRoot)
+    ? fs.readdirSync(backupRoot).find((d: string) => d.startsWith(`action_${seqStr}_`))
+    : undefined;
+  if (!match) {
+    jsonResponse(res, 404, { error: `action #${seq} not found` });
+    return;
+  }
+  const meta = path.join(backupRoot, match, "metadata.json");
+  if (!fs.existsSync(meta)) {
+    jsonResponse(res, 200, { diff: "", stat: "", note: "no metadata.json" });
+    return;
+  }
+  let snapshot: Record<string, unknown> | undefined;
+  try {
+    const arr = JSON.parse(fs.readFileSync(meta, "utf-8")) as Array<Record<string, unknown>>;
+    snapshot = arr.find((a) => a.strategy === "git_snapshot");
+  } catch { /* */ }
+  if (!snapshot) {
+    jsonResponse(res, 200, { diff: "", stat: "", note: "no git_snapshot in this action" });
+    return;
+  }
+  const commit = String(snapshot.commitHash ?? snapshot.id ?? "");
+  const shadowDir = String(snapshot.artifactPath ?? "");
+  if (!commit || !fs.existsSync(shadowDir)) {
+    jsonResponse(res, 200, { diff: "", stat: "", note: "shadow repo missing" });
+    return;
+  }
+  try {
+    const env = { ...process.env, GIT_DIR: shadowDir, GIT_WORK_TREE: projectRoot };
+    const opts = { encoding: "utf-8" as const, timeout: 10_000, env, cwd: projectRoot, stdio: "pipe" as const };
+    execSync("git add -A", opts);
+    const stat = execSync(`git diff --cached --stat ${commit}`, opts).toString().trim();
+    const diff = execSync(`git diff --cached --no-color ${commit}`, opts).toString();
+    execSync("git reset --quiet", opts);
+    jsonResponse(res, 200, { diff: diff.slice(0, 200_000), stat });
+  } catch (e: unknown) {
+    const msg = e instanceof Error ? e.message : String(e);
+    jsonResponse(res, 500, { error: `diff failed: ${msg.slice(0, 300)}` });
+  }
+}
+
 // ── Server ───────────────────────────────────────────────────────────
 
 export function startDashboard(options: {
@@ -378,6 +482,20 @@ export function startDashboard(options: {
     }
     if (url === "/api/status" && method === "GET") {
       handleGetStatus(res, config);
+      return;
+    }
+
+    // POST /api/restore/:seq  — body: { "mode": "direct" | "loop" }
+    const restoreMatch = url.match(/^\/api\/restore\/(\d+)$/);
+    if (restoreMatch && method === "POST") {
+      handlePostRestore(req, res, config, projectRoot, parseInt(restoreMatch[1], 10));
+      return;
+    }
+
+    // GET /api/actions/:seq/diff  — return git diff against current state
+    const diffMatch = url.match(/^\/api\/actions\/(\d+)\/diff$/);
+    if (diffMatch && method === "GET") {
+      handleGetDiff(res, config, projectRoot, parseInt(diffMatch[1], 10));
       return;
     }
 
