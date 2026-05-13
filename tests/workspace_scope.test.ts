@@ -172,3 +172,61 @@ describe("workspace scope: explicit out-of-workspace paths in tool input", () =>
     }
   });
 });
+
+// ── MCP tools: writes fire subagent, reads short-circuit ──────────────
+
+describe("workspace scope: MCP tool detection", () => {
+  beforeEach(() => resetAction());
+
+  const writeTools = [
+    "mcp__playwright__browser_click",
+    "mcp__playwright__browser_type",
+    "mcp__playwright__browser_fill_form",
+    "mcp__notion__create_page",
+    "mcp__notion__update_database",
+    "mcp__github__create_issue",
+    "mcp__slack__send_message",
+    "mcp__custom__unknown_verb",          // unknown → assume write
+    "mcp__some__delete_thing",
+  ];
+  for (const t of writeTools) {
+    it(`MCP write tool triggers subagent: ${t}`, () => {
+      const { workspace, config, originalCwd } = setup();
+      try {
+        fs.writeFileSync(path.join(workspace, "init.txt"), "x\n");
+        const result = runBackup(makeCtx(t, { foo: "bar" }), config);
+        assert.ok(result.needsSubagent, `${t} should trigger subagent`);
+      } finally {
+        teardown(workspace, originalCwd);
+      }
+    });
+  }
+
+  const readTools = [
+    "mcp__playwright__browser_navigate",
+    "mcp__playwright__browser_snapshot",
+    "mcp__playwright__browser_take_screenshot",
+    "mcp__playwright__browser_wait_for",
+    "mcp__notion__get_page",
+    "mcp__github__list_issues",
+    "mcp__github__search_repos",
+    "mcp__slack__fetch_messages",
+    "mcp__db__describe_table",
+  ];
+  for (const t of readTools) {
+    it(`MCP read tool short-circuits: ${t}`, () => {
+      const { workspace, config, originalCwd } = setup();
+      try {
+        fs.writeFileSync(path.join(workspace, "init.txt"), "x\n");
+        const result = runBackup(makeCtx(t, { foo: "bar" }), config);
+        assert.equal(result.needsSubagent, false, `${t} should NOT trigger subagent`);
+        // Read-only MCP tools should also produce zero artifacts (no
+        // git_snapshot noise on every browser_navigate).
+        assert.equal(result.artifacts.length, 0,
+          `${t} should produce zero artifacts (read-only short-circuit)`);
+      } finally {
+        teardown(workspace, originalCwd);
+      }
+    });
+  }
+});

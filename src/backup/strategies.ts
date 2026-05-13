@@ -292,16 +292,44 @@ function pipFreezeBackup(
   const id = makeId();
   const dest = path.join(actionDir, `pip_freeze_${id}.txt`);
 
-  const freeze = exec("pip freeze 2>/dev/null || pip3 freeze 2>/dev/null");
-  if (!freeze) return null;
+  // Try multiple pip invocations. Environments vary: some have `pip` only,
+  // some `pip3` only, some only `python3 -m pip`. Previously we used a
+  // shell one-liner with `|| pip3 freeze` which doesn't trigger if pip
+  // is present but fails for another reason (e.g. missing packages).
+  // This explicit ladder is more reliable and produces an empty file
+  // (still an artifact!) when no pip is available — the action folder
+  // gets materialized, tier-3 is skipped, and restore can no-op.
+  const candidates = [
+    "pip freeze",
+    "pip3 freeze",
+    "python3 -m pip freeze",
+    "python -m pip freeze",
+  ];
+  let freeze = "";
+  let source = "";
+  for (const cmd of candidates) {
+    const out = exec(`${cmd} 2>/dev/null`);
+    if (out !== null) {
+      freeze = out;
+      source = cmd;
+      break;
+    }
+  }
 
+  // If nothing produced output, still materialize an empty manifest. This
+  // is deliberate: the pattern matched (pip install) so tier-1 owns the
+  // action, and producing an empty manifest signals "we tried but there
+  // was no pre-existing package set to record." Prevents tier-3 subagent
+  // from firing redundantly on pip install in a fresh Python env.
   fs.writeFileSync(dest, freeze + "\n", "utf-8");
   return {
     id,
     timestamp: new Date().toISOString(),
     trigger: "rule",
     toolName: ctx.tool_name,
-    description: "Saved pip freeze snapshot",
+    description: source
+      ? `Saved pip freeze snapshot (${source})`
+      : "Saved empty pip freeze (no pip on PATH)",
     strategy: "pip_freeze",
     artifactPath: dest,
     sizeBytes: Buffer.byteLength(freeze),
@@ -511,6 +539,39 @@ function gitSnapshotBackup(
 // =====================================================================
 
 /**
+ * MCP tool names that are known to be read-only. Inverted denylist:
+ * any `mcp__*` tool that DOESN'T match these patterns is assumed to
+ * mutate state we can't capture locally and triggers tier-3 backup.
+ *
+ * Rationale: hardcoding a write-allowlist is unbounded (every new MCP
+ * server invents verbs). Hardcoding a read-only-denylist is bounded
+ * because MCP tools generally follow consistent naming conventions for
+ * read-style ops: get_*, list_*, search_*, fetch_*, read_*, view_*,
+ * describe_*, inspect_*, show_*, *_navigate, *_snapshot, *_screenshot,
+ * etc.
+ *
+ * False positive (read flagged as write): user pays a few cents for a
+ *   subagent fire that captures nothing useful.
+ * False negative (write flagged as read): user loses remote state
+ *   silently. Strictly worse — that's why we bias toward "treat
+ *   unknown MCP verbs as writes."
+ */
+function isReadOnlyMcpTool(toolName: string): boolean {
+  if (!toolName.startsWith("mcp__")) return false;
+
+  // Read-style verbs anywhere in the tool name (handles both
+  // `mcp__server__get_foo` and `mcp__server_get` shapes).
+  const READ_VERB = /_(get|list|search|fetch|read|view|describe|inspect|show|status|count|find|query|history|info|head|peek)(_|$)/i;
+  if (READ_VERB.test(toolName)) return true;
+
+  // Browser MCP verbs that don't mutate page state.
+  const BROWSER_READ = /_(navigate|navigate_back|snapshot|screenshot|take_screenshot|console_messages|network_requests|wait_for|resize|close|tabs|install)(_|$)/i;
+  if (BROWSER_READ.test(toolName)) return true;
+
+  return false;
+}
+
+/**
  * Inspect the tool call arguments to determine if the action might
  * affect state outside the current workspace.
  *
@@ -518,11 +579,20 @@ function gitSnapshotBackup(
  *   - Any explicit file path in the args is outside cwd
  *   - The command pattern is known to affect system/global state
  *     (pip install, apt install, npm -g, git push, export, etc.)
+ *   - The tool is an MCP tool that isn't recognized as read-only
  */
 function touchesOutsideWorkspace(ctx: HookContext): boolean {
   const workspace = path.resolve(process.cwd());
   const toolName = ctx.tool_name;
   const input = ctx.tool_input;
+
+  // MCP tools: unless we recognize the verb as read-only, assume the
+  // action mutates remote state we can't capture locally. This fires
+  // the tier-3 subagent, which can use the same MCP to scrape the
+  // pre-state and record recovery instructions.
+  if (toolName.startsWith("mcp__") && !isReadOnlyMcpTool(toolName)) {
+    return true;
+  }
 
   // Check explicit file paths in tool args
   const pathArgs = [
@@ -617,7 +687,59 @@ export interface BackupResult {
  * Read-only actions produce no artifact → no folder → no noise.
  */
 /** Tools that never modify state — they don't need backup at all. */
-const READ_ONLY_TOOLS = new Set(["Read", "Glob", "Grep", "WebFetch", "WebSearch", "TodoWrite"]);
+const READ_ONLY_TOOLS = new Set([
+  "Read", "Glob", "Grep", "WebFetch", "WebSearch", "TodoWrite",
+  // Harness-internal tools that don't touch the user's project state.
+  // ToolSearch is the deferred-tool fetcher in Claude Code; it never
+  // modifies anything in /app or on disk.
+  "ToolSearch",
+]);
+
+/**
+ * Pure-introspection Bash patterns: commands that read state and print it,
+ * but never mutate. We recognize a conservative set — all common and
+ * unambiguously safe. If any pattern matches, the hook short-circuits
+ * the same way a READ_ONLY_TOOLS entry does: no backup attempted, no
+ * tier-3 subagent, no action folder.
+ *
+ * Designed to prevent false positives on commands like:
+ *   which python3        (looks at PATH, modifies nothing)
+ *   ls /usr/bin          (reads a directory)
+ *   cat file.txt         (reads file contents)
+ *   stat -c %a file      (reads metadata)
+ *   command -v git       (shell builtin introspection)
+ *
+ * The pattern is anchored at the START of the command after optional
+ * whitespace, so `echo foo > bar` (redirection = write) won't match.
+ * Compound commands (pipes, `&&`, `;`, subshells) skip this check and
+ * fall through to the full backup pipeline — safer default.
+ */
+const READ_ONLY_BASH_PATTERN = new RegExp(
+  "^\\s*(?:" +
+    "which|command\\s+-v|type(?:\\s+-[aPpt]+)?|" +       // what-is
+    "ls(?:\\s+-[a-zA-Z]*)?|stat|file|readlink|realpath|dirname|basename|" +  // fs introspection
+    "cat|head|tail|wc|grep|egrep|fgrep|zcat|zgrep|awk|sed\\s+-n|" +  // read contents
+    "pwd|id|whoami|groups|uname|hostname|date|echo|printf|true|false|" +  // environmental
+    "env|printenv|locale|" +                             // env vars (read)
+    "ps|top|df|du(?:\\s+-[a-zA-Z]+)*\\s*$|free|uptime|" + // sysinfo (du without target is no-op)
+    "git\\s+(?:status|log|show|diff|branch\\s*$|remote\\s*$|config\\s+--get|rev-parse|ls-(?:files|tree|remote)|describe|blame|cat-file)|" +  // git read-only
+    "pip(?:3)?\\s+(?:list|show|freeze|check)|" +         // pip introspection (list/show/freeze/check)
+    "npm\\s+(?:list|ls|view|show|search|outdated|root|config\\s+get)|" +  // npm read-only
+    "docker\\s+(?:ps|images|inspect|logs|version|info|stats|top|events|history|port)|" +  // docker read-only
+    "kubectl\\s+(?:get|describe|logs|version|config\\s+view|cluster-info|explain)|" +  // kubectl read-only
+    "python3?\\s+-c\\s+[\"']import\\s+[\\w_.]+[\"']\\s*$|" +  // python -c "import X" (import check only, no writes)
+    "node\\s+-e\\s+[\"'][^\"']*require\\([^)]*\\)[^\"']*[\"']\\s*$" +   // node -e "require(x)" (import check only)
+  ")" +
+  "(?:\\s+[^\\|;&>]*)?" +    // trailing args — but stop at | ; & > (those imply side effects)
+  "\\s*$"
+);
+
+function isReadOnlyBash(command: string): boolean {
+  if (!command) return false;
+  // Any side-effect operator rules it out as "obviously read-only."
+  if (/[|;&]|>>?|<\(|\$\(/.test(command)) return false;
+  return READ_ONLY_BASH_PATTERN.test(command);
+}
 
 export function runBackup(
   ctx: HookContext,
@@ -629,6 +751,27 @@ export function runBackup(
   // actually happened.
   if (READ_ONLY_TOOLS.has(ctx.tool_name)) {
     return { artifacts: [], needsSubagent: false };
+  }
+
+  // MCP tools whose verb is recognized as read-only (browser_navigate,
+  // browser_snapshot, *_get, *_list, etc.) also short-circuit. Without
+  // this every Playwright snapshot/navigate in a remote-services run
+  // creates a noisy action folder + git_snapshot for state that didn't
+  // change.
+  if (isReadOnlyMcpTool(ctx.tool_name)) {
+    return { artifacts: [], needsSubagent: false };
+  }
+
+  // Bash commands that are pure introspection (which/ls/stat/git status/
+  // pip list/etc.) also never mutate — same short-circuit. Without this
+  // the `touchesOutsideWorkspace` heuristic can flag e.g. `which node` as
+  // outside-workspace and fire a ~25 s tier-3 subagent for a command that
+  // did literally nothing.
+  if (ctx.tool_name === "Bash") {
+    const cmd = String((ctx.tool_input as { command?: unknown }).command ?? "");
+    if (isReadOnlyBash(cmd)) {
+      return { artifacts: [], needsSubagent: false };
+    }
   }
 
   // Reserve a pending action name but don't create the folder yet.
