@@ -15,6 +15,7 @@ import * as path from "node:path";
 import { loadConfig, saveConfig, getConfigDir } from "./config/load.js";
 import { loadManifest } from "./backup/manifest.js";
 import { DEFAULT_CONFIG } from "./types.js";
+import { ALL_ADAPTERS, findAdapter, detectAdapters } from "./agents/index.js";
 
 const CLAUDE_SETTINGS_PATH = ".claude/settings.json";
 
@@ -52,207 +53,61 @@ function saveClaudeSettings(
 
 // ── Install ──────────────────────────────────────────────────────────
 
-function install(projectRoot: string): void {
+function install(projectRoot: string, agentName: string | undefined): void {
   const pkgRoot = getPackageRoot();
-  const preToolPath = path.join(pkgRoot, "hooks", "pre-tool.js");
-  const postToolPath = path.join(pkgRoot, "hooks", "post-tool.js");
-  const userPromptPath = path.join(pkgRoot, "hooks", "user-prompt.js");
 
-  const settings = loadClaudeSettings(projectRoot) as Record<string, unknown>;
-  const hooks = (settings.hooks ?? {}) as Record<string, unknown[]>;
-
-  // PreToolUse hook
-  hooks.PreToolUse = [
-    {
-      matcher: "*",
-      hooks: [
-        {
-          type: "command",
-          command: `node ${preToolPath}`,
-        },
-      ],
-    },
-  ];
-
-  // PostToolUse hook
-  hooks.PostToolUse = [
-    {
-      matcher: "*",
-      hooks: [
-        {
-          type: "command",
-          command: `node ${postToolPath}`,
-        },
-      ],
-    },
-  ];
-
-  // PostToolUseFailure hook (same handler)
-  hooks.PostToolUseFailure = [
-    {
-      matcher: "*",
-      hooks: [
-        {
-          type: "command",
-          command: `node ${postToolPath}`,
-        },
-      ],
-    },
-  ];
-
-  // UserPromptSubmit hook — captures the user instruction so history
-  // can show what they were asking for.
-  hooks.UserPromptSubmit = [
-    {
-      matcher: "*",
-      hooks: [
-        {
-          type: "command",
-          command: `node ${userPromptPath}`,
-        },
-      ],
-    },
-  ];
-
-  settings.hooks = hooks;
-
-  // Deny rules — block Claude from reading/searching/writing our internal
-  // state directory. The dashboard, CLI commands, and hooks all run as
-  // separate processes (not as Claude) so they still have full access.
-  const permissions = (settings.permissions ?? {}) as Record<string, unknown>;
-  const denyList = Array.isArray(permissions.deny) ? (permissions.deny as string[]) : [];
-  const requiredDeny = [
-    "Read(.chats-sandbox/**)",
-    "Edit(.chats-sandbox/**)",
-    "Write(.chats-sandbox/**)",
-    "Glob(.chats-sandbox/**)",
-    "Grep(.chats-sandbox/**)",
-  ];
-  for (const rule of requiredDeny) {
-    if (!denyList.includes(rule)) denyList.push(rule);
-  }
-  permissions.deny = denyList;
-  settings.permissions = permissions;
-
-  saveClaudeSettings(projectRoot, settings);
-
-  // Create default sandbox config
-  const configDir = getConfigDir(projectRoot);
-  if (!fs.existsSync(configDir)) {
-    fs.mkdirSync(configDir, { recursive: true });
-  }
-  saveConfig(DEFAULT_CONFIG, projectRoot);
-
-  // Install slash commands into .claude/commands/
-  const commandsSrcDir = path.join(pkgRoot, "..", "commands");
-  const commandsDestDir = path.join(projectRoot, ".claude", "commands");
-  if (fs.existsSync(commandsSrcDir)) {
-    if (!fs.existsSync(commandsDestDir)) {
-      fs.mkdirSync(commandsDestDir, { recursive: true });
+  let adapter;
+  if (agentName) {
+    adapter = findAdapter(agentName);
+    if (!adapter) {
+      console.error(`Unknown agent: ${agentName}`);
+      console.error(`Available agents: ${ALL_ADAPTERS.map((a) => a.name).join(", ")}`);
+      process.exit(1);
     }
-    const cmdFiles = fs.readdirSync(commandsSrcDir).filter((f: string) => f.endsWith(".md"));
-    for (const f of cmdFiles) {
-      fs.copyFileSync(path.join(commandsSrcDir, f), path.join(commandsDestDir, f));
+  } else {
+    // No agent specified: default to claude-code (the original behavior).
+    // If multiple agents are detected, hint at --auto so the user picks.
+    const detected = detectAdapters(projectRoot);
+    if (detected.length > 1) {
+      console.log(`Multiple agents detected: ${detected.map((a) => a.name).join(", ")}`);
+      console.log("Specify one explicitly: chats-sandbox install <agent>");
+      console.log(`Defaulting to claude-code.`);
     }
-    console.log(`  Slash commands installed: ${cmdFiles.map((f: string) => "/" + f.replace(".md", "")).join(", ")}`);
+    adapter = findAdapter("claude-code");
+  }
+  if (!adapter) {
+    console.error("No adapter available — repo build is broken.");
+    process.exit(1);
   }
 
-  // Add .chats-sandbox to .gitignore if not already there
-  const gitignorePath = path.join(projectRoot, ".gitignore");
-  const gitignoreEntry = ".chats-sandbox/";
-  if (fs.existsSync(gitignorePath)) {
-    const content = fs.readFileSync(gitignorePath, "utf-8");
-    if (!content.includes(gitignoreEntry)) {
-      fs.appendFileSync(gitignorePath, `\n${gitignoreEntry}\n`);
-    }
-  }
-
-  console.log("CHATS-Sandbox installed successfully!");
-  console.log(`  Hooks wired into ${CLAUDE_SETTINGS_PATH}`);
-  console.log(`  Config at ${configDir}/config.json`);
-  console.log(`  Backups will be stored in ${DEFAULT_CONFIG.backupDir}/`);
-  console.log("");
-  console.log("Slash commands available in Claude Code:");
-  console.log("  /sandbox:status          Show sandbox state");
-  console.log("  /sandbox:history         Timeline of recent actions");
-  console.log("  /sandbox:restore         Reverse-loop restore");
-  console.log("  /sandbox:restore_direct  Direct jump restore");
-  console.log("  /sandbox:diff            Diff against action");
-  console.log("  /sandbox:backups         List backup artifacts");
-  console.log("  /sandbox:config          Show/edit configuration");
-  console.log("  /sandbox:clear           Delete all backups and shadow repo");
-  console.log("  /sandbox:dashboard       Launch the local web dashboard");
-  console.log("");
-  console.log("To configure: chats-sandbox config");
-  console.log("To disable:   chats-sandbox uninstall");
+  const result = adapter.install(projectRoot, pkgRoot);
+  for (const line of result.log) console.log(line);
 }
 
 // ── Uninstall ────────────────────────────────────────────────────────
 
-function uninstall(projectRoot: string): void {
-  const settings = loadClaudeSettings(projectRoot) as Record<string, unknown>;
-  const hooks = (settings.hooks ?? {}) as Record<string, unknown[]>;
-
-  // Remove our hooks (identified by the chats-sandbox command path)
-  for (const event of ["PreToolUse", "PostToolUse", "PostToolUseFailure", "UserPromptSubmit"]) {
-    if (Array.isArray(hooks[event])) {
-      hooks[event] = (hooks[event] as unknown[]).filter((entry) => {
-        const h = entry as Record<string, unknown>;
-        const innerHooks = h.hooks as Array<Record<string, unknown>> | undefined;
-        if (!innerHooks) return true;
-        return !innerHooks.some(
-          (ih) => typeof ih.command === "string" && ih.command.toLowerCase().includes("chats-sandbox")
-        );
-      });
-      if ((hooks[event] as unknown[]).length === 0) {
-        delete hooks[event];
-      }
+function uninstall(projectRoot: string, agentName: string | undefined): void {
+  let adapters;
+  if (agentName) {
+    const a = findAdapter(agentName);
+    if (!a) {
+      console.error(`Unknown agent: ${agentName}`);
+      console.error(`Available agents: ${ALL_ADAPTERS.map((x) => x.name).join(", ")}`);
+      process.exit(1);
     }
+    adapters = [a];
+  } else {
+    // No agent specified: uninstall from every agent we detect, so a
+    // bare `chats-sandbox uninstall` continues to "just work" even
+    // in mixed-agent projects.
+    adapters = detectAdapters(projectRoot);
+    if (adapters.length === 0) adapters = [findAdapter("claude-code")!];
   }
 
-  settings.hooks = hooks;
-
-  // Remove our deny rules from permissions (leave other deny rules alone)
-  const permissions = settings.permissions as Record<string, unknown> | undefined;
-  if (permissions && Array.isArray(permissions.deny)) {
-    const ourDeny = [
-      "Read(.chats-sandbox/**)",
-      "Edit(.chats-sandbox/**)",
-      "Write(.chats-sandbox/**)",
-      "Glob(.chats-sandbox/**)",
-      "Grep(.chats-sandbox/**)",
-    ];
-    permissions.deny = (permissions.deny as string[]).filter(
-      (rule) => !ourDeny.includes(rule)
-    );
-    // Clean up empty deny list
-    if ((permissions.deny as string[]).length === 0) {
-      delete permissions.deny;
-    }
-    // Clean up empty permissions object
-    if (Object.keys(permissions).length === 0) {
-      delete settings.permissions;
-    }
+  for (const adapter of adapters) {
+    const result = adapter.uninstall(projectRoot);
+    for (const line of result.log) console.log(line);
   }
-
-  saveClaudeSettings(projectRoot, settings);
-
-  // Remove slash commands
-  const commandsDir = path.join(projectRoot, ".claude", "commands");
-  const sandboxCmds = ["sandbox:status.md", "sandbox:restore.md", "sandbox:restore_direct.md",
-    "sandbox:diff.md", "sandbox:backups.md", "sandbox:config.md", "sandbox:history.md",
-    "sandbox:clear.md", "sandbox:dashboard.md"];
-  for (const f of sandboxCmds) {
-    const p = path.join(commandsDir, f);
-    if (fs.existsSync(p)) {
-      fs.unlinkSync(p);
-    }
-  }
-
-  console.log("CHATS-Sandbox uninstalled.");
-  console.log("  Hooks removed from .claude/settings.json");
-  console.log("  Slash commands removed from .claude/commands/");
-  console.log("  Config and backups left in .chats-sandbox/ (delete manually if desired)");
 }
 
 // ── Config ───────────────────────────────────────────────────────────
@@ -812,10 +667,10 @@ const projectRoot = process.cwd();
 
 switch (command) {
   case "install":
-    install(projectRoot);
+    install(projectRoot, args[1]);
     break;
   case "uninstall":
-    uninstall(projectRoot);
+    uninstall(projectRoot, args[1]);
     break;
   case "config":
     if (args[1] === "set" && args[2] && args[3]) {
@@ -852,11 +707,12 @@ switch (command) {
     dashboardCommand(projectRoot, args.slice(1));
     break;
   default:
-    console.log("CHATS-Sandbox — General-purpose sandbox for Claude Code\n");
-    console.log("Usage: chats-sandbox <command>\n");
+    console.log("CHATS-Sandbox — General-purpose sandbox for coding agents\n");
+    console.log("Usage: chats-sandbox <command> [args]\n");
     console.log("Commands:");
-    console.log("  install                         Wire hooks into .claude/settings.json");
-    console.log("  uninstall                       Remove hooks");
+    console.log("  install [agent]                 Install hooks for an agent (default: claude-code)");
+    console.log(`                                    Available: ${ALL_ADAPTERS.map((a) => a.name).join(", ")}`);
+    console.log("  uninstall [agent]               Remove hooks for an agent (defaults to all detected)");
     console.log("  config                          Show configuration");
     console.log("  config set <key> <value>        Set a config value");
     console.log("  status                          Show sandbox state");
