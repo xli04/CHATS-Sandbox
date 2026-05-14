@@ -187,6 +187,70 @@
   .status-cell .badge.on  { color: var(--success); border-color: var(--success); }
   .status-cell .badge.off { color: var(--muted); }
 
+  /* ── View-toggle (concise / detail) ──────────────────────────── */
+  .view-toggle {
+    display: inline-flex;
+    margin-left: 12px;
+    border: 1px solid var(--line);
+  }
+  .view-toggle button {
+    background: var(--bg);
+    color: var(--muted);
+    border: none;
+    border-right: 1px solid var(--line);
+    padding: 3px 10px;
+    font-size: 12px;
+    cursor: pointer;
+    font-family: inherit;
+  }
+  .view-toggle button:last-child { border-right: none; }
+  .view-toggle button:hover { color: var(--text-dim); background: var(--hover-bg); }
+  .view-toggle button.active { background: var(--bg-soft); color: var(--text); }
+
+  /* ── Detail-mode extras: shown inline on every row in detail mode ── */
+  .action .preview {
+    grid-column: 2 / -1;
+    margin-top: 8px;
+    font-size: 12px;
+    color: var(--text-dim);
+    line-height: 1.5;
+    display: none;            /* hidden in concise mode */
+  }
+  .action-list.detail-mode .action .preview { display: block; }
+  .action .preview .line {
+    display: flex;
+    gap: 8px;
+    align-items: baseline;
+  }
+  .action .preview .label {
+    color: var(--muted);
+    text-transform: uppercase;
+    font-size: 10.5px;
+    letter-spacing: 0.06em;
+    min-width: 80px;
+    flex-shrink: 0;
+  }
+  .action .preview .files code {
+    font-family: "JetBrains Mono", monospace;
+    color: var(--text);
+    font-size: 11.5px;
+  }
+  .action .preview .stat {
+    font-family: "JetBrains Mono", monospace;
+    color: var(--success);
+    font-size: 11.5px;
+  }
+  .action .preview .subagent-line {
+    border-left: 2px solid var(--warn);
+    padding-left: 8px;
+    margin-top: 6px;
+  }
+  .action .preview .meta-line {
+    color: var(--muted);
+    font-size: 11px;
+    margin-top: 4px;
+  }
+
   /* ── Action list — flat table-style rows ─────────────────────── */
   .action-list { margin-top: 4px; }
   .action {
@@ -509,6 +573,10 @@
       <span class="num">01</span>
       <h2>Actions</h2>
       <span class="meta" id="action-count"></span>
+      <div class="view-toggle" role="tablist" aria-label="Action list density">
+        <button id="view-concise" class="active" role="tab" aria-selected="true">Concise</button>
+        <button id="view-detail" role="tab" aria-selected="false">Detail</button>
+      </div>
     </div>
     <div class="action-list" id="action-list">
       <div class="empty">Loading…</div>
@@ -583,6 +651,12 @@ function switchTab(name) {
 $("tab-timeline").onclick = () => switchTab("timeline");
 $("tab-config").onclick   = () => switchTab("config");
 $("refresh").onclick      = refreshAll;
+$("view-concise").onclick = () => applyViewMode("concise");
+$("view-detail").onclick  = () => applyViewMode("detail");
+// Apply saved view mode to the toggle's DOM state at boot. The list
+// class is set by renderActions() once data arrives, so we don't need
+// to touch it here.
+applyViewMode(viewMode);
 
 // ── Status ──────────────────────────────────────────────
 async function loadStatus() {
@@ -610,6 +684,23 @@ async function loadStatus() {
 // ── Action list ─────────────────────────────────────────
 let currentActions = [];
 
+// ── View mode (concise / detail), persisted ─────────────────
+let viewMode = "concise";
+try {
+  const saved = localStorage.getItem("chats-sandbox-view");
+  if (saved === "detail" || saved === "concise") viewMode = saved;
+} catch { /* private mode */ }
+
+function applyViewMode(mode) {
+  viewMode = mode;
+  try { localStorage.setItem("chats-sandbox-view", mode); } catch { /* */ }
+  const c = $("view-concise"); const d = $("view-detail");
+  if (c) { c.classList.toggle("active", mode === "concise"); c.setAttribute("aria-selected", String(mode === "concise")); }
+  if (d) { d.classList.toggle("active", mode === "detail"); d.setAttribute("aria-selected", String(mode === "detail")); }
+  const list = $("action-list");
+  if (list) list.classList.toggle("detail-mode", mode === "detail");
+}
+
 async function loadActions() {
   try {
     const d = await (await fetch("/api/actions")).json();
@@ -625,11 +716,13 @@ function renderActions() {
   if (!currentActions.length) {
     list.innerHTML = `<div class="empty">No actions yet — use Claude Code to trigger one.</div>`;
     $("action-count").textContent = "";
+    list.classList.toggle("detail-mode", viewMode === "detail");
     return;
   }
   $("action-count").textContent = `${currentActions.length} action${currentActions.length === 1 ? "" : "s"}`;
   const sorted = [...currentActions].sort((a, b) => b.seq - a.seq);
   list.innerHTML = sorted.map(renderAction).join("");
+  list.classList.toggle("detail-mode", viewMode === "detail");
 
   // Wire row clicks
   for (const row of list.querySelectorAll(".action")) {
@@ -663,6 +756,41 @@ function renderAction(a) {
     : `<div class="instr empty">(no instruction recorded)</div>`;
   const size = typeof a.sizeBytes === "number" ? `<span class="size">${formatBytes(a.sizeBytes)}</span>` : "";
 
+  // Detail-mode inline preview (CSS-hidden in concise mode). Pre-rendered
+  // for every action so toggling view mode is instant — no re-fetch.
+  const previewParts = [];
+  if (a.toolName && a.originalAction) {
+    previewParts.push(`<div class="line"><span class="label">tool</span><code class="mono" style="color:var(--text)">${escapeHtml(truncate(a.originalAction, 160))}</code></div>`);
+  }
+  if (a.files && a.files.length) {
+    const shown = a.files.slice(0, 5);
+    const extra = a.files.length - shown.length;
+    previewParts.push(`<div class="line files"><span class="label">files</span><span>${
+      shown.map((f) => `<code>${escapeHtml(f)}</code>`).join(", ")
+    }${extra > 0 ? ` <span style="color:var(--muted)">+${extra} more</span>` : ""}</span></div>`);
+  }
+  if (a.stats) {
+    previewParts.push(`<div class="line"><span class="label">stats</span><span class="stat">${escapeHtml(a.stats)}</span></div>`);
+  }
+  if (a.subagent) {
+    const meta = [];
+    if (a.subagent.externalShadowFileCount > 0) meta.push(`${a.subagent.externalShadowFileCount} files`);
+    if (a.subagent.recoveryCommandCount > 0) meta.push(`${a.subagent.recoveryCommandCount} recovery cmds`);
+    if (a.subagent.liveRestore) meta.push(`live-restore`);
+    previewParts.push(`<div class="subagent-line"><span class="label" style="color:var(--warn);min-width:0;margin-right:6px">subagent →</span>${escapeHtml(a.subagent.description || "")}` +
+      (meta.length ? ` <span style="color:var(--muted)">· ${meta.join(" · ")}</span>` : "") + `</div>`);
+  }
+  // Age + size meta line
+  const metaBits = [];
+  if (typeof a.sizeBytes === "number") metaBits.push(`size ${formatBytes(a.sizeBytes)}`);
+  if (typeof a.ageMs === "number" && a.ageMs > 0) metaBits.push(`age ${formatAge(a.ageMs)}`);
+  if (metaBits.length) {
+    previewParts.push(`<div class="meta-line">${metaBits.join(" · ")}</div>`);
+  }
+  const preview = previewParts.length
+    ? `<div class="preview">${previewParts.join("")}</div>`
+    : "";
+
   return `<div class="action" data-seq="${a.seq}">
     <div class="seq">#${String(a.seq).padStart(3, "0")}</div>
     <div class="time">${escapeHtml(formatShortTime(a.timeFormatted))}</div>
@@ -674,6 +802,7 @@ function renderAction(a) {
       ${size}
       <button class="btn btn-restore" data-seq="${a.seq}">Restore</button>
     </div>
+    ${preview}
     <div class="detail" id="detail-${a.seq}">
       <h4>Loading…</h4>
     </div>
@@ -936,6 +1065,16 @@ function formatShortTime(s) {
   if (!s) return "";
   const parts = s.split(" ");
   return parts.length === 2 ? `${parts[1]}\n${parts[0]}` : s;
+}
+function formatAge(ms) {
+  const s = Math.floor(ms / 1000);
+  if (s < 60) return s + "s ago";
+  const m = Math.floor(s / 60);
+  if (m < 60) return m + "m ago";
+  const h = Math.floor(m / 60);
+  if (h < 24) return h + "h ago";
+  const d = Math.floor(h / 24);
+  return d + "d ago";
 }
 
 // Boot
