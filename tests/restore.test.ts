@@ -78,6 +78,48 @@ describe("restore - git_snapshot", () => {
     assert.equal(r.success, false);
     assert.ok(r.description.includes("not found"));
   });
+
+  it("verifies commit exists by querying with GIT_DIR (not cwd)", () => {
+    // Regression: previously `git rev-parse <commit>` was called with
+    // cwd=shadowDir, which fails because the shadow dir is bare-style
+    // (no .git/ subdir). This made every restore_direct on an older
+    // action mis-report "Commit not found in shadow repo" once an
+    // intermediate restore pruned the latest commit's metadata folder.
+
+    // Build a real shadow repo in a tmpdir + commit a file.
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "chats-shadow-test-"));
+    const work = fs.mkdtempSync(path.join(os.tmpdir(), "chats-work-test-"));
+    const shadow = path.join(dir, "shadow-repo");
+    fs.mkdirSync(shadow, { recursive: true });
+    const env = { ...process.env, GIT_DIR: shadow, GIT_WORK_TREE: work };
+    const opts = { encoding: "utf-8" as const, env, stdio: "pipe" as const };
+    const { execSync } = require("node:child_process");
+    execSync("git init -q", opts);
+    execSync("git config user.email t@l", opts);
+    execSync("git config user.name t", opts);
+    fs.writeFileSync(path.join(work, "f.txt"), "hello\n");
+    execSync("git add -A && git commit -qm seed", opts);
+    const head = execSync("git rev-parse HEAD", opts).toString().trim();
+
+    // Restore should succeed when the commit exists.
+    const cwdBefore = process.cwd();
+    process.chdir(work);
+    try {
+      // Modify f.txt so restore has work to do
+      fs.writeFileSync(path.join(work, "f.txt"), "modified\n");
+      const r = restoreArtifact(makeArtifact({
+        strategy: "git_snapshot",
+        artifactPath: shadow,
+        commitHash: head,
+      }));
+      assert.equal(r.success, true, `restore failed: ${r.description}`);
+      assert.equal(fs.readFileSync(path.join(work, "f.txt"), "utf-8"), "hello\n");
+    } finally {
+      process.chdir(cwdBefore);
+      fs.rmSync(dir, { recursive: true, force: true });
+      fs.rmSync(work, { recursive: true, force: true });
+    }
+  });
 });
 
 describe("restore - subagent", () => {

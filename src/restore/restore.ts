@@ -130,9 +130,19 @@ function restoreGitSnapshot(artifact: BackupArtifact): RestoreResult {
     return { success: false, description: "Artifact is missing commit hash" };
   }
 
-  // Verify the commit exists in the shadow repo
-  const verifyResult = exec(`git rev-parse ${commit}`, shadowDir);
-  if (!verifyResult.ok) {
+  // Verify the commit exists in the shadow repo. The shadow repo is
+  // a bare-style git dir (contents live directly in shadowDir, no
+  // working tree), so we must use GIT_DIR — not cwd — to query it.
+  // (Earlier versions passed cwd=shadowDir which silently failed
+  // because `git rev-parse` couldn't find HEAD in cwd.)
+  try {
+    execSync(`git rev-parse ${commit}`, {
+      encoding: "utf-8",
+      timeout: 30_000,
+      env: { ...process.env, GIT_DIR: shadowDir },
+      stdio: ["pipe", "pipe", "pipe"],
+    });
+  } catch {
     return {
       success: false,
       description: `Commit ${commit.slice(0, 8)} not found in shadow repo`,
