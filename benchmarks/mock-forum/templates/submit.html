@@ -1,0 +1,19 @@
+{% extends "base.html" %}
+{% block title %}Submit a post — Mock Forum{% endblock %}
+{% block content %}
+<h2>Submit a new post</h2>
+<form method="post">
+  <label>Forum
+    <select name="forum" required>
+      {% for f in forums %}<option value="{{ f.name }}">f/{{ f.name }}</option>{% endfor %}
+    </select>
+  </label>
+  <label>Title
+    <input type="text" name="title" required autofocus maxlength="200">
+  </label>
+  <label>Body
+    <textarea name="body"></textarea>
+  </label>
+  <button type="submit" class="primary">Post</button>
+</form>
+{% endblock %}

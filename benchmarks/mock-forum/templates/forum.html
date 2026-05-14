@@ -1,0 +1,17 @@
+{% extends "base.html" %}
+{% block title %}f/{{ forum.name }} — Mock Forum{% endblock %}
+{% block content %}
+<h2>f/{{ forum.name }}</h2>
+<p class="meta">{{ forum.description }}</p>
+{% if not posts %}<p class="empty">No posts in this forum yet.</p>{% endif %}
+{% for p in posts %}
+  <article class="post">
+    <h3><a href="{{ url_for('post_detail', post_id=p.id) }}">{{ p.title }}</a></h3>
+    <div class="meta">
+      <span class="score">{{ p.score }}</span> ·
+      <a href="{{ url_for('user_submissions', username=p.author) }}">u/{{ p.author }}</a> ·
+      {{ p.created_at }}
+    </div>
+  </article>
+{% endfor %}
+{% endblock %}

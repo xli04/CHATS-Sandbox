@@ -1,0 +1,55 @@
+{% extends "base.html" %}
+{% block title %}{{ post.title }} — Mock Forum{% endblock %}
+{% block content %}
+<article class="post">
+  <h2 style="margin:0 0 4px">{{ post.title }}</h2>
+  <div class="meta">
+    <span class="score">{{ post.score }}</span> points ·
+    <a href="{{ url_for('forum_view', forum_name=post.forum) }}">f/{{ post.forum }}</a> ·
+    <a href="{{ url_for('user_submissions', username=post.author) }}">u/{{ post.author }}</a> ·
+    {{ post.created_at }}{% if post.edited_at %} · edited {{ post.edited_at }}{% endif %}
+    {% if user %}
+      <form method="post" action="{{ url_for('post_vote', post_id=post.id) }}" class="inline">
+        <button type="submit" name="direction" value="up">▲ upvote</button>
+        <button type="submit" name="direction" value="down">▼ downvote</button>
+      </form>
+    {% endif %}
+  </div>
+  {% if post.body %}<p style="margin-top:14px;">{{ post.body }}</p>{% endif %}
+  {% if user and user.id == post.author_id %}
+    <p>
+      <a href="{{ url_for('post_edit', post_id=post.id) }}">edit</a> ·
+      <form method="post" action="{{ url_for('post_delete', post_id=post.id) }}" class="inline">
+        <button type="submit" class="danger">delete</button>
+      </form>
+    </p>
+  {% endif %}
+</article>
+
+<div class="comments">
+  <h3>Comments ({{ comments|length }})</h3>
+  {% if user %}
+    <form method="post" action="{{ url_for('comment_create', post_id=post.id) }}">
+      <textarea name="body" placeholder="Write a comment…" required></textarea>
+      <button type="submit" class="primary">Post comment</button>
+    </form>
+  {% else %}
+    <p><a href="{{ url_for('login') }}">Log in</a> to comment.</p>
+  {% endif %}
+
+  {% for c in comments %}
+    <div class="comment">
+      <div class="meta">
+        <a href="{{ url_for('user_submissions', username=c.author) }}">u/{{ c.author }}</a>
+        · {{ c.created_at }}
+      </div>
+      <p style="margin: 6px 0">{{ c.body }}</p>
+      {% if user and user.id == c.author_id %}
+        <form method="post" action="{{ url_for('comment_delete', comment_id=c.id) }}" class="inline">
+          <button type="submit" class="danger">delete</button>
+        </form>
+      {% endif %}
+    </div>
+  {% endfor %}
+</div>
+{% endblock %}

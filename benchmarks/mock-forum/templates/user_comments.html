@@ -1,0 +1,23 @@
+{% extends "base.html" %}
+{% block title %}u/{{ profile.username }}'s comments — Mock Forum{% endblock %}
+{% block content %}
+<h2>u/{{ profile.username }}'s comments</h2>
+<p class="meta">
+  <a href="{{ url_for('user_submissions', username=profile.username) }}">submissions</a>
+</p>
+{% if not comments %}<p class="empty">No comments.</p>{% endif %}
+{% for c in comments %}
+  <div class="comment">
+    <div class="meta">
+      on <a href="{{ url_for('post_detail', post_id=c.post_id) }}">{{ c.post_title }}</a>
+      · {{ c.created_at }}
+    </div>
+    <p>{{ c.body }}</p>
+    {% if user and user.id == profile.id %}
+      <form method="post" action="{{ url_for('comment_delete', comment_id=c.id) }}" class="inline">
+        <button type="submit" class="danger">delete</button>
+      </form>
+    {% endif %}
+  </div>
+{% endfor %}
+{% endblock %}

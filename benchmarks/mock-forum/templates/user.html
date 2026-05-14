@@ -1,0 +1,24 @@
+{% extends "base.html" %}
+{% block title %}u/{{ profile.username }} — Mock Forum{% endblock %}
+{% block content %}
+<h2>u/{{ profile.username }}</h2>
+<p class="meta">
+  Joined {{ profile.created_at }} ·
+  <a href="{{ url_for('user_submissions', username=profile.username) }}">submissions</a> ·
+  <a href="{{ url_for('user_comments', username=profile.username) }}">comments</a>
+</p>
+{% if profile.bio %}<p><em>{{ profile.bio }}</em></p>{% endif %}
+
+<h3>Submissions</h3>
+{% if not posts %}<p class="empty">No posts.</p>{% endif %}
+{% for p in posts %}
+  <article class="post">
+    <h3><a href="{{ url_for('post_detail', post_id=p.id) }}">{{ p.title }}</a></h3>
+    <div class="meta">
+      <span class="score">{{ p.score }}</span> ·
+      <a href="{{ url_for('forum_view', forum_name=p.forum) }}">f/{{ p.forum }}</a> ·
+      {{ p.created_at }}
+    </div>
+  </article>
+{% endfor %}
+{% endblock %}

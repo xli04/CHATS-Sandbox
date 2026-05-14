@@ -1,0 +1,12 @@
+{% extends "base.html" %}
+{% block title %}Edit post — Mock Forum{% endblock %}
+{% block content %}
+<h2>Edit post: {{ post.title }}</h2>
+<form method="post">
+  <label>Body
+    <textarea name="body" autofocus>{{ post.body }}</textarea>
+  </label>
+  <button type="submit" class="primary">Save</button>
+  <a href="{{ url_for('post_detail', post_id=post.id) }}">cancel</a>
+</form>
+{% endblock %}

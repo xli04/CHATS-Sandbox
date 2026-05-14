@@ -1,0 +1,15 @@
+{% extends "base.html" %}
+{% block title %}Log in — Mock Forum{% endblock %}
+{% block content %}
+<h2>Log in</h2>
+<form method="post">
+  <label>Username
+    <input type="text" name="username" autocomplete="username" required autofocus>
+  </label>
+  <label>Password
+    <input type="password" name="password" autocomplete="current-password" required>
+  </label>
+  <button type="submit" class="primary">Log in</button>
+</form>
+<p class="meta">Test account: <code>MarvelsGrantMan136</code> / <code>test1234</code></p>
+{% endblock %}

@@ -1,0 +1,27 @@
+{% extends "base.html" %}
+{% block title %}Forums — Mock Forum{% endblock %}
+{% block content %}
+<h2>Forums</h2>
+<table style="width:100%; border-collapse: collapse;">
+  <thead>
+    <tr><th align=left>Name</th><th align=left>Description</th><th align=right>Action</th></tr>
+  </thead>
+  <tbody>
+  {% for f in forums %}
+    <tr style="border-top:1px solid #eee;">
+      <td><a href="{{ url_for('forum_view', forum_name=f.name) }}">f/{{ f.name }}</a></td>
+      <td>{{ f.description }}</td>
+      <td align=right>
+        {% if user %}
+          <form method="post" action="{{ url_for('forum_subscribe', forum_name=f.name) }}" class="inline">
+            <button type="submit">
+              {% if f.id in subs %}Unsubscribe{% else %}Subscribe{% endif %}
+            </button>
+          </form>
+        {% endif %}
+      </td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% endblock %}

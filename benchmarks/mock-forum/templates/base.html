@@ -1,0 +1,63 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>{% block title %}Mock Forum{% endblock %}</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <style>
+    body { font-family: -apple-system, sans-serif; max-width: 760px; margin: 0 auto; padding: 16px; color:#222; }
+    a { color:#0f8c89; text-decoration: none; }
+    a:hover { text-decoration: underline; }
+    header { border-bottom: 1px solid #ddd; padding-bottom: 10px; margin-bottom: 16px;
+             display: flex; gap: 14px; align-items: baseline; }
+    header h1 { margin:0; font-size:18px; }
+    header nav { margin-left:auto; display:flex; gap:12px; font-size: 13px; }
+    .flash { padding: 8px 12px; margin-bottom: 12px; border-left: 3px solid #0f8c89; background:#f4faf9; }
+    .flash.error { border-color:#b00020; background:#fdf4f5; }
+    article.post { border-bottom: 1px solid #eee; padding: 12px 0; }
+    article.post h3 { margin: 0 0 4px; font-size: 16px; }
+    .meta { color:#666; font-size: 12px; }
+    .comments { margin-top: 18px; }
+    .comment { border-left: 2px solid #eee; padding-left: 10px; margin: 10px 0; font-size: 14px; }
+    form.inline { display:inline; }
+    button { font-family: inherit; font-size: 13px; padding: 4px 10px;
+             background:#f6f6f6; border:1px solid #ccc; cursor:pointer; }
+    button.primary { background:#0f8c89; color:white; border-color:#0f8c89; }
+    button.danger  { background:#b00020; color:white; border-color:#b00020; }
+    input, textarea, select {
+      font-family: inherit; font-size: 14px; padding:6px 8px;
+      border: 1px solid #ccc; width: 100%; box-sizing: border-box; margin-bottom: 8px;
+    }
+    textarea { min-height: 90px; }
+    .score { color:#0f8c89; font-weight: 600; }
+    .empty { color:#888; font-style: italic; padding: 24px 0; text-align:center; }
+  </style>
+</head>
+<body>
+  <header>
+    <h1><a href="{{ url_for('index') }}">Mock Forum</a></h1>
+    <nav>
+      <a href="{{ url_for('index') }}">all</a>
+      <a href="{{ url_for('forums_index') }}">forums</a>
+      {% if user %}
+        <a href="{{ url_for('submit') }}">submit</a>
+        <a href="{{ url_for('user_submissions', username=user.username) }}">u/{{ user.username }}</a>
+        <a href="{{ url_for('account') }}">account</a>
+        <form method="post" action="{{ url_for('logout') }}" class="inline">
+          <button type="submit">logout</button>
+        </form>
+      {% else %}
+        <a href="{{ url_for('login') }}">login</a>
+      {% endif %}
+    </nav>
+  </header>
+
+  {% with messages = get_flashed_messages(with_categories=true) %}
+    {% for cat, msg in messages %}
+      <div class="flash {{ cat }}">{{ msg }}</div>
+    {% endfor %}
+  {% endwith %}
+
+  {% block content %}{% endblock %}
+</body>
+</html>
