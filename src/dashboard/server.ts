@@ -404,38 +404,82 @@ function handleGetDiff(
     jsonResponse(res, 404, { error: `action #${seq} not found` });
     return;
   }
-  const meta = path.join(backupRoot, match, "metadata.json");
+  const actionDir = path.join(backupRoot, match);
+  const meta = path.join(actionDir, "metadata.json");
   if (!fs.existsSync(meta)) {
     jsonResponse(res, 200, { diff: "", stat: "", note: "no metadata.json" });
     return;
   }
-  let snapshot: Record<string, unknown> | undefined;
+  let artifacts: Array<Record<string, unknown>> = [];
   try {
-    const arr = JSON.parse(fs.readFileSync(meta, "utf-8")) as Array<Record<string, unknown>>;
-    snapshot = arr.find((a) => a.strategy === "git_snapshot");
+    artifacts = JSON.parse(fs.readFileSync(meta, "utf-8")) as Array<Record<string, unknown>>;
   } catch { /* */ }
-  if (!snapshot) {
-    jsonResponse(res, 200, { diff: "", stat: "", note: "no git_snapshot in this action" });
-    return;
-  }
-  const commit = String(snapshot.commitHash ?? snapshot.id ?? "");
-  const shadowDir = String(snapshot.artifactPath ?? "");
-  if (!commit || !fs.existsSync(shadowDir)) {
-    jsonResponse(res, 200, { diff: "", stat: "", note: "shadow repo missing" });
-    return;
-  }
+
+  // ── Remote state (tier-3 subagent for MCP writes) ──────────────────
+  // Surface remote-state.json + the subagent's recorded recovery plan
+  // so MCP-write actions don't look empty in the dashboard.
+  let remoteState: unknown = undefined;
+  let subagent: { description?: string; recovery: string[]; liveRestore?: boolean } | undefined;
   try {
-    const env = { ...process.env, GIT_DIR: shadowDir, GIT_WORK_TREE: projectRoot };
-    const opts = { encoding: "utf-8" as const, timeout: 10_000, env, cwd: projectRoot, stdio: "pipe" as const };
-    execSync("git add -A", opts);
-    const stat = execSync(`git diff --cached --stat ${commit}`, opts).toString().trim();
-    const diff = execSync(`git diff --cached --no-color ${commit}`, opts).toString();
-    execSync("git reset --quiet", opts);
-    jsonResponse(res, 200, { diff: diff.slice(0, 200_000), stat });
-  } catch (e: unknown) {
-    const msg = e instanceof Error ? e.message : String(e);
-    jsonResponse(res, 500, { error: `diff failed: ${msg.slice(0, 300)}` });
+    const remotePath = path.join(actionDir, "remote-state.json");
+    if (fs.existsSync(remotePath)) {
+      remoteState = JSON.parse(fs.readFileSync(remotePath, "utf-8"));
+    }
+  } catch { /* */ }
+  try {
+    const subFile = fs.existsSync(actionDir)
+      ? fs.readdirSync(actionDir).find((f: string) => /^subagent_.*\.json$/.test(f))
+      : undefined;
+    if (subFile) {
+      const j = JSON.parse(fs.readFileSync(path.join(actionDir, subFile), "utf-8")) as Record<string, unknown>;
+      subagent = {
+        description: typeof j.description === "string" ? j.description : undefined,
+        recovery: Array.isArray(j.recovery_commands) ? (j.recovery_commands as string[]) : [],
+        liveRestore: j.live_restore === true,
+      };
+    } else {
+      // Fall back to subagent artifact embedded in metadata.json
+      const subMeta = artifacts.find((a) => a.strategy === "subagent");
+      if (subMeta) {
+        subagent = {
+          description: typeof subMeta.description === "string" ? subMeta.description : undefined,
+          recovery: Array.isArray(subMeta.subagentCommands) ? (subMeta.subagentCommands as string[]) : [],
+          liveRestore: subMeta.liveRestore === true,
+        };
+      }
+    }
+  } catch { /* */ }
+
+  // ── Workspace diff (tier-2 git_snapshot) ──────────────────────────
+  // MCP-only actions may have no git_snapshot — that's expected, just
+  // return empty diff and let the frontend render subagent/remote
+  // sections instead.
+  const snapshot = artifacts.find((a) => a.strategy === "git_snapshot");
+  let diff = "";
+  let stat = "";
+  let diffNote: string | undefined;
+  if (snapshot) {
+    const commit = String(snapshot.commitHash ?? snapshot.id ?? "");
+    const shadowDir = String(snapshot.artifactPath ?? "");
+    if (commit && fs.existsSync(shadowDir)) {
+      try {
+        const env = { ...process.env, GIT_DIR: shadowDir, GIT_WORK_TREE: projectRoot };
+        const opts = { encoding: "utf-8" as const, timeout: 10_000, env, cwd: projectRoot, stdio: "pipe" as const };
+        execSync("git add -A", opts);
+        stat = execSync(`git diff --cached --stat ${commit}`, opts).toString().trim();
+        diff = execSync(`git diff --cached --no-color ${commit}`, opts).toString().slice(0, 200_000);
+        execSync("git reset --quiet", opts);
+      } catch (e: unknown) {
+        diffNote = `diff failed: ${(e instanceof Error ? e.message : String(e)).slice(0, 200)}`;
+      }
+    } else {
+      diffNote = "shadow repo missing";
+    }
+  } else {
+    diffNote = "no git_snapshot (remote-only action)";
   }
+
+  jsonResponse(res, 200, { diff, stat, note: diffNote, remoteState, subagent });
 }
 
 // ── Server ───────────────────────────────────────────────────────────

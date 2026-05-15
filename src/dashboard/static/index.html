@@ -187,6 +187,79 @@
   .status-cell .badge.on  { color: var(--success); border-color: var(--success); }
   .status-cell .badge.off { color: var(--muted); }
 
+  /* ── Timeline (git-log-style vertical) ────────────────────────── */
+  .timeline {
+    position: relative;
+    margin-bottom: 36px;
+    padding: 4px 0 4px 0;
+  }
+  .timeline .empty { padding: 16px 0; color: var(--muted); font-size: 13px; }
+  .timeline-row {
+    display: grid;
+    grid-template-columns: 28px 80px 1fr;
+    column-gap: 12px;
+    padding: 4px 0 8px 0;
+    align-items: baseline;
+    position: relative;
+    cursor: pointer;
+  }
+  .timeline-row:hover .tl-label { color: var(--text); }
+  .timeline-row .tl-node {
+    position: relative;
+    width: 28px;
+    text-align: center;
+  }
+  .timeline-row .tl-node::before {
+    /* The dot */
+    content: "";
+    position: absolute;
+    left: 50%; top: 7px;
+    transform: translateX(-50%);
+    width: 9px; height: 9px;
+    border-radius: 50%;
+    background: var(--accent);
+    box-shadow: 0 0 0 2px var(--bg);
+    z-index: 1;
+  }
+  .timeline-row .tl-node::after {
+    /* The vertical line below the dot, all rows except last */
+    content: "";
+    position: absolute;
+    left: 50%; top: 16px; bottom: -8px;
+    transform: translateX(-50%);
+    width: 1px;
+    background: var(--line-strong);
+    z-index: 0;
+  }
+  .timeline-row:last-child .tl-node::after { display: none; }
+  .timeline-row.has-subagent .tl-node::before { background: var(--warn); }
+  .timeline-row.has-policy   .tl-node::before { background: var(--success); }
+  .timeline-row .tl-time {
+    font-family: "JetBrains Mono", monospace;
+    font-size: 11px;
+    color: var(--muted);
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+  }
+  .timeline-row .tl-label {
+    font-size: 13px;
+    color: var(--text-dim);
+    line-height: 1.45;
+    transition: color 0.12s;
+    min-width: 0;
+  }
+  .timeline-row .tl-seq {
+    color: var(--accent);
+    font-family: "JetBrains Mono", monospace;
+    margin-right: 6px;
+  }
+  .timeline-row .tl-strats {
+    margin-left: 8px;
+    font-family: "JetBrains Mono", monospace;
+    font-size: 10.5px;
+    color: var(--muted);
+  }
+
   /* ── View-toggle (concise / detail) ──────────────────────────── */
   .view-toggle {
     display: inline-flex;
@@ -571,6 +644,15 @@
 
     <div class="section-head">
       <span class="num">01</span>
+      <h2>Timeline</h2>
+      <span class="meta" id="timeline-meta"></span>
+    </div>
+    <div class="timeline" id="timeline">
+      <div class="empty">Loading…</div>
+    </div>
+
+    <div class="section-head">
+      <span class="num">02</span>
       <h2>Actions</h2>
       <span class="meta" id="action-count"></span>
       <div class="view-toggle" role="tablist" aria-label="Action list density">
@@ -717,12 +799,14 @@ function renderActions() {
     list.innerHTML = `<div class="empty">No actions yet — use Claude Code to trigger one.</div>`;
     $("action-count").textContent = "";
     list.classList.toggle("detail-mode", viewMode === "detail");
+    renderTimeline();
     return;
   }
   $("action-count").textContent = `${currentActions.length} action${currentActions.length === 1 ? "" : "s"}`;
   const sorted = [...currentActions].sort((a, b) => b.seq - a.seq);
   list.innerHTML = sorted.map(renderAction).join("");
   list.classList.toggle("detail-mode", viewMode === "detail");
+  renderTimeline();
 
   // Wire row clicks
   for (const row of list.querySelectorAll(".action")) {
@@ -809,6 +893,59 @@ function renderAction(a) {
   </div>`;
 }
 
+// ── Timeline (git-log-style) ─────────────────────────────────
+function renderTimeline() {
+  const tl = $("timeline");
+  const meta = $("timeline-meta");
+  if (!currentActions.length) {
+    tl.innerHTML = `<div class="empty">No actions yet.</div>`;
+    if (meta) meta.textContent = "";
+    return;
+  }
+  // Newest first, mirroring the actions list below
+  const sorted = [...currentActions].sort((a, b) => b.seq - a.seq);
+  if (meta) meta.textContent = `${sorted.length} node${sorted.length === 1 ? "" : "s"}`;
+  tl.innerHTML = sorted.map(renderTimelineRow).join("");
+  for (const row of tl.querySelectorAll(".timeline-row")) {
+    row.addEventListener("click", () => {
+      const seq = parseInt(row.dataset.seq, 10);
+      // Scroll the matching row in the Actions list into view + expand it
+      const target = document.querySelector(`.action[data-seq="${seq}"]`);
+      if (target) {
+        target.scrollIntoView({ behavior: "smooth", block: "center" });
+        // Collapse any other expanded row, then expand this one
+        for (const r of document.querySelectorAll(".action.expanded")) r.classList.remove("expanded");
+        target.classList.add("expanded");
+        loadDiffInto(target, seq);
+      }
+    });
+  }
+}
+
+function renderTimelineRow(a) {
+  const strats = a.strategies || [];
+  const hasSubagent = strats.includes("subagent");
+  const hasPolicy   = strats.includes("policy_rewrite");
+  const rowClass    = hasSubagent ? "has-subagent" : (hasPolicy ? "has-policy" : "");
+  const stratsText  = strats.length
+    ? `<span class="tl-strats">${strats.join(" + ")}</span>`
+    : "";
+  const ageLabel = typeof a.ageMs === "number" && a.ageMs > 0
+    ? formatAge(a.ageMs)
+    : (a.timeFormatted || "").split(" ")[1] || "";
+  const desc = a.instruction
+    ? truncate(a.instruction, 72)
+    : (a.originalAction ? truncate(a.originalAction, 72) : "(no description)");
+  return `<div class="timeline-row ${rowClass}" data-seq="${a.seq}">
+    <div class="tl-node"></div>
+    <div class="tl-time">${escapeHtml(ageLabel)}</div>
+    <div class="tl-label">
+      <span class="tl-seq">#${String(a.seq).padStart(3, "0")}</span>
+      ${escapeHtml(desc)}${stratsText}
+    </div>
+  </div>`;
+}
+
 async function loadDiffInto(row, seq) {
   const detail = row.querySelector(".detail");
   detail.innerHTML = `<h4>Loading diff…</h4>`;
@@ -837,6 +974,30 @@ async function loadDiffInto(row, seq) {
     if (a.stats) {
       blocks.push(`<h4>Stats</h4><div class="kv">${escapeHtml(a.stats)}</div>`);
     }
+    // ── Tier-3 sections: subagent description + recovery plan + captured remote state ──
+    if (d.subagent && (d.subagent.description || (d.subagent.recovery && d.subagent.recovery.length))) {
+      const liveTag = d.subagent.liveRestore
+        ? ` <span class="strat" style="border-color:var(--warn);color:var(--warn);padding:1px 6px;font-size:10.5px;font-family:JetBrains Mono,monospace">live-restore</span>`
+        : "";
+      let html = `<h4>Subagent capture${liveTag}</h4>`;
+      if (d.subagent.description) {
+        html += `<div class="kv" style="margin-bottom:6px">${escapeHtml(d.subagent.description)}</div>`;
+      }
+      if (d.subagent.recovery && d.subagent.recovery.length) {
+        html += `<div class="kv" style="color:var(--muted);font-size:11px;text-transform:uppercase;letter-spacing:0.06em;margin-top:8px;margin-bottom:4px">Recovery plan</div>`;
+        html += `<ol style="margin:0;padding-left:20px;font-size:12.5px;color:var(--text-dim);line-height:1.55">` +
+          d.subagent.recovery.map((c) => `<li>${escapeHtml(c)}</li>`).join("") +
+          `</ol>`;
+      }
+      blocks.push(html);
+    }
+    if (d.remoteState) {
+      blocks.push(`<h4>Captured remote state</h4>` +
+        `<pre style="font-size:11.5px;color:var(--text);background:var(--bg-soft);padding:10px;border:1px solid var(--line)">` +
+        escapeHtml(JSON.stringify(d.remoteState, null, 2)) +
+        `</pre>`);
+    }
+
     if (d.diff) {
       blocks.push(`<h4>Diff vs current</h4><pre>${colorizeDiff(d.diff)}</pre>`);
     } else if (d.note) {
