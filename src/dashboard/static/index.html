@@ -730,6 +730,25 @@ function switchTab(name) {
     $("panel-" + id).classList.toggle("active", id === name);
   }
 }
+// ── View mode (concise / detail), persisted ──
+// IMPORTANT: declared here, above the toggle wiring below, so the
+// `applyViewMode(viewMode)` call at boot doesn't hit the let TDZ.
+let viewMode = "concise";
+try {
+  const saved = localStorage.getItem("chats-sandbox-view");
+  if (saved === "detail" || saved === "concise") viewMode = saved;
+} catch { /* private mode */ }
+
+function applyViewMode(mode) {
+  viewMode = mode;
+  try { localStorage.setItem("chats-sandbox-view", mode); } catch { /* */ }
+  const c = $("view-concise"); const d = $("view-detail");
+  if (c) { c.classList.toggle("active", mode === "concise"); c.setAttribute("aria-selected", String(mode === "concise")); }
+  if (d) { d.classList.toggle("active", mode === "detail"); d.setAttribute("aria-selected", String(mode === "detail")); }
+  const list = $("action-list");
+  if (list) list.classList.toggle("detail-mode", mode === "detail");
+}
+
 $("tab-timeline").onclick = () => switchTab("timeline");
 $("tab-config").onclick   = () => switchTab("config");
 $("refresh").onclick      = refreshAll;
@@ -765,23 +784,8 @@ async function loadStatus() {
 
 // ── Action list ─────────────────────────────────────────
 let currentActions = [];
-
-// ── View mode (concise / detail), persisted ─────────────────
-let viewMode = "concise";
-try {
-  const saved = localStorage.getItem("chats-sandbox-view");
-  if (saved === "detail" || saved === "concise") viewMode = saved;
-} catch { /* private mode */ }
-
-function applyViewMode(mode) {
-  viewMode = mode;
-  try { localStorage.setItem("chats-sandbox-view", mode); } catch { /* */ }
-  const c = $("view-concise"); const d = $("view-detail");
-  if (c) { c.classList.toggle("active", mode === "concise"); c.setAttribute("aria-selected", String(mode === "concise")); }
-  if (d) { d.classList.toggle("active", mode === "detail"); d.setAttribute("aria-selected", String(mode === "detail")); }
-  const list = $("action-list");
-  if (list) list.classList.toggle("detail-mode", mode === "detail");
-}
+// viewMode + applyViewMode are defined earlier (above the toggle wiring)
+// so applyViewMode(viewMode) at boot doesn't hit the let TDZ.
 
 async function loadActions() {
   try {
