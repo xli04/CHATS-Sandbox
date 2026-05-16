@@ -212,6 +212,44 @@
   .file-history .step.t-subagent .sd { background: var(--accent-2); }
   .file-history .arrow { color: var(--line-strong); font-size: 11px; }
 
+  /* Backups tab */
+  .bk-toolbar { display: flex; align-items: center; gap: 12px; margin-bottom: 10px; }
+  .bk-viewtoggle { display: flex; border: 1px solid var(--line); }
+  .bk-viewtoggle button { background: var(--bg); border: none; color: var(--text-dim); font-size: 12px; padding: 4px 12px; cursor: pointer; font-family: inherit; }
+  .bk-viewtoggle button + button { border-left: 1px solid var(--line); }
+  .bk-viewtoggle button:hover { color: var(--text); }
+  .bk-viewtoggle button.active { background: var(--bg-soft); color: var(--text); }
+  .bk-summary { margin-left: auto; font-size: 12px; color: var(--muted); }
+  .bk-summary code { color: var(--text-dim); font-family: "JetBrains Mono", monospace; }
+  .bk-table { border: 1px solid var(--line); }
+  .bk-head, .bk-row { display: grid; grid-template-columns: 20px 1.6fr 0.9fr 1.4fr 1.2fr; gap: 10px; padding: 8px 12px; align-items: center; }
+  .bk-head { background: var(--bg-soft); border-bottom: 1px solid var(--line); font-size: 10.5px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); font-weight: 600; }
+  .bk-row { border-bottom: 1px solid var(--line); font-size: 12.5px; cursor: pointer; }
+  .bk-row:hover { background: var(--hover-bg); }
+  .bk-row.expanded { background: var(--bg-soft); }
+  .bk-caret { color: var(--muted); display: inline-block; transition: transform 0.12s; }
+  .bk-row.expanded .bk-caret { transform: rotate(90deg); }
+  .bk-file { font-family: "JetBrains Mono", monospace; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .bk-state { font-family: "JetBrains Mono", monospace; font-size: 11px; }
+  .bk-state.created  { color: var(--success); }
+  .bk-state.modified { color: var(--warn); }
+  .bk-state.deleted  { color: var(--danger); }
+  .bk-tags { display: flex; gap: 5px; flex-wrap: wrap; }
+  .bk-tag { display: inline-block; border: 1px solid currentColor; padding: 0 5px; font-size: 10px; font-family: "JetBrains Mono", monospace; line-height: 1.6; }
+  .bk-tag.git   { color: var(--accent); }
+  .bk-tag.trash { color: var(--success); }
+  .bk-tag.sub   { color: var(--accent-2); }
+  .bk-tag.other { color: var(--text-dim); }
+  .bk-storage { font-family: "JetBrains Mono", monospace; font-size: 11px; color: var(--text-dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .bk-detail { display: none; padding: 4px 12px 14px 30px; border-bottom: 1px solid var(--line); background: var(--bg-soft); }
+  .bk-row.expanded + .bk-detail { display: block; }
+  .bk-detail-line { display: flex; align-items: center; gap: 10px; padding: 4px 0; font-size: 11.5px; font-family: "JetBrains Mono", monospace; color: var(--text-dim); }
+  .bk-detail-line .seq  { color: var(--accent); flex-shrink: 0; }
+  .bk-detail-line .time { color: var(--muted); flex-shrink: 0; }
+  .bk-detail-line .path { color: var(--text-dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; min-width: 0; }
+  .bk-detail-line .btn { margin-left: auto; flex-shrink: 0; }
+  .bk-detail-bar { margin-top: 10px; display: flex; gap: 8px; flex-wrap: wrap; }
+
   /* Config form (carried over) */
   .section-head { margin-top: 4px; margin-bottom: 14px; display: flex; align-items: baseline; gap: 12px; border-bottom: 1px solid var(--line); padding-bottom: 6px; }
   .section-head .num   { color: var(--muted); font-weight: 400; }
@@ -278,6 +316,7 @@
   </div>
   <nav>
     <button id="tab-timeline" class="active">Timeline</button>
+    <button id="tab-backups">Backups</button>
     <button id="tab-config">Config</button>
     <button id="refresh" class="icon-btn" style="margin-left: 14px;">↻ Refresh</button>
     <button id="theme-toggle" class="icon-btn" title="Toggle theme">☼</button>
@@ -314,6 +353,22 @@
       <div class="detail-pane" id="detail-pane">
         <div class="detail-empty">Select an action from the timeline to see details.</div>
       </div>
+    </div>
+  </div>
+
+  <div id="panel-backups" class="panel">
+    <div class="status-bar" id="status-bar-bk">
+      <span class="pill" style="color: var(--muted);">Loading status…</span>
+    </div>
+    <div class="bk-toolbar">
+      <div class="bk-viewtoggle">
+        <button id="bk-view-file" class="active">By file</button>
+        <button id="bk-view-storage">By storage</button>
+      </div>
+      <span class="bk-summary" id="bk-summary"></span>
+    </div>
+    <div class="bk-table" id="bk-table">
+      <div class="empty">Loading…</div>
     </div>
   </div>
 
@@ -375,12 +430,13 @@ $("theme-toggle").onclick = () => {
 
 // Tabs
 function switchTab(name) {
-  for (const id of ["timeline", "config"]) {
+  for (const id of ["timeline", "backups", "config"]) {
     $("tab-" + id).classList.toggle("active", id === name);
     $("panel-" + id).classList.toggle("active", id === name);
   }
 }
 $("tab-timeline").onclick = () => switchTab("timeline");
+$("tab-backups").onclick  = () => switchTab("backups");
 $("tab-config").onclick   = () => switchTab("config");
 $("refresh").onclick      = refreshAll;
 
@@ -419,7 +475,8 @@ async function loadStatus() {
     currentStatus = s;
     renderStatus();
   } catch (e) {
-    $("status-bar").innerHTML = `<span class="pill" style="color:var(--danger)">Status unavailable</span>`;
+    const errHtml = `<span class="pill" style="color:var(--danger)">Status unavailable</span>`;
+    for (const el of document.querySelectorAll(".status-bar")) el.innerHTML = errHtml;
   }
 }
 function renderStatus() {
@@ -447,7 +504,8 @@ function renderStatus() {
     <span class="pill" style="color:var(--muted)">disk</span>
     <span class="pill"><code>${formatBytes(s.totalSizeBytes || 0)}</code></span>
   </span>`;
-  $("status-bar").innerHTML = left.join("") + right;
+  const html = left.join("") + right;
+  for (const el of document.querySelectorAll(".status-bar")) el.innerHTML = html;
 }
 
 // Actions
@@ -459,6 +517,7 @@ async function loadActions() {
     currentActions = [];
   }
   renderTimeline();
+  loadBackups();
   const sorted = [...currentActions].sort((a, b) => b.seq - a.seq);
   if (selectedSeq !== null && currentActions.some((a) => a.seq === selectedSeq)) {
     selectAction(selectedSeq);
@@ -841,6 +900,234 @@ function colorizeDiff(diff) {
   }).join("\n");
 }
 
+// Backups tab — file-centric inventory of what's preserved + where.
+// Derives entirely from currentActions; no extra fetch.
+let bkView = "file";
+let bkExpanded = null;
+
+$("bk-view-file").onclick = () => {
+  bkView = "file";
+  $("bk-view-file").classList.add("active");
+  $("bk-view-storage").classList.remove("active");
+  renderBackups();
+};
+$("bk-view-storage").onclick = () => {
+  bkView = "storage";
+  $("bk-view-storage").classList.add("active");
+  $("bk-view-file").classList.remove("active");
+  renderBackups();
+};
+
+function loadBackups() { renderBackups(); }
+
+// Short label for a storage path, detected from its prefix.
+function bkStorageLabel(p) {
+  if (!p) return "";
+  if (p.includes("shadow-repo")) return "shadow.git";
+  if (p.includes("external-shadow")) return "external-shadow";
+  if (p.includes("/trash") || /(^|\/)trash$/.test(p)) return "sandbox-trash";
+  return baseName(p) || "manifest";
+}
+
+// Walk a file's actions (ascending seq) and resolve a final state.
+function bkFileState(actions) {
+  let state = null;
+  for (const a of [...actions].sort((x, y) => x.seq - y.seq)) {
+    const c = compactContent(a);
+    const tool = (a.toolName || "").toLowerCase();
+    const cmd = c.kind === "bash" ? `${c.verb} ${c.target || ""}` : "";
+    if (tool === "bash" && /^rm\b/.test(cmd.trim())) { state = "deleted"; continue; }
+    if (tool === "write" || c.kind === "write") {
+      state = state ? "modified" : "created";
+    } else if (tool === "edit" || c.kind === "edit") {
+      state = "modified";
+    } else {
+      state = state || "modified";
+    }
+  }
+  return state || "modified";
+}
+
+// Best display path for a file: prefer a workspace-relative path from
+// the git snapshot; else an absolute/external path mined from the
+// instruction, prettified to …/parent/name.
+function bkDisplayPath(file, actions) {
+  for (const a of actions) {
+    if (Array.isArray(a.files)) {
+      const hit = a.files.find((x) => baseName(x) === file);
+      if (hit) return { shown: hit, full: hit };
+    }
+  }
+  for (const a of actions) {
+    const text = a.instruction || a.originalAction || "";
+    const m = text.match(new RegExp("([\\w./~-]*\\/" + file.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") + ")"));
+    if (m) {
+      const full = m[1];
+      const parts = full.split("/").filter(Boolean);
+      const shown = parts.length > 1 ? "…/" + parts.slice(-2).join("/") : full;
+      return { shown, full };
+    }
+  }
+  return { shown: file, full: file };
+}
+
+function bkTagClass(strategy) {
+  if (strategy === "git_snapshot") return "git";
+  if (strategy === "policy_rewrite") return "trash";
+  if (strategy === "subagent") return "sub";
+  return "other";
+}
+
+function bkDetailHtml(file, acts) {
+  const lines = [...acts].sort((a, b) => a.seq - b.seq).map((a) => {
+    const t = (a.timeFormatted || "").split(" ")[1] || "";
+    const st = (a.storage || []).map((s) => {
+      const cls = bkTagClass(s.strategy);
+      let p = s.path || "(no path)";
+      if (s.strategy === "git_snapshot" && s.ref) {
+        p = `${bkStorageLabel(s.path) || "shadow.git"} @ ${s.ref.slice(0, 7)}`;
+      }
+      return `<span class="bk-tag ${cls}">${escapeHtml(s.strategy)}</span>` +
+        `<span class="path" title="${escapeHtml(s.path || "")}">${escapeHtml(p)}</span>`;
+    }).join("");
+    return `<div class="bk-detail-line">
+      <span class="seq">#${String(a.seq).padStart(2, "0")}</span>
+      <span class="time">${escapeHtml(t)}</span>
+      ${st || `<span class="path" style="color:var(--muted)">no storage recorded</span>`}
+      <button class="btn small" data-bk-restore="${a.seq}">↶ Checkout</button>
+    </div>`;
+  }).join("");
+  const latest = Math.max(...acts.map((a) => a.seq));
+  const shadow = acts.flatMap((a) => a.storage || [])
+    .find((s) => s.strategy === "git_snapshot" && s.path);
+  return `${lines}
+    <div class="bk-detail-bar">
+      <button class="btn primary" data-bk-restore="${latest}">↶ Restore latest pre-state</button>
+      <button class="btn" data-bk-shadow="${escapeAttr(shadow ? shadow.path : "")}">View in shadow repo</button>
+      <button class="btn" data-bk-copyfile="${escapeAttr(file)}">Copy paths</button>
+    </div>`;
+}
+
+function renderBackups() {
+  const table = $("bk-table");
+  if (!currentActions.length) {
+    table.innerHTML = `<div class="empty">No backups yet. Trigger an action in Claude Code.</div>`;
+    $("bk-summary").innerHTML = "";
+    return;
+  }
+
+  // Group actions by the file they touched.
+  const map = new Map();
+  for (const a of [...currentActions].sort((x, y) => x.seq - y.seq)) {
+    const f = inferFile(a);
+    if (!f) continue;
+    if (!map.has(f)) map.set(f, []);
+    map.get(f).push(a);
+  }
+
+  // Summary strip — counts across all storage entries.
+  let nGit = 0, nTrash = 0, nSub = 0;
+  for (const a of currentActions) {
+    for (const s of (a.storage || [])) {
+      if (s.strategy === "git_snapshot") nGit++;
+      else if (s.strategy === "policy_rewrite") nTrash++;
+      else if (s.strategy === "subagent") nSub++;
+    }
+  }
+  $("bk-summary").innerHTML =
+    `<code>${map.size}</code> files · <code>${nGit}</code> snapshots · ` +
+    `<code>${nTrash}</code> rewrites · <code>${nSub}</code> subagent`;
+
+  if (bkView === "storage") {
+    table.innerHTML = `<div class="empty">Coming soon — switch to By file.</div>`;
+    return;
+  }
+
+  const entries = [...map.entries()].sort((a, b) => {
+    const ma = Math.max(...a[1].map((x) => x.seq));
+    const mb = Math.max(...b[1].map((x) => x.seq));
+    return mb - ma;
+  });
+
+  let html = `<div class="bk-head">
+    <span></span><span>File</span><span>State</span>
+    <span>Backed up to</span><span>Storage</span>
+  </div>`;
+
+  for (const [file, acts] of entries) {
+    const dp = bkDisplayPath(file, acts);
+    const state = bkFileState(acts);
+    let g = 0, t = 0, s = 0;
+    const labels = new Set();
+    for (const a of acts) {
+      for (const stg of (a.storage || [])) {
+        if (stg.strategy === "git_snapshot") g++;
+        else if (stg.strategy === "policy_rewrite") t++;
+        else if (stg.strategy === "subagent") s++;
+        const lb = bkStorageLabel(stg.path);
+        if (lb) labels.add(lb);
+      }
+    }
+    const tags = [];
+    if (g) tags.push(`<span class="bk-tag git">git × ${g}</span>`);
+    if (t) tags.push(`<span class="bk-tag trash">trash × ${t}</span>`);
+    if (s) tags.push(`<span class="bk-tag sub">subagent × ${s}</span>`);
+    const storageLabel = [...labels].join(" + ") || "—";
+    const exp = bkExpanded === file;
+
+    html += `<div class="bk-row${exp ? " expanded" : ""}" data-file="${escapeAttr(file)}">
+      <span class="bk-caret">›</span>
+      <span class="bk-file" title="${escapeHtml(dp.full)}">${escapeHtml(dp.shown)}</span>
+      <span class="bk-state ${state}">${state}</span>
+      <span class="bk-tags">${tags.join("") || "—"}</span>
+      <span class="bk-storage" title="${escapeHtml(storageLabel)}">${escapeHtml(storageLabel)}</span>
+    </div>`;
+    html += `<div class="bk-detail">${bkDetailHtml(file, acts)}</div>`;
+  }
+  table.innerHTML = html;
+
+  for (const row of table.querySelectorAll(".bk-row")) {
+    row.addEventListener("click", () => {
+      const f = row.dataset.file;
+      bkExpanded = (bkExpanded === f) ? null : f;
+      renderBackups();
+    });
+  }
+  for (const btn of table.querySelectorAll("[data-bk-restore]")) {
+    btn.addEventListener("click", (ev) => {
+      ev.stopPropagation();
+      openRestoreModal(parseInt(btn.dataset.bkRestore, 10));
+    });
+  }
+  for (const btn of table.querySelectorAll("[data-bk-shadow]")) {
+    btn.addEventListener("click", (ev) => {
+      ev.stopPropagation();
+      const p = btn.dataset.bkShadow;
+      toast(p ? `Shadow repo: ${p}` : "No shadow repo for this file.", p ? "" : "err");
+    });
+  }
+  for (const btn of table.querySelectorAll("[data-bk-copyfile]")) {
+    btn.addEventListener("click", (ev) => {
+      ev.stopPropagation();
+      const f = btn.dataset.bkCopyfile;
+      const paths = [...new Set(
+        currentActions
+          .filter((a) => inferFile(a) === f)
+          .flatMap((a) => (a.storage || []).map((s) => s.path).filter(Boolean))
+      )];
+      const txt = paths.join("\n");
+      if (navigator.clipboard && txt) {
+        navigator.clipboard.writeText(txt).then(
+          () => toast(`Copied ${paths.length} path(s).`, "ok"),
+          () => toast("Copy failed.", "err"),
+        );
+      } else {
+        toast(txt || "No paths to copy.");
+      }
+    });
+  }
+}
+
 // Restore modal
 let restoreSeq = null;
 function openRestoreModal(seq) {
@@ -1008,6 +1295,7 @@ async function refreshAll() {
   const btn = $("refresh"); btn.disabled = true;
   const orig = btn.textContent; btn.textContent = "↻ …";
   await Promise.all([loadStatus(), loadActions()]);
+  loadBackups();
   btn.textContent = orig; btn.disabled = false;
 }
 

@@ -33,6 +33,15 @@ interface ActionSummary {
   originalAction: string;
   sizeBytes: number;
   ageMs: number;
+  /** Where this action's artifacts physically live on disk. One entry
+   *  per artifact in metadata.json. Powers the Backups tab's
+   *  file→storage inventory. */
+  storage: Array<{
+    strategy: string;
+    path: string;
+    ref?: string;
+    sizeBytes?: number;
+  }>;
   /** When a `subagent` artifact is present, summarize what it did.
    *  Undefined when no subagent fired for this action. */
   subagent?: {
@@ -215,6 +224,32 @@ function buildActionSummary(
     if (!isNaN(ms)) ageMs = Math.max(0, Date.now() - ms);
   }
 
+  // Physical storage map — one entry per artifact. The frontend's
+  // Backups tab groups these by file. `artifactPath` is the universal
+  // location field on BackupArtifact; `subagent` is the exception (its
+  // external-shadow git dir lives under the action folder, mirroring
+  // the externalShadowFileCount logic above).
+  const storage: ActionSummary["storage"] = [];
+  for (const art of artifacts) {
+    const strat = String(art.strategy ?? "");
+    if (!strat) continue;
+    let p: string;
+    if (strat === "subagent") {
+      p = path.join(dir, "external-shadow");
+    } else if (strat === "git_tag") {
+      // TODO: git_tag's artifactPath is a tag *name*, not a fs path.
+      p = "";
+    } else {
+      p = String(art.artifactPath ?? "");
+    }
+    storage.push({
+      strategy: strat,
+      path: p,
+      ref: typeof art.commitHash === "string" ? art.commitHash : undefined,
+      sizeBytes: typeof art.sizeBytes === "number" ? art.sizeBytes : undefined,
+    });
+  }
+
   return {
     name: dirName,
     seq,
@@ -228,6 +263,7 @@ function buildActionSummary(
     originalAction,
     sizeBytes,
     ageMs,
+    storage,
     subagent,
   };
 }
