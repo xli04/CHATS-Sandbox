@@ -201,8 +201,11 @@ function restoreSubagent(
   // subagent that reads live state and decides what to do.
   if (artifact.liveRestore) {
     if (!config) {
+      // Nothing was restored — only a prompt was produced. Report
+      // this honestly as a failure so callers don't prune folders
+      // or claim success for unrecovered remote state.
       return {
-        success: true,
+        success: false,
         description: "Live-restore subagent needed (config unavailable in this call path)",
         subagentPrompt: buildSubagentRestorePrompt(artifact),
       };
@@ -220,9 +223,11 @@ function restoreSubagent(
   const commands = artifact.subagentCommands ?? [];
 
   if (commands.length === 0) {
-    // Nothing to execute — fall back to subagent prompt
+    // Nothing to execute — only a prompt is produced, so the artifact
+    // is not actually restored. Report as failure (not success) so
+    // pruning is blocked and the dashboard doesn't show a false "✓".
     return {
-      success: true,
+      success: false,
       description: "Subagent restore needed (no commands recorded)",
       subagentPrompt: buildSubagentRestorePrompt(artifact),
     };
@@ -389,11 +394,17 @@ function pruneIntermediateFolders(
 }
 
 /**
- * Check if all results in a restore operation succeeded (allowing
- * subagent-needed as "success" since the deterministic part worked).
+ * Check if all results in a restore operation succeeded.
+ *
+ * A result that only carries a `subagentPrompt` did NOT actually
+ * restore anything — it deferred the work to a prompt nobody has run
+ * yet. Counting that as success let the system prune intermediate
+ * folders and report "✓ restored" while remote/dynamic state was
+ * still unrecovered. We now require an executed success with no
+ * pending prompt.
  */
 function allSucceeded(results: RestoreResult[]): boolean {
-  return results.every((r) => r.success || r.subagentPrompt !== undefined);
+  return results.every((r) => r.success && r.subagentPrompt === undefined);
 }
 
 /**
@@ -543,7 +554,11 @@ export function restoreActionLoop(
   });
   const targetAction = actions[targetIdx];
   for (const artifact of targetAction.artifacts) {
-    const r = restoreArtifact(artifact);
+    // Pass config — without it the liveRestore branch in
+    // restoreSubagent can't spawn the restore subagent and silently
+    // degrades to a prompt-only no-op for the most important action
+    // in the whole operation (the state we're restoring TO).
+    const r = restoreArtifact(artifact, config);
     results.push(r);
     if (!r.success && !r.subagentPrompt) {
       anyFailed = true;

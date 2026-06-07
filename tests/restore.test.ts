@@ -156,7 +156,11 @@ describe("restore - subagent", () => {
       strategy: "subagent",
       description: "Some backup",
     }));
-    assert.equal(r.success, true);
+    // A prompt-only deferral did NOT restore anything, so it must
+    // report success:false (was previously true, which let callers
+    // prune folders and show a false "✓ restored"). The prompt is
+    // still surfaced so the caller knows what work remains.
+    assert.equal(r.success, false);
     assert.ok(r.subagentPrompt!.includes("no commands recorded"));
   });
 });

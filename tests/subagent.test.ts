@@ -312,7 +312,10 @@ describe("subagent: restore executes recovery commands", () => {
     };
 
     const r = restoreArtifact(artifact);
-    assert.equal(r.success, true);
+    // Prompt-only deferral is now success:false — nothing was
+    // actually restored (allSucceeded / restoreSubagent honesty fix).
+    // The prompt is still surfaced so the caller knows what's pending.
+    assert.equal(r.success, false);
     assert.ok(r.subagentPrompt);
   });
 });
