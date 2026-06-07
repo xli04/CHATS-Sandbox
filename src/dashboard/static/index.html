@@ -130,57 +130,27 @@
 
   /* Timeline rows */
   .tl-rows { position: relative; padding: 4px 0; }
-  .tl-vline { position: absolute; left: 14px; top: 14px; bottom: 14px; width: 1px; background: var(--line-strong); z-index: 0; }
-  .tl-row { display: grid; grid-template-columns: 16px 1fr 16px; column-gap: 10px; align-items: center; padding: 7px 6px; font-size: 12.5px; cursor: pointer; position: relative; z-index: 1; border-radius: 2px; }
+  .tl-vline { position: absolute; left: 20px; top: 14px; bottom: 14px; width: 1px; background: var(--line-strong); z-index: 0; }
+  .tl-row { display: grid; grid-template-columns: 28px 1fr 16px; column-gap: 10px; align-items: center; padding: 7px 6px; font-size: 12.5px; cursor: pointer; position: relative; z-index: 1; border-radius: 2px; }
   .tl-row:hover { background: var(--hover-bg); }
   .tl-row.selected { background: var(--bg-soft); }
   .tl-row.selected::before { content: ""; position: absolute; left: -3px; top: 6px; bottom: 6px; width: 2px; background: var(--text); }
-  .tl-dot { width: 9px; height: 9px; border-radius: 50%; margin: 0 auto; box-shadow: 0 0 0 2px var(--bg); background: var(--accent); position: relative; z-index: 2; }
-  .tl-row.t-snapshot .tl-dot { background: var(--accent); }
-  .tl-row.t-rewrite  .tl-dot { background: var(--warn); }
-  .tl-row.t-subagent .tl-dot { background: var(--accent-2); box-shadow: 0 0 0 2px var(--bg), 0 0 0 4px rgba(91, 106, 143, 0.25); }
-  [data-theme="dark"] .tl-row.t-subagent .tl-dot { box-shadow: 0 0 0 2px var(--bg), 0 0 0 4px rgba(139, 155, 194, 0.3); }
 
-  .tl-row.t-manifest .tl-dot { background: var(--success); }
+  /* The spine node IS the tier label (T0/T1/T2/T3). A bordered chip
+     sitting on the vertical spine, its bg masking the line behind it. */
+  .tl-node {
+    justify-self: center; position: relative; z-index: 2;
+    min-width: 22px; text-align: center;
+    font-family: "JetBrains Mono", monospace; font-size: 9.5px; font-weight: 700;
+    line-height: 1.5; padding: 0 2px;
+    background: var(--bg); border: 1px solid currentColor; border-radius: 2px;
+    color: var(--accent);
+  }
+  .tl-node.t-snapshot { color: var(--accent); }
+  .tl-node.t-rewrite  { color: var(--warn); }
+  .tl-node.t-manifest { color: var(--success); }
+  .tl-node.t-subagent { color: var(--accent-2); }
 
-  /* Per-row tier chip (T0/T1/T2/T3) — text label so the method is
-     readable without relying on dot colour alone. */
-  .tl-tier {
-    flex-shrink: 0; margin-right: 6px;
-    font-family: "JetBrains Mono", monospace; font-size: 10px; font-weight: 600;
-    padding: 0 4px; line-height: 1.5; border: 1px solid currentColor; border-radius: 2px;
-  }
-  .tl-tier.t-snapshot { color: var(--accent); }
-  .tl-tier.t-manifest { color: var(--success); }
-  .tl-tier.t-subagent { color: var(--accent-2); }
-
-  /* Tier-0 policy_rewrite — a labelled BRANCH off the spine. The dot
-     becomes a hollow junction; a horizontal arm points to the
-     "Policy Rewrite" node so it reads as a side-branch, not a
-     snapshot. */
-  .tl-row.t-rewrite .tl-dot {
-    width: 8px; height: 8px; border-radius: 50%;
-    background: var(--bg); border: 1.5px solid var(--warn);
-  }
-  .tl-row.t-rewrite .tl-dot::after {
-    content: ""; position: absolute;
-    top: 50%; left: 100%;
-    width: 16px; height: 1.5px;
-    background: var(--warn);
-    transform: translateY(-50%);
-  }
-  .tl-branch-node {
-    position: relative; z-index: 2;
-    flex-shrink: 0; margin-right: 7px;
-    display: inline-flex; align-items: center; gap: 4px;
-    font-family: "JetBrains Mono", monospace; font-size: 10.5px;
-    color: var(--warn); background: var(--bg);
-    border: 1px solid var(--warn); border-radius: 2px;
-    padding: 0 6px; line-height: 1.55;
-  }
-  .tl-branch-node::before { content: "▸"; color: var(--warn); margin-right: 1px; }
-  .tl-branch-node b { font-weight: 700; }
-  .tl-branch-node .rev { color: var(--muted); border-left: 1px solid var(--line); margin-left: 3px; padding-left: 5px; font-size: 9.5px; }
   .tl-content { min-width: 0; display: flex; align-items: baseline; overflow: hidden; }
   .tl-idx { color: var(--muted); font-family: "JetBrains Mono", monospace; font-size: 10.5px; margin-right: 6px; flex-shrink: 0; font-variant-numeric: tabular-nums; }
   .tl-tool { display: inline-block; font-family: "JetBrains Mono", monospace; font-size: 10px; padding: 0 4px; margin-right: 6px; color: var(--text-dim); background: var(--bg-soft); border: 1px solid var(--line); flex-shrink: 0; min-width: 16px; text-align: center; line-height: 1.5; }
@@ -717,31 +687,12 @@ function renderTimelineRowHtml(a) {
   const tier = tierOf(a);
   const toolLetter = ((a.toolName || "?")[0] || "?").toUpperCase();
 
-  // Tier-0 policy_rewrite renders as a labelled BRANCH off the spine —
-  // a hollow junction + horizontal arm pointing to a "Policy Rewrite"
-  // node. These actions are intercepted (rm→trash, chmod) and
-  // reversible, conceptually a side-branch rather than a snapshot.
-  if (tier.cls === "t-rewrite") {
-    return `<div class="tl-row t-rewrite" data-seq="${a.seq}">
-      <div class="tl-dot"></div>
-      <div class="tl-content">
-        <span class="tl-idx">#${String(a.seq).padStart(2, "0")}</span>
-        <span class="tl-branch-node" title="Tier-0 policy rewrite — intercepted, reversible">
-          <b>T0</b> Policy Rewrite<span class="rev">reversible</span>
-        </span>
-        <span class="tl-tool ${toolLetter}">${toolLetter}</span>
-        ${content}
-      </div>
-      <button class="tl-restore" data-seq="${a.seq}" title="Restore to this state">↶</button>
-    </div>`;
-  }
-
-  // All other tiers: a small tier chip after the index.
+  // The spine node IS the tier label (T0/T1/T2/T3) — no separate dot,
+  // no branch. Colour reinforces the tier but the text carries it.
   return `<div class="tl-row ${tier.cls}" data-seq="${a.seq}">
-    <div class="tl-dot"></div>
+    <div class="tl-node ${tier.cls}" title="${tier.tag} ${tier.name}">${tier.tag}</div>
     <div class="tl-content">
       <span class="tl-idx">#${String(a.seq).padStart(2, "0")}</span>
-      <span class="tl-tier ${tier.cls}" title="${tier.tag} ${tier.name}">${tier.tag}</span>
       <span class="tl-tool ${toolLetter}">${toolLetter}</span>
       ${content}
     </div>
@@ -930,13 +881,32 @@ async function loadDiff(seq) {
     if (d.diff) {
       diffEl.innerHTML = colorizeDiff(d.diff);
     } else if (d.note) {
-      diffEl.textContent = d.note;
+      diffEl.textContent = d.policyRewrite
+        ? "tier-0 rewrite — no workspace snapshot needed (see Policy rewrite below)"
+        : d.note;
       diffEl.style.color = "var(--muted)";
     } else {
       diffEl.textContent = "(no diff available)";
       diffEl.style.color = "var(--muted)";
     }
     const extra = document.createElement("div");
+    // Tier-0 policy rewrite: the original destructive action and what
+    // CHATS-Sandbox revised it to (the reversible equivalent).
+    if (d.policyRewrite) {
+      const pr = d.policyRewrite;
+      // Strip a "Bash(...)" wrapper for readability.
+      const origCmd = (pr.original || "").replace(/^\w+\((.*)\)$/s, "$1") || pr.original;
+      let rw = `<div class="detail-section">
+        <h4>Policy rewrite <span class="detail-strat" style="color:var(--warn);border-color:var(--warn)">T0 · reversible</span></h4>
+        <div class="kv" style="margin-bottom:4px"><span style="color:var(--muted)">original</span> <span class="strike" style="text-decoration-color:var(--danger);color:var(--text)">${escapeHtml(origCmd)}</span></div>
+        <div class="kv"><span style="color:var(--muted)">revised&nbsp;</span> <span style="color:var(--success)">${escapeHtml(pr.description || "intercepted")}</span></div>`;
+      if (pr.recovery && pr.recovery.length) {
+        rw += `<div class="kv" style="color:var(--muted);text-transform:uppercase;font-size:10px;letter-spacing:0.06em;margin-top:8px;margin-bottom:3px">Reverses on restore</div>
+          <ol style="margin:0;padding-left:20px;font-size:11.5px;color:var(--text-dim);line-height:1.5">${pr.recovery.map((c) => `<li>${escapeHtml(c)}</li>`).join("")}</ol>`;
+      }
+      rw += `</div>`;
+      extra.innerHTML += rw;
+    }
     if (d.subagent && d.subagent.recovery && d.subagent.recovery.length) {
       const liveTag = d.subagent.liveRestore
         ? ` <span class="detail-strat" style="color:var(--warn);border-color:var(--warn)">live-restore</span>`

@@ -603,7 +603,23 @@ function handleGetDiff(
     diffNote = "no git_snapshot (remote-only action)";
   }
 
-  jsonResponse(res, 200, { diff, stat, note: diffNote, remoteState, subagent });
+  // ── Tier-0 policy rewrite: original vs revised action ──────────────
+  // Surface what the rm/chmod was rewritten to (the reversible
+  // equivalent) and how restore reverses it.
+  let policyRewrite:
+    | { original: string; description: string; recovery: string[]; trashPath: string }
+    | undefined;
+  const pr = artifacts.find((a) => a.strategy === "policy_rewrite");
+  if (pr) {
+    policyRewrite = {
+      original: typeof pr.originalAction === "string" ? pr.originalAction : "",
+      description: typeof pr.description === "string" ? pr.description : "",
+      recovery: Array.isArray(pr.recoveryCommands) ? (pr.recoveryCommands as string[]) : [],
+      trashPath: typeof pr.artifactPath === "string" ? pr.artifactPath : "",
+    };
+  }
+
+  jsonResponse(res, 200, { diff, stat, note: diffNote, remoteState, subagent, policyRewrite });
 }
 
 // ── Server ───────────────────────────────────────────────────────────
