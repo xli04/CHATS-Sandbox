@@ -28,6 +28,28 @@ export interface HookContext {
  * shares one downstream contract, and hardens against null/missing
  * tool_input (OpenHands types it `dict | null`).
  */
+/**
+ * Build a compact, human-readable label for a tool call —
+ * "Bash(rm x)", "Write(/abs/file.txt)", etc. Picks the most relevant
+ * arg per tool: command for shell tools, file path for editors, and a
+ * trimmed JSON fallback so non-shell tools (Write/Edit/MCP) never
+ * render empty parens.
+ */
+export function describeToolAction(
+  toolName: string,
+  toolInput: Record<string, unknown>,
+): string {
+  const ti = toolInput ?? {};
+  const pick = (k: string): string | undefined =>
+    typeof ti[k] === "string" && (ti[k] as string).length > 0 ? (ti[k] as string) : undefined;
+  const arg =
+    pick("command") ??
+    pick("file_path") ?? pick("path") ?? pick("target") ?? pick("destination") ??
+    pick("url") ?? pick("element") ??
+    (Object.keys(ti).length ? JSON.stringify(ti) : "");
+  return `${toolName}(${String(arg).slice(0, 200)})`;
+}
+
 export function normalizeHookContext(parsed: unknown): HookContext {
   const p = (parsed && typeof parsed === "object"
     ? parsed : {}) as Record<string, unknown>;

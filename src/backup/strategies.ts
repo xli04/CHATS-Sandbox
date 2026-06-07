@@ -22,6 +22,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { execSync } from "node:child_process";
 import type { BackupArtifact, HookContext, SandboxConfig } from "../types.js";
+import { describeToolAction } from "../types.js";
 import { runSubagentBackup } from "./subagent.js";
 
 // ── Action folder management (LAZY) ─────────────────────────────
@@ -817,7 +818,7 @@ export function runBackup(
       artifactPath: trashDir,
       recoveryCommands: policyResult.recoveryCommands,
       policyRuleId: policyResult.ruleId,
-      originalAction: `${ctx.tool_name}(${String(ctx.tool_input.command ?? "").slice(0, 200)})`,
+      originalAction: describeToolAction(ctx.tool_name, ctx.tool_input),
     };
     result.artifacts.push(artifact);
     result.updatedInput = policyResult.updatedInput;

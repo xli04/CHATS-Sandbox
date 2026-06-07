@@ -20,6 +20,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { execSync } from "node:child_process";
 import type { BackupArtifact, HookContext, SandboxConfig } from "../types.js";
+import { describeToolAction } from "../types.js";
 
 /** Shape of the JSON the subagent is instructed to return */
 interface SubagentResponse {
@@ -513,7 +514,7 @@ export function runSubagentBackup(
     artifactPath: artifactFile,
     subagentCommands: parsed.recovery_commands,
     liveRestore: parsed.live_restore ?? false,
-    originalAction: `${ctx.tool_name}(${String(ctx.tool_input.command ?? JSON.stringify(ctx.tool_input)).slice(0, 200)})`,
+    originalAction: describeToolAction(ctx.tool_name, ctx.tool_input),
   };
 }
 
