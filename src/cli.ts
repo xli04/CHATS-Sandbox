@@ -155,6 +155,12 @@ function setConfigValue(
       process.exit(1);
     }
     (config as unknown as Record<string, unknown>)[k] = value;
+  } else if (k === "subagentRunner") {
+    if (!["claude", "hermes"].includes(value)) {
+      console.error(`Invalid subagentRunner: ${value}. Use: claude | hermes`);
+      process.exit(1);
+    }
+    (config as unknown as Record<string, unknown>)[k] = value;
   } else {
     (config as unknown as Record<string, unknown>)[k] = value;
   }

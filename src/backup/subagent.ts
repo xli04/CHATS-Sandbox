@@ -37,13 +37,66 @@ interface SubagentResponse {
   live_restore?: boolean;
 }
 
-function isClaudeCliAvailable(): boolean {
+function isCommandAvailable(cmd: string): boolean {
   try {
-    execSync("command -v claude", { stdio: "pipe", timeout: 5_000 });
+    execSync(`command -v ${cmd}`, { stdio: "pipe", timeout: 5_000 });
     return true;
   } catch {
     return false;
   }
+}
+
+/**
+ * Build the subprocess invocation for the tier-3 subagent, branching on
+ * config.subagentRunner.
+ *
+ *   claude — `claude -p <prompt> --output-format json …` (Claude Code).
+ *   hermes — `hermes chat -q <prompt> -m <model> --provider <p> -Q --yolo`
+ *            (Hermes / non-Claude agents). The provider API key is read
+ *            from the environment (OPENROUTER_API_KEY etc.) inherited
+ *            from the parent process — never stored in config.
+ *
+ * Returns null when the configured runner's CLI isn't on PATH, so the
+ * caller degrades gracefully (skip backup / report restore failure)
+ * exactly as it did for the missing-claude case.
+ */
+function buildSubagentInvocation(
+  prompt: string,
+  config: SandboxConfig,
+): { bin: string; args: string[]; runner: "claude" | "hermes" } | null {
+  const runner = config.subagentRunner ?? "claude";
+
+  if (runner === "hermes") {
+    if (!isCommandAvailable("hermes")) return null;
+    const model = config.subagentHermesModel || "anthropic/claude-haiku-4.5";
+    const provider = config.subagentHermesProvider || "openrouter";
+    return {
+      bin: "hermes",
+      runner,
+      // -Q quiet (programmatic), --yolo skip approval prompts so the
+      // headless subagent can run git/bash without blocking.
+      args: ["chat", "-q", prompt, "-m", model, "--provider", provider, "-Q", "--yolo"],
+    };
+  }
+
+  // Default: claude -p
+  if (!isCommandAvailable("claude")) return null;
+  const permissionMode = config.subagentPermissionMode ?? "bypassPermissions";
+  const args = [
+    "-p", prompt,
+    "--output-format", "json",
+    "--no-session-persistence",
+    "--setting-sources", "user",
+  ];
+  if (permissionMode === "bypassPermissions") {
+    args.push("--dangerously-skip-permissions");
+  } else {
+    args.push("--permission-mode", permissionMode);
+  }
+  if (config.subagentModel && config.subagentModel !== "inherit") {
+    args.push("--model", config.subagentModel);
+  }
+  return { bin: "claude", args, runner };
 }
 
 /**
@@ -158,12 +211,26 @@ recovery instructions:
    Include enough fields that a future restore subagent could recreate
    the state (title, body, author, timestamps, IDs, parent IDs, etc.).
 
-4. recovery_commands should describe — in natural English the restore
-   subagent will follow — how to use the same MCP to recreate the
-   destroyed/changed state. Example for a deleted post:
-   "Use the Playwright MCP to: log in as the same user, navigate to
-   the forum's submit page, create a text post with title=<X>, body=<Y>
-   from remote-state.json. Report the new post's URL."
+4. recovery_commands MUST reverse the EFFECT of the action, not merely
+   undo the UI interaction or summarize what happened. Decide the
+   action's direction and record the true inverse:
+   - DESTRUCTIVE (delete/close/remove/archive): recovery RE-CREATES the
+     destroyed state. Example for a deleted post: "Use the Playwright
+     MCP to log in as the same user, navigate to the submit page, and
+     create a text post with title=<X>, body=<Y> from
+     remote-state.json. Report the new post's URL."
+   - CONSTRUCTIVE (create/submit/send/post/add — e.g. clicking a Post
+     button that publishes a new post, create_page, send_message):
+     recovery DELETES/RETRACTS the entity this action created. Example
+     for a post-submit: "Use the Playwright MCP to log in, locate the
+     post titled <X> in forum <F>, open it, and click delete." Merely
+     resetting or clearing the form is NOT valid recovery — once the
+     post exists the form fields are irrelevant; the post itself must
+     be removed.
+   - MUTATING (edit/update/rename): recovery RESTORES the prior content
+     captured in remote-state.json.
+   Capture in remote-state.json whatever locator a future restore needs
+   to act on the created/changed entity (title, URL, id, parent id).
 
 5. live_restore: true for this category — the recovery needs a fresh
    restore subagent (it'll execute MCP calls, not shell commands).
@@ -178,7 +245,7 @@ Do your best to capture some recoverable state in ${actionDir}, or document clea
 
 ## OUTPUT FORMAT
 
-After running your backup commands, output a single-line JSON object (no markdown fences, no commentary):
+Your result is a single JSON object with this exact shape:
 
 {"description":"...","backup_commands":["cmd1","cmd2"],"recovery_commands":["cmd1","cmd2"],"artifact_paths":["path1"],"live_restore":false}
 
@@ -188,10 +255,60 @@ After running your backup commands, output a single-line JSON object (no markdow
 - artifact_paths: files you created inside the backup storage directory
 - live_restore: true ONLY when the recovery_commands can't be trusted later because the target state is remote or dynamic — e.g. the upcoming action does a git push (remote history moves), a curl POST/PUT/DELETE to an external API, a docker push to a registry, a kubectl apply to a cluster, a production DB write, etc. In those cases chats-sandbox will spawn a fresh restore subagent instead of replaying your commands blindly. For local file writes (Category A), pip/npm installs (Category C), env mutations (Category D), set live_restore=false.
 
+## HOW THE RESULT IS COLLECTED — IMPORTANT
+
+As your VERY LAST step, WRITE that JSON object to this exact file path:
+
+  ${actionDir}/subagent_result.json
+
+This file is the authoritative way chats-sandbox reads your result —
+stdout is NOT reliably parsed (it may contain UI formatting). Write
+the file with the bash tool or a write-file tool. Also print the JSON
+to stdout as a fallback, but the file is what matters.
+
 CRITICAL:
 - DO NOT execute the upcoming action. You only create the backup.
 - Actually run your backup_commands with the bash tool. Don't just describe them.
+- The LAST thing you do is write ${actionDir}/subagent_result.json.
 - Keep the final JSON under 2KB.`;
+}
+
+/** Validate + normalize a candidate object into our SubagentResponse
+ *  shape, or null if it doesn't match. Module-scoped so both the
+ *  result-file reader and the stdout parser can use it. */
+function extractOurShape(candidate: unknown): SubagentResponse | null {
+  if (
+    typeof candidate === "object" && candidate !== null &&
+    typeof (candidate as Record<string, unknown>).description === "string" &&
+    Array.isArray((candidate as Record<string, unknown>).backup_commands) &&
+    Array.isArray((candidate as Record<string, unknown>).recovery_commands)
+  ) {
+    const c = candidate as Record<string, unknown>;
+    return {
+      description: String(c.description),
+      backup_commands: (c.backup_commands as unknown[]).map(String),
+      recovery_commands: (c.recovery_commands as unknown[]).map(String),
+      artifact_paths: Array.isArray(c.artifact_paths)
+        ? (c.artifact_paths as unknown[]).map(String)
+        : undefined,
+      live_restore: typeof c.live_restore === "boolean" ? c.live_restore : undefined,
+    };
+  }
+  return null;
+}
+
+/** Read the subagent's result from the canonical handoff file the
+ *  prompt instructs it to write. Far more robust than parsing stdout —
+ *  required for the hermes runner whose stdout is TUI-decorated.
+ *  Returns null if the file is missing or malformed. */
+function readSubagentResultFile(actionDir: string): SubagentResponse | null {
+  try {
+    const f = path.join(actionDir, "subagent_result.json");
+    if (!fs.existsSync(f)) return null;
+    return extractOurShape(JSON.parse(fs.readFileSync(f, "utf-8")));
+  } catch {
+    return null;
+  }
 }
 
 function parseSubagentOutput(raw: string): SubagentResponse | null {
@@ -203,27 +320,6 @@ function parseSubagentOutput(raw: string): SubagentResponse | null {
   // We try in this order:
   //   1. Parse raw as JSON wrapper → extract `result` → parse result as our JSON
   //   2. Parse the first {...} block in raw directly (fallback for text mode)
-
-  function extractOurShape(candidate: unknown): SubagentResponse | null {
-    if (
-      typeof candidate === "object" && candidate !== null &&
-      typeof (candidate as Record<string, unknown>).description === "string" &&
-      Array.isArray((candidate as Record<string, unknown>).backup_commands) &&
-      Array.isArray((candidate as Record<string, unknown>).recovery_commands)
-    ) {
-      const c = candidate as Record<string, unknown>;
-      return {
-        description: String(c.description),
-        backup_commands: (c.backup_commands as unknown[]).map(String),
-        recovery_commands: (c.recovery_commands as unknown[]).map(String),
-        artifact_paths: Array.isArray(c.artifact_paths)
-          ? (c.artifact_paths as unknown[]).map(String)
-          : undefined,
-        live_restore: typeof c.live_restore === "boolean" ? c.live_restore : undefined,
-      };
-    }
-    return null;
-  }
 
   // Try 1: parse raw as claude -p JSON wrapper
   try {
@@ -293,84 +389,34 @@ export function runSubagentBackup(
     }
   };
 
-  if (!isClaudeCliAvailable()) {
-    logDebug("skipped: claude CLI not found in PATH");
-    if (config.verbose) {
-      process.stderr.write("[CHATS-Sandbox] subagent skipped: claude CLI not found\n");
-    }
-    return null;
-  }
-
   const prompt = buildSubagentPrompt(ctx, actionDir);
   const timeoutMs = Math.max(10_000, config.subagentTimeoutSeconds * 1000);
 
-  // Invoke `claude -p` with:
-  //   --output-format json       : structured output with a `result` field
-  //   --permission-mode <mode> or --dangerously-skip-permissions:
-  //     Controls tool-call gating in the subagent. In headless `claude -p`,
-  //     some CLI versions silently ignore `--permission-mode bypassPermissions`
-  //     and still prompt for Bash — which means our subagent asks the user
-  //     for permission and fails. `--dangerously-skip-permissions` is the
-  //     authoritative override that actually skips the permission prompt
-  //     in every version, so when the user selects "bypassPermissions" we
-  //     pass that flag instead. For "acceptEdits" we still use
-  //     --permission-mode (it's the narrower, documented path and works
-  //     reliably for the filesystem-only subset).
-  //   --no-session-persistence   : don't save the subagent's transcript
-  //                                to ~/.claude/projects/<cwd>/<uuid>.jsonl.
-  //                                Prevents pollution of the user's
-  //                                /resume picker with dozens of
-  //                                sandbox-triggered sessions.
-  //   --model <model>            : select the subagent model
-  //
-  // We use execFileSync with an array to avoid shell quoting issues with
-  // the prompt argument.
-  //
-  // NOTE: do NOT use --bare. That flag skips OAuth/keychain auth loading,
-  // which causes "Not logged in · Please run /login" errors for users
-  // authenticated via Claude Max (the common case). Our recursion guard
-  // via CHATS_SANDBOX_NO_HOOK env var is sufficient — we don't need
-  // --bare's plugin-skipping behavior.
-  const permissionMode = config.subagentPermissionMode ?? "bypassPermissions";
-  const args = [
-    "-p",
-    prompt,
-    "--output-format", "json",
-    // Don't persist the subagent's session to disk. Without this, every
-    // sandbox-triggered backup creates a .jsonl file in
-    // ~/.claude/projects/<cwd>/ that shows up in the user's /resume
-    // picker and clutters their session history.
-    "--no-session-persistence",
-    // Load ONLY user-level settings (~/.claude/settings.json). Skip
-    // project-level settings at the cwd's .claude/settings.json, which
-    // contain our own `Write(.chats-sandbox/**)` deny rules (added by
-    // `chats-sandbox install` to keep Claude out of our internal state).
-    // If the subagent inherits those rules it self-refuses backup writes
-    // to .chats-sandbox/**, returning the recovery-command blueprint
-    // without actually executing it (no external-shadow/ ever created).
-    // User-level settings remain loaded so auth + user prefs work.
-    "--setting-sources", "user",
-  ];
-  if (permissionMode === "bypassPermissions") {
-    // Authoritative: actually skip all permission prompts. Required because
-    // `--permission-mode bypassPermissions` is silently downgraded on some
-    // `claude -p` versions and ends up denying Bash anyway.
-    args.push("--dangerously-skip-permissions");
-  } else {
-    args.push("--permission-mode", permissionMode);
+  // Build the runner invocation — claude -p or hermes chat — see
+  // buildSubagentInvocation. Returns null when the runner's CLI is
+  // missing, in which case we skip the backup (graceful degradation).
+  const invocation = buildSubagentInvocation(prompt, config);
+  if (!invocation) {
+    const runner = config.subagentRunner ?? "claude";
+    logDebug(`skipped: ${runner} CLI not found in PATH`);
+    if (config.verbose) {
+      process.stderr.write(`[CHATS-Sandbox] subagent skipped: ${runner} CLI not found\n`);
+    }
+    return null;
   }
-  if (config.subagentModel && config.subagentModel !== "inherit") {
-    args.push("--model", config.subagentModel);
-  }
+  const { bin, args } = invocation;
 
-  logDebug(`invoking: claude ${args.slice(0, 2).join(" ")} [prompt=${prompt.length} chars] ${args.slice(2).join(" ")} (timeout=${timeoutMs}ms)`);
+  logDebug(`invoking: ${bin} [runner=${invocation.runner}] [prompt=${prompt.length} chars] ${args.filter((a) => a !== prompt).join(" ")} (timeout=${timeoutMs}ms)`);
 
   // Tell the user what we're about to do — claude -p can take 5-30s and
   // there's otherwise no signal that anything is happening.
   const cmdPreview = String(ctx.tool_input.command ?? "")
     || String(ctx.tool_input.path ?? ctx.tool_input.file_path ?? "");
+  const modelLabel = invocation.runner === "hermes"
+    ? (config.subagentHermesModel || "hermes")
+    : config.subagentModel;
   tellUser(
-    `[CHATS-Sandbox] Out-of-workspace action detected. Invoking ${config.subagentModel} subagent to back up... ` +
+    `[CHATS-Sandbox] Out-of-workspace action detected. Invoking ${modelLabel} subagent to back up... ` +
     `(${ctx.tool_name}${cmdPreview ? `: ${cmdPreview.slice(0, 60)}` : ""})`
   );
 
@@ -380,7 +426,7 @@ export function runSubagentBackup(
   try {
     // Use execFileSync — avoids shell parsing of the prompt argument
     const { execFileSync } = require("node:child_process");
-    stdout = execFileSync("claude", args, {
+    stdout = execFileSync(bin, args, {
       encoding: "utf-8",
       timeout: timeoutMs,
       env: {
@@ -419,9 +465,15 @@ export function runSubagentBackup(
     return null;
   }
 
-  const parsed = parseSubagentOutput(stdout);
+  // Prefer the canonical result file the subagent was told to write —
+  // robust regardless of stdout format (the hermes runner's stdout is
+  // TUI-decorated and not cleanly parseable). Fall back to stdout
+  // parsing for older subagents / the claude runner's JSON wrapper.
+  const fileResult = readSubagentResultFile(actionDir);
+  if (fileResult) logDebug("result read from subagent_result.json");
+  const parsed = fileResult ?? parseSubagentOutput(stdout);
   if (!parsed) {
-    logDebug(`parse failed. Raw stdout was: ${stdout.slice(0, 2000)}`);
+    logDebug(`parse failed (no subagent_result.json, stdout unparseable). Raw stdout was: ${stdout.slice(0, 2000)}`);
 
     // Detect permission denial (subagent couldn't run bash) and warn clearly
     if (stdout.includes("permission_denials") || stdout.includes("permission denied") ||
@@ -485,38 +537,26 @@ export function invokeRestoreSubagent(
   prompt: string,
   config: SandboxConfig,
 ): { success: boolean; detail: string } {
-  if (!isClaudeCliAvailable()) {
-    return { success: false, detail: "claude CLI not found in PATH" };
-  }
-
   const timeoutMs = Math.max(10_000, config.subagentTimeoutSeconds * 1000);
-  const permissionMode = config.subagentPermissionMode ?? "bypassPermissions";
-  const args = [
-    "-p",
-    prompt,
-    "--output-format", "json",
-    "--no-session-persistence",
-    // Skip project-level settings — see runSubagentBackup for the full
-    // rationale (our own deny rules would cause the subagent to
-    // self-refuse).
-    "--setting-sources", "user",
-  ];
-  if (permissionMode === "bypassPermissions") {
-    args.push("--dangerously-skip-permissions");
-  } else {
-    args.push("--permission-mode", permissionMode);
-  }
-  if (config.subagentModel && config.subagentModel !== "inherit") {
-    args.push("--model", config.subagentModel);
-  }
 
+  // Same runner branching as the backup path — claude -p or hermes chat.
+  const invocation = buildSubagentInvocation(prompt, config);
+  if (!invocation) {
+    const runner = config.subagentRunner ?? "claude";
+    return { success: false, detail: `${runner} CLI not found in PATH` };
+  }
+  const { bin, args } = invocation;
+
+  const modelLabel = invocation.runner === "hermes"
+    ? (config.subagentHermesModel || "hermes")
+    : config.subagentModel;
   tellUser(
-    `[CHATS-Sandbox] Live-restore: invoking ${config.subagentModel} subagent to reverse remote/dynamic state...`,
+    `[CHATS-Sandbox] Live-restore: invoking ${modelLabel} subagent to reverse remote/dynamic state...`,
   );
 
   try {
     const { execFileSync } = require("node:child_process");
-    const stdout: string = execFileSync("claude", args, {
+    const stdout: string = execFileSync(bin, args, {
       encoding: "utf-8",
       timeout: timeoutMs,
       env: { ...process.env, CHATS_SANDBOX_NO_HOOK: "1" },

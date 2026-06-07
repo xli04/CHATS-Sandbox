@@ -556,16 +556,31 @@ function gitSnapshotBackup(
  *   silently. Strictly worse — that's why we bias toward "treat
  *   unknown MCP verbs as writes."
  */
+/**
+ * True for a browser-automation tool surfaced under a BARE name —
+ * `browser_click`, `browser_navigate`, etc. OpenHands registers
+ * Playwright-MCP tools this way (no `mcp__` prefix), as does Hermes's
+ * built-in browser toolset. These mutate remote page state and must be
+ * treated like `mcp__*` browser tools for tier-3 detection.
+ */
+function isBareBrowserTool(toolName: string): boolean {
+  return /^browser_/.test(toolName);
+}
+
 function isReadOnlyMcpTool(toolName: string): boolean {
-  if (!toolName.startsWith("mcp__")) return false;
+  // Accept both `mcp__*` tools and bare `browser_*` tools (OpenHands /
+  // Hermes name Playwright-MCP browser tools without the prefix).
+  if (!toolName.startsWith("mcp__") && !isBareBrowserTool(toolName)) return false;
 
   // Read-style verbs anywhere in the tool name (handles both
   // `mcp__server__get_foo` and `mcp__server_get` shapes).
   const READ_VERB = /_(get|list|search|fetch|read|view|describe|inspect|show|status|count|find|query|history|info|head|peek)(_|$)/i;
   if (READ_VERB.test(toolName)) return true;
 
-  // Browser MCP verbs that don't mutate page state.
-  const BROWSER_READ = /_(navigate|navigate_back|snapshot|screenshot|take_screenshot|console_messages|network_requests|wait_for|resize|close|tabs|install)(_|$)/i;
+  // Browser verbs that don't mutate page state. Covers Playwright-MCP
+  // tools and Hermes's built-in `browser` toolset (normalized to
+  // mcp__browser__* by the Hermes plugin).
+  const BROWSER_READ = /_(navigate|navigate_back|snapshot|screenshot|take_screenshot|console_messages|network_requests|wait_for|resize|close|tabs|install|scroll|hover)(_|$)/i;
   if (BROWSER_READ.test(toolName)) return true;
 
   return false;

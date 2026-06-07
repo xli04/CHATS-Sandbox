@@ -20,7 +20,8 @@ import * as fs from "node:fs";
 import { loadConfig } from "../config/load.js";
 import { evaluate } from "../engine/rules.js";
 import { runBackup } from "../backup/strategies.js";
-import type { HookContext, PreToolHookOutput } from "../types.js";
+import type { PreToolHookOutput } from "../types.js";
+import { type HookContext, normalizeHookContext } from "../types.js";
 
 async function main(): Promise<void> {
   // Recursion guard: if we're running inside a subagent that we spawned,
@@ -38,7 +39,7 @@ async function main(): Promise<void> {
 
   let ctx: HookContext;
   try {
-    ctx = JSON.parse(raw) as HookContext;
+    ctx = normalizeHookContext(JSON.parse(raw));
   } catch {
     process.exit(0);
   }

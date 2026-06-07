@@ -8,7 +8,7 @@
 import * as fs from "node:fs";
 import { loadConfig } from "../config/load.js";
 import { captureEffect, logEffect } from "../engine/effects.js";
-import type { HookContext } from "../types.js";
+import { type HookContext, normalizeHookContext } from "../types.js";
 
 async function main(): Promise<void> {
   // Recursion guard: exit early if running inside a sandbox-spawned subagent
@@ -25,7 +25,7 @@ async function main(): Promise<void> {
 
   let ctx: HookContext;
   try {
-    ctx = JSON.parse(raw) as HookContext;
+    ctx = normalizeHookContext(JSON.parse(raw));
   } catch {
     process.exit(0);
   }

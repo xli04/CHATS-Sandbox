@@ -19,6 +19,30 @@ export interface HookContext {
   session_id?: string;
 }
 
+/**
+ * Normalize a parsed hook-input object into the HookContext shape.
+ *
+ * Agents differ slightly in field names: Claude Code and the Hermes
+ * plugin send `{hook_event, tool_output}`; the OpenHands SDK sends
+ * `{event_type, tool_response}`. This accepts both so every agent
+ * shares one downstream contract, and hardens against null/missing
+ * tool_input (OpenHands types it `dict | null`).
+ */
+export function normalizeHookContext(parsed: unknown): HookContext {
+  const p = (parsed && typeof parsed === "object"
+    ? parsed : {}) as Record<string, unknown>;
+  const hookEvent = p.hook_event ?? p.event_type;
+  return {
+    hook_event: (typeof hookEvent === "string"
+      ? hookEvent : "PreToolUse") as HookContext["hook_event"],
+    tool_name: typeof p.tool_name === "string" ? p.tool_name : "",
+    tool_input: (p.tool_input && typeof p.tool_input === "object")
+      ? p.tool_input as Record<string, unknown> : {},
+    tool_output: p.tool_output ?? p.tool_response,
+    session_id: typeof p.session_id === "string" ? p.session_id : undefined,
+  };
+}
+
 // ── Hook output (what we write to stdout) ────────────────────────────
 
 export interface PreToolHookOutput {
@@ -87,6 +111,18 @@ export interface SandboxConfig {
    *    blast radius but may fail for backups that need network access.
    */
   subagentPermissionMode: "bypassPermissions" | "acceptEdits";
+  /** Which runner spawns the tier-3 subagent.
+   *  "claude" — `claude -p` CLI (default; for Claude Code deployments).
+   *  "hermes" — headless `hermes chat` subagent (for Hermes / non-Claude
+   *    agents). The OpenRouter/provider API key is read from the
+   *    environment of the parent process, never stored in config. */
+  subagentRunner: "claude" | "hermes";
+  /** For subagentRunner="hermes": model id passed to `hermes chat -m`
+   *  (e.g. "anthropic/claude-haiku-4.5"). Ignored for the claude runner. */
+  subagentHermesModel: string;
+  /** For subagentRunner="hermes": provider passed to `hermes chat
+   *  --provider` (e.g. "openrouter"). Ignored for the claude runner. */
+  subagentHermesProvider: string;
 }
 
 export const DEFAULT_CONFIG: SandboxConfig = {
@@ -135,6 +171,12 @@ export const DEFAULT_CONFIG: SandboxConfig = {
   // Users who want a smaller blast radius can switch to "acceptEdits"
   // via `chats-sandbox config set subagentPermissionMode acceptEdits`.
   subagentPermissionMode: "bypassPermissions",
+  // Default runner is the claude CLI. `chats-sandbox install hermes`
+  // overwrites this with "hermes" so non-Claude agents get a working
+  // tier-3 subagent.
+  subagentRunner: "claude",
+  subagentHermesModel: "anthropic/claude-haiku-4.5",
+  subagentHermesProvider: "openrouter",
 };
 
 // ── Backup artifact ──────────────────────────────────────────────────
