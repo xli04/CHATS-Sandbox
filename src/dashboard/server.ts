@@ -370,6 +370,94 @@ function handleGetStatus(
   });
 }
 
+/**
+ * GET /api/storage-by-file — a reference table of how much backup space
+ * each backed-up file occupies, sorted by size descending.
+ *
+ * Honest accounting: the per-action folder is tiny metadata, so the
+ * real bytes live in (a) the shared git shadow repo as blobs — queried
+ * with `git ls-tree -l` for the latest snapshot, and (b) per-action
+ * trash/ dirs for tier-0 rm→trash files. We report the logical
+ * (uncompressed) blob size per file — what one snapshot of that file
+ * costs — plus how many actions touched it.
+ */
+function handleGetStorageByFile(
+  res: http.ServerResponse,
+  config: SandboxConfig,
+): void {
+  const backupRoot = path.resolve(config.backupDir);
+  // file path (workspace-relative) → { bytes, kind, actions:Set<seq> }
+  const files = new Map<string, { bytes: number; kind: string; actions: Set<number> }>();
+
+  const bump = (p: string, bytes: number, kind: string, seq?: number): void => {
+    const cur = files.get(p) ?? { bytes: 0, kind, actions: new Set<number>() };
+    // Keep the largest observed size for the file (its heaviest snapshot).
+    if (bytes > cur.bytes) { cur.bytes = bytes; cur.kind = kind; }
+    if (typeof seq === "number") cur.actions.add(seq);
+    files.set(p, cur);
+  };
+
+  if (!fs.existsSync(backupRoot)) {
+    jsonResponse(res, 200, { files: [], totalBytes: 0, shadowOnDiskBytes: 0 });
+    return;
+  }
+
+  // (a) Latest snapshot blob sizes from the shared shadow repo.
+  const shadowDir = path.join(path.dirname(backupRoot), "shadow-repo");
+  let shadowOnDiskBytes = 0;
+  if (fs.existsSync(shadowDir)) {
+    try {
+      const { dirSize } = require("../backup/strategies.js");
+      shadowOnDiskBytes = dirSize(shadowDir);
+    } catch { /* */ }
+    try {
+      const env = { ...process.env, GIT_DIR: shadowDir };
+      const opts = { encoding: "utf-8" as const, timeout: 10_000, env, stdio: "pipe" as const };
+      // `git ls-tree -r -l HEAD` → lines: "<mode> blob <hash> <size>\t<path>"
+      const out = execSync("git ls-tree -r -l HEAD", opts).toString();
+      for (const line of out.split("\n")) {
+        const m = line.match(/^\S+\s+blob\s+\S+\s+(\d+)\t(.+)$/);
+        if (m) bump(m[2], parseInt(m[1], 10), "snapshot");
+      }
+    } catch { /* no HEAD yet / empty repo */ }
+  }
+
+  // (b) tier-0 trash files (rm→trash) — these were deleted from the
+  //     workspace so they're not in the snapshot tree.
+  const walk = (dir: string, rel: string, cb: (relPath: string, bytes: number) => void): void => {
+    let entries: fs.Dirent[] = [];
+    try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { return; }
+    for (const e of entries) {
+      const abs = path.join(dir, e.name);
+      const r = rel ? `${rel}/${e.name}` : e.name;
+      if (e.isDirectory()) walk(abs, r, cb);
+      else {
+        try { cb(r, fs.statSync(abs).size); } catch { /* */ }
+      }
+    }
+  };
+  // Trash filenames are encoded as `<id>_<abspath with / → __>`
+  // (see policy_rules.ts). Decode back to a readable path.
+  const decodeTrashName = (name: string): string => {
+    const stripped = name.replace(/^[0-9a-f]+_/, "");      // drop id prefix
+    return "/" + stripped.replace(/__/g, "/");             // __ → /
+  };
+  for (const d of fs.readdirSync(backupRoot).filter((x) => x.startsWith("action_"))) {
+    const seq = parseInt(d.split("_")[1] ?? "0", 10);
+    const trash = path.join(backupRoot, d, "trash");
+    if (fs.existsSync(trash)) {
+      walk(trash, "", (relPath, bytes) => bump(decodeTrashName(relPath), bytes, "deleted", seq));
+    }
+  }
+
+  const list = [...files.entries()]
+    .map(([file, v]) => ({ file, bytes: v.bytes, kind: v.kind, actionCount: v.actions.size }))
+    .sort((a, b) => b.bytes - a.bytes);
+  const totalBytes = list.reduce((s, x) => s + x.bytes, 0);
+
+  jsonResponse(res, 200, { files: list, totalBytes, shadowOnDiskBytes });
+}
+
 function handlePostRestore(
   req: http.IncomingMessage,
   res: http.ServerResponse,
@@ -562,6 +650,10 @@ export function startDashboard(options: {
     }
     if (url === "/api/status" && method === "GET") {
       handleGetStatus(res, config);
+      return;
+    }
+    if (url === "/api/storage-by-file" && method === "GET") {
+      handleGetStorageByFile(res, config);
       return;
     }
 
