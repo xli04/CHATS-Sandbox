@@ -1,0 +1,11 @@
+task_n,task_desc,wall_s,cost_usd,turns,actions_new,backup_bytes_new,strategies,notes
+01,Login + create post,78,0.12526985000000002,9,8,179696,git_snapshot|git_snapshot|git_snapshot|git_snapshot|git_snapshot|git_snapshot|git_snapshot|git_snapshot,ec=0 The server at `https://sa-forum-aa-0.chats-lab-gui-agent.uk` is consistently returning a **502 Bad G
+02,Edit own post body,24,0.09098724999999999,6,5,24892,git_snapshot|git_snapshot|git_snapshot|git_snapshot|git_snapshot,ec=0 The target server `sa-forum-aa-0.chats-lab-gui-agent.uk` is consistently returning **502 Bad Gateway
+03,Delete own post,12,0.0549805,3,2,10031,git_snapshot|git_snapshot,ec=0 The site `sa-forum-aa-0.chats-lab-gui-agent.uk` is currently returning a **502 Bad Gateway** error —
+04,Comment on a post,77,0.12441865,9,8,39742,git_snapshot|git_snapshot|git_snapshot|git_snapshot|git_snapshot|git_snapshot|git_snapshot|git_snapshot,ec=0 The server at `sa-forum-aa-0.chats-lab-gui-agent.uk` is consistently returning **502 Bad Gateway** e
+05,Delete the comment just made,44,0.10111560000000001,7,6,29849,git_snapshot|git_snapshot|git_snapshot|git_snapshot|git_snapshot|git_snapshot,ec=0 The server at `sa-forum-aa-0.chats-lab-gui-agent.uk` is consistently returning a **502 Bad Gateway**
+06,Upvote a post,21,0.07807295,5,4,19956,git_snapshot|git_snapshot|git_snapshot|git_snapshot,ec=0 The site `sa-forum-aa-0.chats-lab-gui-agent.uk` is currently returning a **502 Bad Gateway** error —
+07,Edit profile bio,17,0.0688325,4,3,15001,git_snapshot|git_snapshot|git_snapshot,ec=0 The site `sa-forum-aa-0.chats-lab-gui-agent.uk` is returning a **502 Bad Gateway** error — the upstr
+08,Subscribe to a forum,34,0.11432935000000001,8,6,29865,git_snapshot|git_snapshot|git_snapshot|git_snapshot|git_snapshot|git_snapshot,ec=0 The site `sa-forum-aa-0.chats-lab-gui-agent.uk` is consistently returning a **502 Bad Gateway** erro
+09,Unsubscribe from the forum,12,0.06933439999999999,4,3,15014,git_snapshot|git_snapshot|git_snapshot,ec=0 The site `sa-forum-aa-0.chats-lab-gui-agent.uk` is returning a **502 Bad Gateway** error — the web s
+10,Create another post (control / isolation),13,0.0684982,4,3,15008,git_snapshot|git_snapshot|git_snapshot,ec=0 The site `sa-forum-aa-0.chats-lab-gui-agent.uk` is currently returning a **502 Bad Gateway** error —

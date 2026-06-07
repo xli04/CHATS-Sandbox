@@ -1,0 +1,158 @@
+From: chats-sandbox
+Subject: [PATCH] tools/registry.py: add plugin loader for ToolRegistry
+
+Adds a 60-line plugin discovery mechanism to ToolRegistry. Plugins
+are .py files in ~/.hermes/plugins/ or <project>/.hermes/plugins/.
+Each defines attach(registry) and registers pre/post hooks via
+add_pre_hook / add_post_hook. dispatch() wraps entry.handler with
+the hooks. Hook exceptions are swallowed; broken plugins don't
+crash boot.
+
+Zero behavior change when no plugins are present. Opt-in only.
+
+Enables chats-sandbox install hermes (which writes one such plugin)
+and any future Hermes plugins (security scanners, loggers, etc.).
+---
+--- a/tools/registry.py
++++ b/tools/registry.py
+@@ -51,6 +51,93 @@
+     def __init__(self):
+         self._tools: Dict[str, ToolEntry] = {}
+         self._toolset_checks: Dict[str, Callable] = {}
++        # External plugins can wrap tool dispatch by registering pre/post
++        # hooks. Discovery happens once at construction time so subsequent
++        # tool calls don't pay any filesystem-scan cost.
++        self._pre_hooks: List[Callable] = []
++        self._post_hooks: List[Callable] = []
++        self._load_plugins()
++
++    # ------------------------------------------------------------------
++    # Plugin loading
++    # ------------------------------------------------------------------
++
++    def _load_plugins(self) -> None:
++        """Auto-discover plugins on registry init.
++
++        Plugins are .py files in two well-known directories:
++          ~/.hermes/plugins/*.py        (user-scope)
++          <cwd>/.hermes/plugins/*.py    (project-scope, takes precedence
++                                          by overriding same-named files)
++
++        Each plugin must define a module-level function:
++
++            def attach(registry: ToolRegistry) -> None:
++                registry.add_pre_hook(my_fn)
++                registry.add_post_hook(my_other_fn)
++
++        Pre-hook signature:  fn(tool_name: str, args: dict) -> None
++        Post-hook signature: fn(tool_name: str, args: dict, result: str) -> None
++
++        Failures during plugin load are logged but never raise — a
++        broken plugin must not prevent Hermes from booting. Hook
++        exceptions during dispatch are similarly swallowed; tool
++        execution always proceeds.
++        """
++        import importlib.util
++        import pathlib
++
++        seen: Set[str] = set()
++        # Project scope first so it shadows same-name user-scope plugins.
++        candidates = (
++            pathlib.Path.cwd() / ".hermes" / "plugins",
++            pathlib.Path.home() / ".hermes" / "plugins",
++        )
++        for root in candidates:
++            try:
++                if not root.is_dir():
++                    continue
++                for f in sorted(root.glob("*.py")):
++                    if f.name in seen:
++                        continue
++                    seen.add(f.name)
++                    try:
++                        spec = importlib.util.spec_from_file_location(
++                            f"hermes_plugin_{f.stem}", f
++                        )
++                        if spec is None or spec.loader is None:
++                            continue
++                        mod = importlib.util.module_from_spec(spec)
++                        spec.loader.exec_module(mod)
++                        attach = getattr(mod, "attach", None)
++                        if callable(attach):
++                            attach(self)
++                            logger.info("loaded hermes plugin: %s", f)
++                    except Exception as e:
++                        logger.warning("plugin %s failed to load: %s", f, e)
++            except Exception as e:
++                logger.warning("plugin scan failed for %s: %s", root, e)
++
++    def add_pre_hook(self, fn: Callable) -> None:
++        """Register a callable invoked before every dispatch().
++
++        Signature: ``fn(tool_name: str, args: dict) -> None``.
++
++        Exceptions raised by the hook are caught and logged — they
++        never block the underlying tool call.
++        """
++        self._pre_hooks.append(fn)
++
++    def add_post_hook(self, fn: Callable) -> None:
++        """Register a callable invoked after every dispatch().
++
++        Signature: ``fn(tool_name: str, args: dict, result: str) -> None``.
++        The ``result`` is the JSON string the tool returned (or an
++        error JSON if it raised).
++
++        Exceptions raised by the hook are caught and logged.
++        """
++        self._post_hooks.append(fn)
+ 
+     # ------------------------------------------------------------------
+     # Registration
+@@ -172,20 +259,41 @@
+         """Execute a tool handler by name.
+ 
+         * Async handlers are bridged automatically via ``_run_async()``.
+-        * All exceptions are caught and returned as ``{"error": "..."}``
+-          for consistent error format.
++        * Plugins registered via :py:meth:`add_pre_hook` and
++          :py:meth:`add_post_hook` fire before / after the handler.
++          Hook exceptions are swallowed — they never affect dispatch.
++        * All tool exceptions are caught and returned as
++          ``{"error": "..."}`` for consistent error format.
+         """
+         entry = self._tools.get(name)
+         if not entry:
+             return json.dumps({"error": f"Unknown tool: {name}"})
++
++        # Pre-hooks — failures must not block the tool call.
++        for h in self._pre_hooks:
++            try:
++                h(name, args)
++            except Exception as e:
++                logger.warning("pre-hook %r failed: %s", h, e)
++
+         try:
+             if entry.is_async:
+                 from model_tools import _run_async
+-                return _run_async(entry.handler(args, **kwargs))
+-            return entry.handler(args, **kwargs)
++                result = _run_async(entry.handler(args, **kwargs))
++            else:
++                result = entry.handler(args, **kwargs)
+         except Exception as e:
+             logger.exception("Tool %s dispatch error: %s", name, e)
+-            return json.dumps({"error": f"Tool execution failed: {type(e).__name__}: {e}"})
++            result = json.dumps({"error": f"Tool execution failed: {type(e).__name__}: {e}"})
++
++        # Post-hooks — same fail-safe contract.
++        for h in self._post_hooks:
++            try:
++                h(name, args, result)
++            except Exception as e:
++                logger.warning("post-hook %r failed: %s", h, e)
++
++        return result
+ 
+     # ------------------------------------------------------------------
+     # Query helpers  (replace redundant dicts in model_tools.py)

@@ -1,0 +1,12 @@
+# 10 tasks selected from terminal-bench/original-tasks (easy / medium difficulty).
+# All exercise real filesystem writes; mixed categories. Comment lines ignored.
+hello-world
+heterogeneous-dates
+analyze-access-logs
+aimo-airline-departures
+jsonl-aggregator
+count-call-stack
+log-summary
+csv-to-parquet
+fix-permissions
+gomoku-planner

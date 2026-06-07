@@ -1,0 +1,5 @@
+task,condition,wall_seconds,backup_bytes,actions,test_pass,notes
+hello-world,none,5,0,0,pass,ec=0
+hello-world,plugin,7,153577,1,pass,ec=0
+hello-world,git-add,5,203765,1,pass,ec=0
+hello-world,cp-all,5,12599,1,pass,ec=0
