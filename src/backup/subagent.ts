@@ -126,12 +126,27 @@ function tellUser(message: string): void {
 
 function buildSubagentPrompt(
   ctx: HookContext,
-  actionDir: string
+  actionDir: string,
+  config?: SandboxConfig,
 ): string {
   const toolName = ctx.tool_name;
   const command = String(ctx.tool_input.command ?? "");
   const args = JSON.stringify(ctx.tool_input, null, 2);
   const cwd = process.cwd();
+
+  // Inject any learned easy-win reversal patterns for this MCP server
+  // (from `chats-sandbox explore`). Prefer-cheap-reversal guidance.
+  let experienceBlock = "";
+  if (config) {
+    try {
+      const { serverFromToolName, loadExperiences, renderExperiencesForPrompt } =
+        require("../explore/experiences.js");
+      const server = serverFromToolName(toolName);
+      if (server) {
+        experienceBlock = renderExperiencesForPrompt(loadExperiences(config, server));
+      }
+    } catch { /* experiences optional */ }
+  }
 
   return `You are a backup subagent for CHATS-Sandbox. A tool call is about to execute that affects state OUTSIDE the workspace. Your job: actually CREATE a minimal recovery artifact BEFORE the action runs, then report what you did.
 
@@ -145,6 +160,7 @@ WORKSPACE (files inside this directory are already captured by tier-2 git snapsh
 
 BACKUP STORAGE DIRECTORY (write any artifact files you create here):
   ${actionDir}
+${experienceBlock}
 
 ## CLASSIFY THE ACTION FIRST
 
@@ -390,7 +406,7 @@ export function runSubagentBackup(
     }
   };
 
-  const prompt = buildSubagentPrompt(ctx, actionDir);
+  const prompt = buildSubagentPrompt(ctx, actionDir, config);
   const timeoutMs = Math.max(10_000, config.subagentTimeoutSeconds * 1000);
 
   // Build the runner invocation — claude -p or hermes chat — see
@@ -580,5 +596,41 @@ export function invokeRestoreSubagent(
   } catch (e: unknown) {
     const msg = e instanceof Error ? e.message : String(e);
     return { success: false, detail: msg.slice(0, 500) };
+  }
+}
+
+/**
+ * Run the configured runner (claude -p / hermes chat) on an arbitrary
+ * reasoning prompt and return its text result. Used by the self-
+ * exploration pipeline to extract recovery patterns — a pure-text task,
+ * no tools or backup framing. Returns null on any failure.
+ */
+export function runRunnerForText(
+  prompt: string,
+  config: SandboxConfig,
+  timeoutSeconds = 180,
+): string | null {
+  const invocation = buildSubagentInvocation(prompt, config);
+  if (!invocation) return null;
+  const { bin, args } = invocation;
+  try {
+    const { execFileSync } = require("node:child_process");
+    const stdout: string = execFileSync(bin, args, {
+      encoding: "utf-8",
+      timeout: Math.max(10_000, timeoutSeconds * 1000),
+      env: { ...process.env, CHATS_SANDBOX_NO_HOOK: "1" },
+      stdio: ["pipe", "pipe", "pipe"],
+      maxBuffer: 8 * 1024 * 1024,
+    });
+    // claude -p --output-format json wraps the text in {result}. Hermes
+    // prints decorated text. Try the wrapper first, else raw stdout.
+    try {
+      const wrapper = JSON.parse(stdout);
+      const r = (wrapper as Record<string, unknown>).result;
+      if (typeof r === "string") return r;
+    } catch { /* not json-wrapped */ }
+    return stdout;
+  } catch {
+    return null;
   }
 }

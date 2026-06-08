@@ -169,6 +169,55 @@ function setConfigValue(
   console.log(`Set ${key} = ${value}`);
 }
 
+// ── Explore (self-exploration of easy-win reversal patterns) ──────────
+
+function exploreCommand(projectRoot: string, ...rest: string[]): void {
+  const config = loadConfig(projectRoot);
+  // Parse [server] and --target <url>.
+  let serverArg: string | undefined;
+  let targetArg: string | undefined;
+  for (let i = 0; i < rest.length; i++) {
+    if (rest[i] === "--target") { targetArg = rest[++i]; }
+    else if (!rest[i].startsWith("--")) { serverArg = rest[i]; }
+  }
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const { runExplore, discoverServers } = require("./explore/explore.js");
+
+  const discovered = discoverServers(config) as Map<string, Set<string>>;
+  if (discovered.size === 0) {
+    console.log("No MCP / remote tools found in backup history yet.");
+    console.log("Use an MCP-driven remote action first, then run `chats-sandbox explore`.");
+    return;
+  }
+  if (serverArg && !discovered.has(serverArg)) {
+    console.log(`Server "${serverArg}" not seen in history. Known: ${[...discovered.keys()].join(", ")}`);
+    return;
+  }
+
+  console.log(serverArg
+    ? `Exploring easy-win reversal patterns for "${serverArg}"…`
+    : `Exploring ${discovered.size} server(s): ${[...discovered.keys()].join(", ")}…`);
+  console.log("Two stages per server: (1) a model PROPOSES candidate reversals,");
+  console.log("(2) a live agent EXECUTES each against the real target to verify.");
+  console.log("One-time cost per server (a few minutes each).\n");
+
+  const nowIso = new Date().toISOString();
+  const outcomes = runExplore(config, nowIso, serverArg, targetArg) as Array<{
+    server: string; tools: string[]; target: string | null; saved: boolean; path?: string; proposed: number; verified: number; error?: string;
+  }>;
+
+  for (const o of outcomes) {
+    if (o.saved) {
+      const where = o.target ? ` against ${o.target}` : " against the MCP backend";
+      console.log(`  [OK] ${o.server}: ${o.proposed} proposed, ${o.verified} verified${where} → ${o.path}`);
+    } else {
+      console.log(`  [FAIL] ${o.server}: ${o.error}`);
+    }
+  }
+  console.log("\nLearned patterns are now injected into the tier-3 backup subagent");
+  console.log("prompt for matching servers (prefers cheap reversals over scrape+recreate).");
+}
+
 // ── Status ───────────────────────────────────────────────────────────
 
 function showStatus(projectRoot: string): void {
@@ -691,6 +740,9 @@ switch (command) {
   case "backups":
     listBackups(projectRoot);
     break;
+  case "explore":
+    exploreCommand(projectRoot, ...args.slice(1));
+    break;
   case "restore": {
     const fileIdx = args.indexOf("--file");
     const fileArg = fileIdx !== -1 ? args[fileIdx + 1] : undefined;
@@ -723,6 +775,7 @@ switch (command) {
     console.log("  config set <key> <value>        Set a config value");
     console.log("  status                          Show sandbox state");
     console.log("  backups                         List recent backup artifacts");
+    console.log("  explore [server] [--target URL] Drive MCP to learn easy-win reversal patterns");
     console.log("  history [N]                     Timeline of last N actions (default 10)");
     console.log("  restore                         List restorable actions");
     console.log("  restore <N>                     Reverse-loop restore to action N");
