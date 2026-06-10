@@ -69,11 +69,13 @@ function subagentEnv(): NodeJS.ProcessEnv {
  * Build the subprocess invocation for the tier-3 subagent, branching on
  * config.subagentRunner.
  *
- *   claude — `claude -p <prompt> --output-format json …` (Claude Code).
- *   hermes — `hermes chat -q <prompt> -m <model> --provider <p> -Q --yolo`
- *            (Hermes / non-Claude agents). The provider API key is read
- *            from the environment (OPENROUTER_API_KEY etc.) inherited
- *            from the parent process — never stored in config.
+ *   claude   — `claude -p <prompt> --output-format json …` (Claude Code).
+ *   hermes   — `hermes chat -q <prompt> -m <model> --provider <p> -Q --yolo`
+ *              (Hermes deployments). The provider API key is read from
+ *              the environment (OPENROUTER_API_KEY etc.) inherited from
+ *              the parent process — never stored in config.
+ *   openclaw — `openclaw agent --local --json --session-id <fresh> -m
+ *              <prompt>` (OpenClaw deployments). Same env-key contract.
  *
  * Returns null when the configured runner's CLI isn't on PATH, so the
  * caller degrades gracefully (skip backup / report restore failure)
@@ -82,8 +84,25 @@ function subagentEnv(): NodeJS.ProcessEnv {
 function buildSubagentInvocation(
   prompt: string,
   config: SandboxConfig,
-): { bin: string; args: string[]; runner: "claude" | "hermes" } | null {
+): { bin: string; args: string[]; runner: "claude" | "hermes" | "openclaw" } | null {
   const runner = config.subagentRunner ?? "claude";
+
+  if (runner === "openclaw") {
+    if (!isCommandAvailable("openclaw")) return null;
+    // Headless one-shot turn on the embedded agent. A fresh session id
+    // keeps the backup turn out of the user's conversation history.
+    // The plugin's CHATS_SANDBOX_NO_HOOK guard (set via subagentEnv)
+    // stops the subagent's own tool calls from re-entering our hooks.
+    const args = [
+      "agent", "--local", "--json",
+      "--session-id", `chats-sandbox-${Date.now().toString(36)}`,
+      "-m", prompt,
+    ];
+    if (config.subagentOpenclawModel) {
+      args.push("--model", config.subagentOpenclawModel);
+    }
+    return { bin: "openclaw", args, runner };
+  }
 
   if (runner === "hermes") {
     if (!isCommandAvailable("hermes")) return null;
@@ -381,6 +400,23 @@ function parseSubagentOutput(raw: string): SubagentResponse | null {
           }
         }
       }
+      // openclaw agent --json wrapper: { payloads: [{ text }], meta }.
+      // Join the payload texts and extract our JSON block from them.
+      const payloads = (wrapper as Record<string, unknown>).payloads;
+      if (Array.isArray(payloads)) {
+        const text = payloads
+          .map((p) => (p && typeof p === "object" ? String((p as Record<string, unknown>).text ?? "") : ""))
+          .join("\n");
+        const m = text.match(/\{[\s\S]*\}/);
+        if (m) {
+          try {
+            const shaped = extractOurShape(JSON.parse(m[0]));
+            if (shaped) return shaped;
+          } catch {
+            // fall through
+          }
+        }
+      }
       // Maybe the wrapper itself has our shape (if claude passed through)
       const direct = extractOurShape(wrapper);
       if (direct) return direct;
@@ -456,7 +492,9 @@ export function runSubagentBackup(
     || String(ctx.tool_input.path ?? ctx.tool_input.file_path ?? "");
   const modelLabel = invocation.runner === "hermes"
     ? (config.subagentHermesModel || "hermes")
-    : config.subagentModel;
+    : invocation.runner === "openclaw"
+      ? (config.subagentOpenclawModel || "openclaw")
+      : config.subagentModel;
   tellUser(
     `[CHATS-Sandbox] Out-of-workspace action detected. Invoking ${modelLabel} subagent to back up... ` +
     `(${ctx.tool_name}${cmdPreview ? `: ${cmdPreview.slice(0, 60)}` : ""})`
@@ -585,7 +623,9 @@ export function invokeRestoreSubagent(
 
   const modelLabel = invocation.runner === "hermes"
     ? (config.subagentHermesModel || "hermes")
-    : config.subagentModel;
+    : invocation.runner === "openclaw"
+      ? (config.subagentOpenclawModel || "openclaw")
+      : config.subagentModel;
   tellUser(
     `[CHATS-Sandbox] Live-restore: invoking ${modelLabel} subagent to reverse remote/dynamic state...`,
   );

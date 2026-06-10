@@ -134,17 +134,23 @@ export interface SandboxConfig {
    */
   subagentPermissionMode: "bypassPermissions" | "acceptEdits";
   /** Which runner spawns the tier-3 subagent.
-   *  "claude" — `claude -p` CLI (default; for Claude Code deployments).
-   *  "hermes" — headless `hermes chat` subagent (for Hermes / non-Claude
-   *    agents). The OpenRouter/provider API key is read from the
-   *    environment of the parent process, never stored in config. */
-  subagentRunner: "claude" | "hermes";
+   *  "claude"   — `claude -p` CLI (default; for Claude Code deployments).
+   *  "hermes"   — headless `hermes chat` subagent (for Hermes
+   *    deployments). The OpenRouter/provider API key is read from the
+   *    environment of the parent process, never stored in config.
+   *  "openclaw" — headless `openclaw agent --local` one-shot turn (for
+   *    OpenClaw deployments). Provider keys come from the environment. */
+  subagentRunner: "claude" | "hermes" | "openclaw";
   /** For subagentRunner="hermes": model id passed to `hermes chat -m`
    *  (e.g. "anthropic/claude-haiku-4.5"). Ignored for the claude runner. */
   subagentHermesModel: string;
   /** For subagentRunner="hermes": provider passed to `hermes chat
    *  --provider` (e.g. "openrouter"). Ignored for the claude runner. */
   subagentHermesProvider: string;
+  /** For subagentRunner="openclaw": model id passed to `openclaw agent
+   *  --model` (e.g. "openrouter/anthropic/claude-haiku-4.5"). Empty =
+   *  the OpenClaw agent's own default model. */
+  subagentOpenclawModel: string;
 }
 
 export const DEFAULT_CONFIG: SandboxConfig = {
@@ -201,6 +207,8 @@ export const DEFAULT_CONFIG: SandboxConfig = {
   subagentRunner: "claude",
   subagentHermesModel: "anthropic/claude-haiku-4.5",
   subagentHermesProvider: "openrouter",
+  // Empty = use the OpenClaw agent's default model for the subagent.
+  subagentOpenclawModel: "",
 };
 
 // ── Backup artifact ──────────────────────────────────────────────────

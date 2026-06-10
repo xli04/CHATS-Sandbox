@@ -224,11 +224,14 @@ export const openclawAdapter: AgentAdapter = {
     fs.writeFileSync(path.join(pluginDir, "package.json"), packageJsonSource(), "utf-8");
     fs.writeFileSync(path.join(pluginDir, "index.mjs"), pluginIndexSource(pkgRoot), "utf-8");
 
-    // Sandbox config + backup dir. Default subagent runner is the
-    // claude CLI (tier-3 degrades gracefully if it's absent).
+    // Sandbox config + backup dir. The tier-3 subagent runs as a
+    // headless `openclaw agent --local` one-shot turn — an OpenClaw
+    // deployment with no Claude CLI still gets working
+    // out-of-workspace / remote-state backup. Provider API keys are
+    // read from the environment at run time, never stored in config.
     const configDir = getConfigDir(projectRoot);
     if (!fs.existsSync(configDir)) fs.mkdirSync(configDir, { recursive: true });
-    saveConfig(DEFAULT_CONFIG, projectRoot);
+    saveConfig({ ...DEFAULT_CONFIG, subagentRunner: "openclaw" as const }, projectRoot);
 
     appendGitignore(projectRoot, ".chats-sandbox/");
 
