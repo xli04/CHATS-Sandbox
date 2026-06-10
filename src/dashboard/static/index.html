@@ -72,7 +72,8 @@
     background: var(--bg);
     color: var(--text);
     font-family: -apple-system, BlinkMacSystemFont, "Inter", system-ui, "Segoe UI", sans-serif;
-    font-size: 15px;
+    font-size: 16px;
+    font-weight: 450;
     line-height: 1.55;
     -webkit-font-smoothing: antialiased;
   }
@@ -120,7 +121,7 @@
   .panel.active { display: block; }
 
   /* Compact status strip — one instance, shared by every tab */
-  .status-bar { display: flex; align-items: center; gap: 12px; padding: 7px 12px; background: var(--bg-soft); border: 1px solid var(--line); margin-bottom: 12px; font-size: 12px; flex-wrap: wrap; }
+  .status-bar { display: flex; align-items: center; gap: 12px; padding: 8px 12px; background: var(--bg-soft); border: 1px solid var(--line); margin-bottom: 12px; font-size: 13px; font-weight: 500; flex-wrap: wrap; }
   .status-bar .pill { display: inline-flex; align-items: center; gap: 5px; color: var(--text-dim); white-space: nowrap; }
   .status-bar .pill code { color: var(--text); font-family: "JetBrains Mono", monospace; }
   .status-bar .pill .dot { width: 6px; height: 6px; border-radius: 50%; }
@@ -160,7 +161,7 @@
   /* Timeline rows */
   .tl-rows { position: relative; padding: 4px 0; }
   .tl-vline { position: absolute; left: 20px; top: 14px; bottom: 14px; width: 1px; background: var(--line-strong); z-index: 0; }
-  .tl-row { display: grid; grid-template-columns: 28px 1fr 16px; column-gap: 10px; align-items: center; padding: 7px 6px; font-size: 12.5px; cursor: pointer; position: relative; z-index: 1; border-radius: 2px; border-left: 2px solid transparent; }
+  .tl-row { display: grid; grid-template-columns: 28px 1fr 16px; column-gap: 10px; align-items: center; padding: 8px 6px; font-size: 13.5px; font-weight: 500; cursor: pointer; position: relative; z-index: 1; border-radius: 2px; border-left: 2px solid transparent; }
   .tl-row:hover { background: var(--hover-bg); }
   /* Selected row carries its tier color on the left edge. */
   .tl-row.selected { background: var(--bg-soft); }
@@ -190,13 +191,13 @@
   .tl-tool.E { color: var(--accent);  border-color: var(--accent); }
   .tl-tool.W { color: var(--success); border-color: var(--success); }
   .tl-tool.B { color: var(--warn);    border-color: var(--warn); }
-  .tl-file { color: var(--text); font-family: "JetBrains Mono", monospace; font-size: 11.5px; flex-shrink: 0; }
+  .tl-file { color: var(--text); font-family: "JetBrains Mono", monospace; font-size: 12.5px; font-weight: 600; flex-shrink: 0; }
   .tl-sep { color: var(--muted); margin: 0 6px; flex-shrink: 0; }
-  .tl-detail { color: var(--text-dim); font-size: 11.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; flex: 1; }
+  .tl-detail { color: var(--text-dim); font-size: 12.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; flex: 1; }
   .tl-detail .strike { text-decoration: line-through; text-decoration-color: rgba(182, 45, 28, 0.45); color: var(--text-dim); }
   .tl-detail .arrow { color: var(--muted); margin: 0 4px; }
   .tl-detail .new   { color: var(--success); }
-  .tl-cmd { font-family: "JetBrains Mono", monospace; font-size: 11px; color: var(--text-dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; min-width: 0; }
+  .tl-cmd { font-family: "JetBrains Mono", monospace; font-size: 12px; font-weight: 500; color: var(--text-dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; min-width: 0; }
   .tl-cmd .verb { color: var(--muted); margin-right: 4px; }
   /* Restore is the whole point — keep it visible, brighten on hover. */
   .tl-restore { opacity: 0.4; color: var(--muted); font-size: 13px; cursor: pointer; background: transparent; border: none; padding: 2px; transition: opacity 0.1s, color 0.1s; line-height: 1; }
@@ -220,7 +221,7 @@
   .tl-legend .item b { color: var(--text-dim); font-family: "JetBrains Mono", monospace; font-weight: 600; }
 
   /* Detail pane */
-  .detail-empty { text-align: center; padding: 60px 20px; color: var(--muted); font-size: 13px; }
+  .detail-empty { text-align: center; padding: 60px 20px; color: var(--muted); font-size: 14px; }
   .detail-header { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; padding-bottom: 12px; border-bottom: 1px solid var(--line); margin-bottom: 14px; }
   .detail-title-row { display: flex; align-items: center; gap: 10px; margin-bottom: 4px; flex-wrap: wrap; }
   /* Action number as a ticket stamp — double rule, like a punched stub. */
@@ -234,13 +235,13 @@
   .detail-strat.npm_list,
   .detail-strat.env_snapshot,
   .detail-strat.git_tag        { color: var(--t1); border-color: var(--t1); }
-  .detail-meta { font-size: 11.5px; color: var(--muted); }
+  .detail-meta { font-size: 12.5px; color: var(--muted); }
   .detail-meta code { color: var(--text-dim); font-family: "JetBrains Mono", monospace; }
-  .detail-instruction { font-size: 13.5px; color: var(--text); margin-bottom: 12px; line-height: 1.5; word-break: break-word; }
+  .detail-instruction { font-size: 15px; font-weight: 550; color: var(--text); margin-bottom: 12px; line-height: 1.5; word-break: break-word; }
   .detail-section { margin-top: 14px; }
   .detail-section h4 { margin: 0 0 6px; font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); font-weight: 600; }
-  .detail-section .kv { font-family: "JetBrains Mono", monospace; font-size: 12px; color: var(--text-dim); word-break: break-all; }
-  .detail-section .file-list code { font-family: "JetBrains Mono", monospace; color: var(--text); font-size: 11.5px; }
+  .detail-section .kv { font-family: "JetBrains Mono", monospace; font-size: 13px; font-weight: 500; color: var(--text-dim); word-break: break-all; }
+  .detail-section .file-list code { font-family: "JetBrains Mono", monospace; color: var(--text); font-size: 12.5px; font-weight: 500; }
   .file-item { display: inline-flex; align-items: center; gap: 2px; }
   .file-restore, .step-restore { background: transparent; border: none; color: var(--muted); cursor: pointer; font-size: 12px; padding: 0 2px; opacity: 0.45; line-height: 1; }
   .file-restore:hover, .step-restore:hover { color: var(--accent); opacity: 1; }
@@ -248,7 +249,7 @@
   #compare-select { margin-left: 8px; font-size: 11px; padding: 1px 4px; background: var(--bg); border: 1px solid var(--line); color: var(--text-dim); font-family: inherit; text-transform: none; letter-spacing: normal; cursor: pointer; }
   #compare-select:hover { border-color: var(--line-strong); color: var(--text); }
   .detail-section .stat { font-family: "JetBrains Mono", monospace; color: var(--success); font-size: 12px; }
-  .detail-diff { margin: 0; padding: 10px 12px; background: var(--bg-soft); border: 1px solid var(--line); font-family: "JetBrains Mono", monospace; font-size: 11.5px; line-height: 1.55; max-height: 360px; overflow: auto; white-space: pre; }
+  .detail-diff { margin: 0; padding: 10px 12px; background: var(--bg-soft); border: 1px solid var(--line); font-family: "JetBrains Mono", monospace; font-size: 12.5px; line-height: 1.55; max-height: 360px; overflow: auto; white-space: pre; }
   .diff-add { color: var(--success); }
   .diff-del { color: var(--danger); }
   .diff-hdr { color: var(--accent); }
@@ -280,7 +281,7 @@
   .bk-table { border: 1px solid var(--line); }
   .bk-head, .bk-row { display: grid; grid-template-columns: 20px 1.6fr 0.9fr 1.4fr 1.2fr; gap: 10px; padding: 8px 12px; align-items: center; }
   .bk-head { background: var(--bg-soft); border-bottom: 1px solid var(--line); font-size: 10.5px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); font-weight: 600; }
-  .bk-row { border-bottom: 1px solid var(--line); font-size: 12.5px; cursor: pointer; }
+  .bk-row { border-bottom: 1px solid var(--line); font-size: 13.5px; font-weight: 500; cursor: pointer; }
   .bk-row:hover { background: var(--hover-bg); }
   .bk-row.expanded { background: var(--bg-soft); }
   .bk-caret { color: var(--muted); display: inline-block; transition: transform 0.12s; }
@@ -304,7 +305,7 @@
   .bk-size-note code { color: var(--text-dim); font-family: "JetBrains Mono", monospace; }
   .bk-size-head, .bk-size-row { display: grid; grid-template-columns: 28px 1.5fr 90px 1fr 90px; gap: 10px; padding: 7px 12px; align-items: center; }
   .bk-size-head { background: var(--bg-soft); border-bottom: 1px solid var(--line); font-size: 10.5px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); font-weight: 600; }
-  .bk-size-row { border-bottom: 1px solid var(--line); font-size: 12.5px; }
+  .bk-size-row { border-bottom: 1px solid var(--line); font-size: 13.5px; font-weight: 500; }
   .bk-size-row:hover { background: var(--hover-bg); }
   .bk-size-rank { color: var(--muted); font-family: "JetBrains Mono", monospace; font-size: 11px; text-align: right; }
   .bk-size-file { font-family: "JetBrains Mono", monospace; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -318,7 +319,7 @@
   .bk-stg-label { font-family: "JetBrains Mono", monospace; font-size: 12.5px; color: var(--text); font-weight: 500; }
   .bk-stg-meta { color: var(--muted); font-size: 11px; }
   .bk-stg-path { padding: 0 12px 6px; font-family: "JetBrains Mono", monospace; font-size: 10.5px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; background: var(--bg-soft); border-bottom: 1px solid var(--line); }
-  .bk-stg-row { display: grid; grid-template-columns: 38px 110px 1fr; gap: 10px; padding: 6px 12px; align-items: center; font-size: 12px; cursor: pointer; }
+  .bk-stg-row { display: grid; grid-template-columns: 38px 110px 1fr; gap: 10px; padding: 7px 12px; align-items: center; font-size: 13px; font-weight: 500; cursor: pointer; }
   .bk-stg-row:hover { background: var(--hover-bg); }
   .bk-stg-row .seq { color: var(--accent); font-family: "JetBrains Mono", monospace; }
   .bk-stg-row .tool { color: var(--warn); font-family: "JetBrains Mono", monospace; font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -336,7 +337,7 @@
   /* Backups — Restore log (the rewind audit trail) */
   .bk-log-head, .bk-log-row { display: grid; grid-template-columns: 160px 70px 1fr 200px; gap: 10px; padding: 7px 12px; align-items: center; }
   .bk-log-head { background: var(--bg-soft); border-bottom: 1px solid var(--line); font-size: 10.5px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); font-weight: 600; }
-  .bk-log-row { border-bottom: 1px solid var(--line); font-size: 12px; }
+  .bk-log-row { border-bottom: 1px solid var(--line); font-size: 13px; font-weight: 500; }
   .bk-log-row .when { font-family: "JetBrains Mono", monospace; font-size: 11px; color: var(--muted); font-variant-numeric: tabular-nums; }
   .bk-log-row .target { font-family: "JetBrains Mono", monospace; font-size: 11.5px; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .bk-log-row .outcome { font-family: "JetBrains Mono", monospace; font-size: 11px; }
@@ -349,13 +350,13 @@
   .pat-head { display: flex; align-items: baseline; gap: 8px; padding: 8px 12px; background: var(--bg-soft); border-bottom: 1px solid var(--line); }
   .pat-server { font-family: "JetBrains Mono", monospace; font-size: 13px; color: var(--text); font-weight: 600; }
   .pat-meta { color: var(--muted); font-size: 11px; margin-left: auto; }
-  .pat-row { display: flex; gap: 10px; padding: 9px 12px; border-bottom: 1px solid var(--line); font-size: 12.5px; align-items: flex-start; }
+  .pat-row { display: flex; gap: 10px; padding: 10px 12px; border-bottom: 1px solid var(--line); font-size: 13.5px; align-items: flex-start; }
   .pat-row:last-child { border-bottom: none; }
   .pat-badge { flex-shrink: 0; font-family: "JetBrains Mono", monospace; font-size: 10px; border: 1px solid currentColor; padding: 0 5px; line-height: 1.7; margin-top: 1px; min-width: 62px; text-align: center; }
   .pat-badge.verified { color: var(--success); }
   .pat-badge.proposed { color: var(--muted); }
   .pat-badge.failed   { color: var(--danger); }
-  .pat-action { color: var(--text); font-weight: 500; }
+  .pat-action { color: var(--text); font-weight: 650; }
   .pat-win { color: var(--text-dim); margin-top: 2px; line-height: 1.45; }
   .pat-win .ew { color: var(--success); font-family: "JetBrains Mono", monospace; font-size: 10px; margin-right: 5px; letter-spacing: 0.05em; }
   .pat-note { color: var(--muted); font-size: 11px; margin-top: 3px; font-style: italic; }
@@ -378,8 +379,8 @@
   .cfg-field { display: grid; grid-template-columns: 1fr 220px; gap: 18px; align-items: center; padding: 11px 0; border-bottom: 1px solid var(--line); }
   .cfg-field.stacked { grid-template-columns: 1fr; }
   .cfg-field.stacked .cfg-input { margin-top: 6px; }
-  .cfg-label .title { font-size: 14px; font-weight: 500; }
-  .cfg-label .desc  { font-size: 12.5px; color: var(--muted); margin-top: 2px; }
+  .cfg-label .title { font-size: 15px; font-weight: 600; }
+  .cfg-label .desc  { font-size: 13.5px; color: var(--muted); margin-top: 2px; }
   .cfg-input input[type=text], .cfg-input input[type=number], .cfg-input select { background: var(--bg); border: 1px solid var(--line); color: var(--text); padding: 6px 10px; font-size: 14px; font-family: inherit; width: 100%; }
   .cfg-input input:focus, .cfg-input select:focus { outline: 1px solid var(--accent); outline-offset: 0; border-color: var(--accent); }
   .toggle { position: relative; display: inline-block; width: 40px; height: 22px; }
@@ -403,7 +404,7 @@
   .save-msg.err { color: var(--danger); }
 
   /* Empty state */
-  .empty { text-align: center; padding: 40px 20px; color: var(--muted); font-size: 13px; }
+  .empty { text-align: center; padding: 40px 20px; color: var(--muted); font-size: 14px; }
 
   /* Modal */
   .modal-backdrop { position: fixed; inset: 0; background: rgba(0,0,0,0.4); display: none; align-items: center; justify-content: center; z-index: 100; }
@@ -422,7 +423,7 @@
   .modal-preview .pv-cmd { font-family: "JetBrains Mono", monospace; font-size: 10.5px; color: var(--muted); padding: 1px 0 1px 10px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .modal-preview .pv-note { color: var(--muted); font-style: italic; }
   .modal h3 { margin: 0 0 6px; font-size: 16px; font-weight: 600; }
-  .modal p  { margin: 6px 0; color: var(--text-dim); font-size: 13.5px; line-height: 1.5; }
+  .modal p  { margin: 6px 0; color: var(--text-dim); font-size: 14.5px; line-height: 1.5; }
   .modal .modal-actions { margin-top: 20px; display: flex; gap: 8px; justify-content: flex-end; }
   .toast { position: fixed; bottom: 24px; right: 24px; background: var(--bg); border: 1px solid var(--line-strong); border-left: 3px solid var(--accent); padding: 12px 16px; font-size: 13.5px; color: var(--text); max-width: 460px; z-index: 110; transform: translateY(20px); opacity: 0; transition: transform 0.18s, opacity 0.18s; }
   .toast.show { opacity: 1; transform: translateY(0); }
