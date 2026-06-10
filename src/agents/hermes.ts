@@ -63,41 +63,53 @@ _POST_TOOL_HOOK = ${postToolJs}
 _NO_HOOK_ENV = "CHATS_SANDBOX_NO_HOOK"
 
 
-def _run_hook(hook_path: str, payload: dict) -> None:
-    """Pipe JSON into the Node hook and discard its output.
+def _run_hook(hook_path: str, payload: dict) -> dict | None:
+    """Pipe JSON into the Node hook; return its parsed JSON output.
 
-    The hooks are fire-and-forget; informational output goes to
-    /dev/tty (in Claude Code), and backup bookkeeping happens as a
-    side effect on disk. The timeout must be GENEROUS — a tier-3
-    subagent that scrapes remote state (e.g. a Hermes subagent driving
-    Playwright MCP) can legitimately take 1-3 minutes. It must stay
-    larger than config.subagentTimeoutSeconds, otherwise this wrapper
-    kills the Node hook mid-backup and the artifact is lost. Past the
-    cap we move on rather than block tool execution forever.
+    The pre-tool hook's stdout matters: tier-0 policy rules execute the
+    destructive command themselves (e.g. rm -> mv to trash) and return
+    hookSpecificOutput.updatedInput with the command rewritten to a
+    no-op. The caller applies that rewrite to the live args dict so the
+    agent doesn't run the destructive command a second time.
+
+    The timeout must be GENEROUS — a tier-3 subagent that scrapes
+    remote state (e.g. a Hermes subagent driving Playwright MCP) can
+    legitimately take 1-3 minutes. It must stay larger than
+    config.subagentTimeoutSeconds, otherwise this wrapper kills the
+    Node hook mid-backup and the artifact is lost. Past the cap we
+    move on rather than block tool execution forever.
     """
     if os.environ.get(_NO_HOOK_ENV) == "1":
-        return
+        return None
     if not os.path.exists(hook_path):
         # Plugin installed but Node hooks missing — log once and skip.
         logger.warning("chats-sandbox hook missing: %s", hook_path)
-        return
+        return None
     # IMPORTANT: do NOT propagate CHATS_SANDBOX_NO_HOOK=1 into the
     # hook's own env. That flag is meant for subagents spawned BY the
     # hook (tier-3) — setting it here would make the hook itself exit
     # early and no backup would ever happen. Strip if present.
     child_env = {k: v for k, v in os.environ.items() if k != _NO_HOOK_ENV}
     try:
-        subprocess.run(
+        proc = subprocess.run(
             ["node", hook_path],
             input=json.dumps(payload).encode("utf-8"),
             timeout=600.0,
-            stdout=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
             stderr=subprocess.DEVNULL,
             check=False,
             env=child_env,
         )
+        out = (proc.stdout or b"").decode("utf-8", "replace").strip()
+        if out:
+            try:
+                return json.loads(out)
+            except Exception:
+                return None
+        return None
     except Exception as e:
         logger.warning("chats-sandbox hook failed (%s): %s", hook_path, e)
+        return None
 
 
 # Set by attach(). Used to detect MCP tools so their names can be
@@ -146,7 +158,7 @@ def _normalize_tool_name(tool_name: str) -> str:
     Claude-Code 'mcp__' double-underscore prefix; without this rewrite
     those actions never trigger the tier-3 subagent on Hermes.
 
-    Non-remote tools (file I/O, shell, etc.) pass through unchanged.
+    Non-remote tools fall through to _BUILTIN_NAME_MAP below.
     """
     toolset = _toolset_of(tool_name)
     server = None
@@ -174,22 +186,70 @@ def _normalize_tool_name(tool_name: str) -> str:
     return normalized
 
 
+# Hermes built-in tool names → the Claude-Code names the Node hooks key
+# their logic on. Without this every tier-0 rule (which matches
+# toolName "Bash"/"Write") is dead on Hermes, read-only calls
+# (read_file/search_files) create noise actions, and outside-workspace
+# Bash detection never fires.
+_BUILTIN_NAME_MAP = {
+    "terminal": "Bash",
+    "write_file": "Write",
+    "patch": "Edit",
+    "read_file": "Read",
+    "search_files": "Grep",
+}
+
+
+def _hook_payload_input(tool_name: str, args: dict) -> dict:
+    """Build the tool_input for the hook payload.
+
+    Hermes's write_file/patch use "path" where Claude Code uses
+    "file_path" — mirror it so path-keyed logic (outside-workspace
+    Write rule, file labels) sees the expected key. The copy never
+    mutates the live args dict.
+    """
+    payload = dict(args)
+    if tool_name in ("write_file", "patch") and "path" in payload:
+        payload.setdefault("file_path", payload["path"])
+    return payload
+
+
 def _pre_hook(tool_name: str, args: dict) -> None:
-    _run_hook(_PRE_TOOL_HOOK, {
+    mapped = _normalize_tool_name(tool_name)
+    if mapped == tool_name:
+        mapped = _BUILTIN_NAME_MAP.get(tool_name, tool_name)
+    out = _run_hook(_PRE_TOOL_HOOK, {
         "hook_event": "PreToolUse",
-        "tool_name": _normalize_tool_name(tool_name),
-        "tool_input": args,
+        "tool_name": mapped,
+        "tool_input": _hook_payload_input(tool_name, args),
     })
+    # Tier-0 run-and-rewrite: the hook already executed the destructive
+    # command reversibly and rewrote it to a no-op. Hermes pre-hooks
+    # share the args dict with the tool handler, so applying the
+    # rewritten command here is what stops the original from running a
+    # second time. Only "command" is ever rewritten by tier-0 rules.
+    try:
+        upd = (out or {}).get("hookSpecificOutput", {}).get("updatedInput")
+        if isinstance(upd, dict) and "command" in upd and "command" in args:
+            if upd["command"] != args["command"]:
+                logger.debug("chats-sandbox: tier-0 rewrite %r -> %r",
+                             args["command"], upd["command"])
+                args["command"] = upd["command"]
+    except Exception:
+        pass  # never block the tool
 
 
 def _post_hook(tool_name: str, args: dict, result: str) -> None:
+    mapped = _normalize_tool_name(tool_name)
+    if mapped == tool_name:
+        mapped = _BUILTIN_NAME_MAP.get(tool_name, tool_name)
     # The post hook also accepts hook_event="PostToolUseFailure" — but
     # Hermes's dispatch swallows tool errors into a JSON error string
     # and still returns a result, so we always send PostToolUse.
     _run_hook(_POST_TOOL_HOOK, {
         "hook_event": "PostToolUse",
-        "tool_name": _normalize_tool_name(tool_name),
-        "tool_input": args,
+        "tool_name": mapped,
+        "tool_input": _hook_payload_input(tool_name, args),
         "tool_output": result,
     })
 

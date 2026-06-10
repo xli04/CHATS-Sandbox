@@ -57,18 +57,52 @@ const POST_TOOL_HOOK = ${postToolJs};
 // for subagents the hook itself spawns, not the hook).
 const NO_HOOK_ENV = "CHATS_SANDBOX_NO_HOOK";
 
+// OpenClaw tool names → the Claude-Code names the Node hooks key their
+// logic on (tier-0 rules match "Bash"/"Write", read-only short-circuit
+// matches "Read", etc.). Unmapped names pass through unchanged.
+const TOOL_NAME_MAP = {
+  exec: "Bash",
+  write: "Write",
+  edit: "Edit",
+  apply_patch: "Edit",
+  read: "Read",
+};
+
+function mapToolName(name) {
+  return TOOL_NAME_MAP[name] || name || "";
+}
+
+// Mirror OpenClaw's "path" param as "file_path" in the hook payload so
+// path-keyed logic (outside-workspace Write rule, file labels) sees the
+// key it expects. Copies only — never mutates the live params.
+function hookInput(name, params) {
+  const input = { ...(params || {}) };
+  if ((name === "write" || name === "edit" || name === "apply_patch") &&
+      input.path && !input.file_path) {
+    input.file_path = input.path;
+  }
+  return input;
+}
+
 function runHook(hookPath, payload) {
   return new Promise((resolve) => {
-    if (process.env[NO_HOOK_ENV] === "1") { resolve(); return; }
+    if (process.env[NO_HOOK_ENV] === "1") { resolve(undefined); return; }
     let done = false;
-    const finish = () => { if (!done) { done = true; resolve(); } };
+    let stdout = "";
+    const finish = () => {
+      if (done) return;
+      done = true;
+      try { resolve(stdout.trim() ? JSON.parse(stdout) : undefined); }
+      catch { resolve(undefined); }
+    };
     try {
       const env = { ...process.env };
       delete env[NO_HOOK_ENV];
       const child = spawn("node", [hookPath], {
-        stdio: ["pipe", "ignore", "ignore"],
+        stdio: ["pipe", "pipe", "ignore"],
         env,
       });
+      child.stdout.on("data", (d) => { stdout += String(d); });
       // Generous cap — a tier-3 subagent can run minutes. Past this we
       // give up rather than block the agent forever.
       const timer = setTimeout(() => {
@@ -91,26 +125,40 @@ export default definePluginEntry({
   name: "CHATS-Sandbox",
   description: "Tiered action backup & recovery for OpenClaw tool calls.",
   register(api) {
-    // before_tool_call is FAIL-CLOSED in OpenClaw: a handler that
-    // throws blocks the tool. Backup is best-effort — swallow every
-    // error so a backup failure never blocks the agent.
+    // before_tool_call is a MODIFYING hook: returning { params } swaps
+    // the tool's params. Tier-0 policy rules execute the destructive
+    // command reversibly inside the hook (e.g. rm -> mv to trash) and
+    // hand back updatedInput with the command rewritten to a no-op —
+    // returning it here is what stops the original command from
+    // running a second time. Backup itself is best-effort: every
+    // error is swallowed so a backup failure never blocks the agent.
     api.on("before_tool_call", async (event) => {
       try {
-        await runHook(PRE_TOOL_HOOK, {
+        const name = (event && event.toolName) || "";
+        const params = (event && event.params) || {};
+        const out = await runHook(PRE_TOOL_HOOK, {
           hook_event: "PreToolUse",
-          tool_name: (event && event.toolName) || "",
-          tool_input: (event && event.params) || {},
+          tool_name: mapToolName(name),
+          tool_input: hookInput(name, params),
         });
+        const upd = out && out.hookSpecificOutput && out.hookSpecificOutput.updatedInput;
+        if (upd && typeof upd.command === "string" &&
+            typeof params.command === "string" &&
+            upd.command !== params.command) {
+          return { params: { ...params, command: upd.command } };
+        }
       } catch { /* never block the tool */ }
+      return undefined;
     });
 
     // after_tool_call is fire-and-forget (OpenClaw times it out).
     api.on("after_tool_call", async (event) => {
       try {
+        const name = (event && event.toolName) || "";
         await runHook(POST_TOOL_HOOK, {
           hook_event: "PostToolUse",
-          tool_name: (event && event.toolName) || "",
-          tool_input: (event && event.params) || {},
+          tool_name: mapToolName(name),
+          tool_input: hookInput(name, (event && event.params) || {}),
           tool_output: event ? event.result : undefined,
         });
       } catch { /* observation only */ }
@@ -130,6 +178,15 @@ function manifestSource(): string {
     description:
       "Tiered action backup & recovery — snapshots every tool call, " +
       "restorable via the chats-sandbox CLI and dashboard.",
+    activation: { onStartup: true },
+    enabledByDefault: true,
+    // Required by OpenClaw >= 2026.5 config validation, even when the
+    // plugin takes no config.
+    configSchema: {
+      type: "object",
+      additionalProperties: false,
+      properties: {},
+    },
   }, null, 2) + "\n";
 }
 
@@ -180,7 +237,33 @@ export const openclawAdapter: AgentAdapter = {
     log.push(`  Config at ${configDir}/config.json`);
     log.push(`  Backups will be stored in ${DEFAULT_CONFIG.backupDir}/`);
     log.push("");
-    log.push("OpenClaw discovers this plugin on startup and fires its");
+
+    // OpenClaw (>= 2026.5) only scans its stock extensions dir — a
+    // workspace plugin must be registered via `openclaw plugins
+    // install`. Its security scan flags our child_process use (the
+    // hook subprocess), so the bypass flag is required. Try to
+    // register automatically; fall back to printing the command.
+    const registerCmd =
+      `openclaw plugins install --link --dangerously-force-unsafe-install ${pluginDir}`;
+    let registered = false;
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-require-imports
+      const { execSync } = require("node:child_process");
+      execSync(registerCmd, { stdio: "pipe", timeout: 60_000 });
+      registered = true;
+      log.push("Plugin registered with OpenClaw (plugins install --link).");
+    } catch {
+      log.push("Could not auto-register the plugin (openclaw CLI not on");
+      log.push("PATH or registration failed). Register it manually:");
+      log.push(`  ${registerCmd}`);
+      log.push("(--dangerously-force-unsafe-install is needed because the");
+      log.push(" plugin spawns the chats-sandbox hook subprocess, which");
+      log.push(" OpenClaw's security scan flags as child_process use.)");
+    }
+    log.push("");
+    log.push(registered
+      ? "On the next OpenClaw session the plugin fires its"
+      : "Once registered, the plugin fires its");
     log.push("before_tool_call / after_tool_call hooks — every tool call");
     log.push("is wrapped with tier-0..3 backup, no source patch needed.");
     log.push("");
