@@ -25,43 +25,44 @@
        T2 snapshot = terracotta (--t2)
        T3 subagent = slate blue (--t3)  */
 
-  /* Palette matched to the CHATS lab logo (chats-lab): teal disc
-     #4090a0, ink-black linework on off-white #fafafa, gray-blue robot,
-     red used sparingly. Teal = accent/T2, gray-blue = T3, logo red =
-     danger; amber/sage keep T0/T1 distinct. */
+  /* Palette adopted from the CHATS lab's human-ai-coevolution site:
+     warm cream paper (#faf9f5), warm-gray ink, and the lab's deep
+     green-teal #12867e as the accent; dark mode is their navy-ink
+     #10131a with the mint-teal #54cfc3 counterpart. Teal = accent/T2;
+     amber/sage/slate keep T0/T1/T3 distinct. */
   :root, [data-theme="light"] {
-    --bg:         #fafafa;
-    --bg-soft:    #eff3f4;
-    --line:       #d3dcde;
-    --line-strong:#aebec2;
-    --text:       #181d1e;
-    --text-dim:   #48565a;
-    --muted:      #7c8a8e;
-    --accent:     #1d6273;
-    --accent-2:   #4d6e88;
-    --success:    #3e6b44;
-    --warn:       #ad7714;
-    --danger:     #b62d1c;
-    --hover-bg:   #f0f5f6;
+    --bg:         #faf9f5;
+    --bg-soft:    #f2f0e8;
+    --line:       #e6e3d8;
+    --line-strong:#d1cdbf;
+    --text:       #1f1d1a;
+    --text-dim:   #4a473f;
+    --muted:      #9a978d;
+    --accent:     #12867e;
+    --accent-2:   #5c7186;
+    --success:    #45714b;
+    --warn:       #a8740f;
+    --danger:     #b3422e;
+    --hover-bg:   #f5f3ee;
     --t0: var(--warn);
     --t1: var(--success);
     --t2: var(--accent);
     --t3: var(--accent-2);
   }
   [data-theme="dark"] {
-    --bg:         #141a1c;
-    --bg-soft:    #1c2427;
-    --line:       #2e3b3f;
-    --line-strong:#465a60;
-    --text:       #e5ebec;
-    --text-dim:   #a7b8bc;
-    --muted:      #6e8085;
-    --accent:     #44a0b5;
-    --accent-2:   #7fa0bd;
-    --success:    #79a877;
+    --bg:         #10131a;
+    --bg-soft:    #171b24;
+    --line:       #262b38;
+    --line-strong:#3a4153;
+    --text:       #e9e6df;
+    --text-dim:   #b5b1a6;
+    --muted:      #7d7a70;
+    --accent:     #54cfc3;
+    --accent-2:   #8aa3c2;
+    --success:    #84b08a;
     --warn:       #d9a93e;
     --danger:     #d96553;
-    --hover-bg:   #212b2e;
+    --hover-bg:   #1a1f2a;
   }
 
   * { box-sizing: border-box; }
