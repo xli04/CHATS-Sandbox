@@ -31,6 +31,10 @@ import type { PolicyRule, PolicyRuleResult } from "./policy_rules.js";
  *   docker-volume-rm               container     high        Tar volume contents before `docker volume rm`.
  *   docker-image-rm                container     high        `docker save` image before `rmi`.
  *   kubectl-delete                 k8s           medium      Dump resource yaml before `kubectl delete`.
+ *   mv-overwrite                   fs-overwrite  high        Record inverse mv; snapshot a clobbered dest.
+ *   sed-in-place                   fs-overwrite  high        Snapshot bytes before `sed -i`; cp back.
+ *   truncate                       fs-overwrite  high        Snapshot bytes before `truncate`; cp back.
+ *   git-discard-worktree           git           high        Snapshot bytes before `git restore`/checkout discard.
  *   chmod                          fs-overwrite  high        Save old mode, recover via chmod <old>.
  *   chown                          fs-overwrite  high        Save old owner, recover via chown <old>.
  *   outside-workspace-write-new    fs-delete     high        New file outside cwd: record rm as recovery.
@@ -151,6 +155,64 @@ function noopInput(ctx: HookContext): Record<string, unknown> {
 
 function isHelpInvocation(tokens: string[]): boolean {
   return tokens.includes("--help");
+}
+
+/** Resolve a path arg to an absolute path IFF it is a safe, existing
+ *  regular file. Returns null otherwise (so callers bail conservatively
+ *  on globs, directories, missing files, or sensitive system paths). */
+function resolveExistingFile(p: string): string | null {
+  if (!isSafePath(p)) return null;
+  const abs = path.isAbsolute(p) ? p : path.resolve(process.cwd(), p);
+  try {
+    if (!fs.existsSync(abs)) return null;
+    if (!fs.statSync(abs).isFile()) return null;
+  } catch {
+    return null;
+  }
+  return abs;
+}
+
+/**
+ * Shared run-and-rewrite helper for in-place file edits (sed -i,
+ * truncate, git restore/checkout -- <path>): snapshot each target's
+ * bytes to the action trash, execute the original command, and record a
+ * `cp` back as the recovery. The original command is replaced with a
+ * no-op for Claude (it already ran here). Returns null if any snapshot
+ * or the command itself fails, leaving the engine to escalate.
+ */
+function snapshotAndRun(
+  ctx: HookContext,
+  command: string,
+  absPaths: string[],
+  trashDir: string,
+  ruleId: string,
+  describe: (n: number) => string,
+): PolicyRuleResult | null {
+  try {
+    fs.mkdirSync(trashDir, { recursive: true });
+  } catch {
+    return null;
+  }
+  const nonce = Date.now();
+  const preCommands: string[] = [];
+  const recoveryCommands: string[] = [];
+  for (const abs of absPaths) {
+    const trashFile = join(trashDir, `${ruleId}-${trashName(abs)}-${nonce}.bak`);
+    const cpCmd = `cp -a ${shq(abs)} ${shq(trashFile)}`;
+    if (!runSilent(cpCmd)) return null;
+    if (!existsSync(trashFile)) return null;
+    preCommands.push(cpCmd);
+    recoveryCommands.push(`cp -a ${shq(trashFile)} ${shq(abs)}`);
+  }
+  if (!runSilent(command)) return null;
+  preCommands.push(command);
+  return {
+    updatedInput: noopInput(ctx),
+    preCommands,
+    recoveryCommands,
+    description: describe(absPaths.length),
+    ruleId,
+  };
 }
 
 function isSafePath(p: string): boolean {
@@ -765,6 +827,286 @@ const outsideWorkspaceWriteNew: PolicyRule = {
   },
 };
 
+// ---------- mv (record inverse, snapshot a clobbered dest) ---------------
+
+const mvRule: PolicyRule = {
+  id: "mv-overwrite",
+  category: "fs-overwrite",
+  toolName: "Bash",
+  pattern: /^\s*mv\s+/,
+  confidence: "high",
+  description:
+    "Run `mv src dst`, record the inverse `mv dst src`; if dst already existed, snapshot it first so the clobbered file can be restored too.",
+  apply(_match, ctx, trashDir) {
+    const command = rawCommand(ctx);
+    if (hasCompound(command)) return null;
+    const tokens = tokenize(command);
+    if (tokens === null) return null;
+    if (isHelpInvocation(tokens)) return null;
+    if (tokens[0] !== "mv") return null;
+
+    const positional: string[] = [];
+    for (let i = 1; i < tokens.length; i++) {
+      const t = tokens[i];
+      // Flags that change move semantics or would prompt: bail.
+      if (t === "-t" || t === "--target-directory" || t.startsWith("--target-directory="))
+        return null;
+      if (t === "-i" || t === "--interactive") return null;
+      if (t === "-S" || t === "--suffix") {
+        i++;
+        continue;
+      }
+      if (t.startsWith("--suffix=")) continue;
+      if (t.startsWith("-") && t !== "-") continue;
+      positional.push(t);
+    }
+    // Only the simple two-operand form (single src → single dst).
+    if (positional.length !== 2) return null;
+    const [src, dst] = positional;
+    if (!isSafePath(src) || !isSafePath(dst)) return null;
+
+    const cwd = process.cwd();
+    const absSrc = path.isAbsolute(src) ? src : path.resolve(cwd, src);
+    const absDst = path.isAbsolute(dst) ? dst : path.resolve(cwd, dst);
+    try {
+      if (!fs.existsSync(absSrc)) return null;
+    } catch {
+      return null;
+    }
+
+    // If dst is an existing directory the file lands inside it.
+    let landed = absDst;
+    try {
+      if (fs.existsSync(absDst) && fs.statSync(absDst).isDirectory()) {
+        landed = join(absDst, path.basename(absSrc));
+      }
+    } catch {
+      return null;
+    }
+    if (landed === absSrc) return null; // no-op / self move
+
+    try {
+      fs.mkdirSync(trashDir, { recursive: true });
+    } catch {
+      return null;
+    }
+
+    const preCommands: string[] = [];
+    let backupFile: string | null = null;
+    let clobbered = false;
+    try {
+      clobbered = fs.existsSync(landed);
+    } catch {
+      return null;
+    }
+    if (clobbered) {
+      backupFile = join(trashDir, `mv-clobbered-${trashName(landed)}-${Date.now()}.bak`);
+      const cpCmd = `cp -a ${shq(landed)} ${shq(backupFile)}`;
+      if (!runSilent(cpCmd)) return null;
+      if (!existsSync(backupFile)) return null;
+      preCommands.push(cpCmd);
+    }
+
+    if (!runSilent(command)) return null;
+    preCommands.push(command);
+
+    const recoveryCommands: string[] = [`mv ${shq(landed)} ${shq(absSrc)}`];
+    if (clobbered && backupFile) {
+      recoveryCommands.push(`cp -a ${shq(backupFile)} ${shq(landed)}`);
+    }
+
+    return {
+      updatedInput: noopInput(ctx),
+      preCommands,
+      recoveryCommands,
+      description: clobbered
+        ? `mv with clobber: snapshotted ${path.basename(landed)}; inverse mv recorded.`
+        : `mv: recorded inverse mv ${path.basename(landed)} → ${path.basename(absSrc)}.`,
+      ruleId: "mv-overwrite",
+    };
+  },
+};
+
+// ---------- sed -i (in-place stream edit) --------------------------------
+
+const sedInPlace: PolicyRule = {
+  id: "sed-in-place",
+  category: "fs-overwrite",
+  toolName: "Bash",
+  pattern: /^\s*sed\s+/,
+  confidence: "high",
+  description:
+    "Snapshot file bytes before a `sed -i` in-place edit; restore via cp back.",
+  apply(_match, ctx, trashDir) {
+    const command = rawCommand(ctx);
+    if (hasCompound(command)) return null;
+    const tokens = tokenize(command);
+    if (tokens === null) return null;
+    if (isHelpInvocation(tokens)) return null;
+    if (tokens[0] !== "sed") return null;
+
+    let inPlace = false;
+    const positional: string[] = [];
+    for (let i = 1; i < tokens.length; i++) {
+      const t = tokens[i];
+      if (
+        t === "-i" ||
+        t === "--in-place" ||
+        /^-i\.[A-Za-z0-9_]+$/.test(t) ||
+        t.startsWith("--in-place=")
+      ) {
+        inPlace = true;
+        continue;
+      }
+      // Script-supplying flags make file identification ambiguous: bail.
+      if (t === "-e" || t === "--expression" || t === "-f" || t === "--file")
+        return null;
+      if (t.startsWith("-") && t !== "-") {
+        // A clustered short flag that includes `i` (e.g. -ni) is ambiguous.
+        if (/^-[A-Za-z]*i[A-Za-z]*$/.test(t)) return null;
+        continue;
+      }
+      positional.push(t);
+    }
+    if (!inPlace) return null;
+    // positionals = [script, file1, file2, ...]
+    if (positional.length < 2) return null;
+    const abs: string[] = [];
+    for (const f of positional.slice(1)) {
+      const a = resolveExistingFile(f);
+      if (a === null) return null;
+      abs.push(a);
+    }
+    return snapshotAndRun(
+      ctx,
+      command,
+      abs,
+      trashDir,
+      "sed-in-place",
+      (n) => `Snapshotted ${n} file${n === 1 ? "" : "s"} before sed -i.`,
+    );
+  },
+};
+
+// ---------- truncate (in-place size change / wipe) -----------------------
+
+const truncateRule: PolicyRule = {
+  id: "truncate",
+  category: "fs-overwrite",
+  toolName: "Bash",
+  pattern: /^\s*truncate\s+/,
+  confidence: "high",
+  description:
+    "Snapshot file bytes before `truncate` shrinks/wipes them in place; restore via cp back.",
+  apply(_match, ctx, trashDir) {
+    const command = rawCommand(ctx);
+    if (hasCompound(command)) return null;
+    const tokens = tokenize(command);
+    if (tokens === null) return null;
+    if (isHelpInvocation(tokens)) return null;
+    if (tokens[0] !== "truncate") return null;
+
+    const positional: string[] = [];
+    for (let i = 1; i < tokens.length; i++) {
+      const t = tokens[i];
+      // -r/--reference points at another file, not a target: too ambiguous.
+      if (t === "-r" || t === "--reference" || t.startsWith("--reference="))
+        return null;
+      if (t === "-s" || t === "--size") {
+        i++;
+        continue;
+      }
+      if (t.startsWith("-") && t !== "-") continue; // -s0, --size=0, -c, -o ...
+      positional.push(t);
+    }
+    if (positional.length === 0) return null;
+    const abs: string[] = [];
+    for (const f of positional) {
+      const a = resolveExistingFile(f);
+      if (a === null) return null;
+      abs.push(a);
+    }
+    return snapshotAndRun(
+      ctx,
+      command,
+      abs,
+      trashDir,
+      "truncate",
+      (n) => `Snapshotted ${n} file${n === 1 ? "" : "s"} before truncate.`,
+    );
+  },
+};
+
+// ---------- git restore / checkout -- <path> (discard worktree edits) ----
+
+const gitDiscardWorktree: PolicyRule = {
+  id: "git-discard-worktree",
+  category: "git",
+  toolName: "Bash",
+  pattern: /^\s*git\s+(?:checkout|restore)\b/,
+  confidence: "high",
+  description:
+    "Snapshot working-tree bytes before `git restore <path>` / `git checkout -- <path>` discards uncommitted edits; restore via cp back.",
+  apply(_match, ctx, trashDir) {
+    if (!which("git")) return null;
+    const command = rawCommand(ctx);
+    if (hasCompound(command)) return null;
+    const tokens = tokenize(command);
+    if (tokens === null) return null;
+    if (isHelpInvocation(tokens)) return null;
+    if (tokens[0] !== "git") return null;
+    const sub = tokens[1];
+    if (sub !== "checkout" && sub !== "restore") return null;
+
+    let sawSep = false;
+    const positional: string[] = [];
+    for (let i = 2; i < tokens.length; i++) {
+      const t = tokens[i];
+      if (t === "--") {
+        sawSep = true;
+        continue;
+      }
+      if (sawSep) {
+        positional.push(t);
+        continue;
+      }
+      if (sub === "checkout") {
+        // Branch-affecting forms are not a pure path discard: bail.
+        if (t === "-b" || t === "-B" || t === "--orphan" || t === "--detach")
+          return null;
+        if (t.startsWith("-")) continue;
+        // A bare operand before `--` on checkout is ambiguous (branch vs
+        // path), so we only handle the explicit `git checkout -- <path>` form.
+        return null;
+      }
+      // git restore: always overwrites the worktree unless --staged-only.
+      if (t === "--staged" || t === "-S") return null; // index only, nothing to snapshot
+      if (t === "-s" || t === "--source") {
+        i++;
+        continue;
+      }
+      if (t.startsWith("-")) continue;
+      positional.push(t);
+    }
+    if (positional.length === 0) return null;
+    const abs: string[] = [];
+    for (const p of positional) {
+      const a = resolveExistingFile(p);
+      if (a === null) return null; // only snapshot existing regular files
+      abs.push(a);
+    }
+    return snapshotAndRun(
+      ctx,
+      command,
+      abs,
+      trashDir,
+      "git-discard-worktree",
+      (n) =>
+        `Snapshotted ${n} working file${n === 1 ? "" : "s"} before git ${sub} discard.`,
+    );
+  },
+};
+
 // ---------- registry -------------------------------------------------------
 
 export const EXTRA_RULES: PolicyRule[] = [
@@ -777,6 +1119,10 @@ export const EXTRA_RULES: PolicyRule[] = [
   dockerVolumeRm,
   dockerImageRm,
   kubectlDelete,
+  mvRule,
+  sedInPlace,
+  truncateRule,
+  gitDiscardWorktree,
   // Record-and-pass cluster (capture state, original command runs as-is)
   chmodRule,
   chownRule,
