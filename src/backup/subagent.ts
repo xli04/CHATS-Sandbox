@@ -48,6 +48,24 @@ function isCommandAvailable(cmd: string): boolean {
 }
 
 /**
+ * Environment for spawned subagent processes.
+ *   - CHATS_SANDBOX_NO_HOOK=1: recursion guard — the subagent's own tool
+ *     calls fire our hooks; this makes them exit early in the subprocess.
+ *   - IS_SANDBOX=1 (root only): `claude --dangerously-skip-permissions`
+ *     refuses to run as root unless this is set. Sandboxed containers —
+ *     this tool's primary deployment — routinely run as root, and without
+ *     it every tier-3 backup fails instantly.
+ */
+function subagentEnv(): NodeJS.ProcessEnv {
+  const isRoot = typeof process.getuid === "function" && process.getuid() === 0;
+  return {
+    ...process.env,
+    CHATS_SANDBOX_NO_HOOK: "1",
+    ...(isRoot ? { IS_SANDBOX: "1" } : {}),
+  };
+}
+
+/**
  * Build the subprocess invocation for the tier-3 subagent, branching on
  * config.subagentRunner.
  *
@@ -169,21 +187,28 @@ Pick ONE of these categories:
 ### Category A: Local file write outside the current workspace
 Example: Write tool with path /Users/foo/other_project/src/file.ts
 
-STRATEGY — shadow git repo rooted at the target's project:
-1. Find the target file's project root (walk up from its directory looking for .git, package.json, pyproject.toml, Cargo.toml, or similar markers). If no marker found, use the file's parent directory.
+STRATEGY — shadow git repo scoped to the AFFECTED FILES ONLY:
+1. Pick the work-tree root: the affected file's parent directory (or the
+   nearest project marker like .git/package.json if one is close). The
+   root may be a big shared directory — that is fine because you will
+   only ever add the affected file(s), never the whole tree.
 2. Create a shadow git repo at ${actionDir}/external-shadow/:
      mkdir -p '${actionDir}/external-shadow'
-     GIT_DIR='${actionDir}/external-shadow' GIT_WORK_TREE='<target-project-root>' git init
-     GIT_DIR='${actionDir}/external-shadow' GIT_WORK_TREE='<target-project-root>' git config user.email "chats-sandbox@local"
-     GIT_DIR='${actionDir}/external-shadow' GIT_WORK_TREE='<target-project-root>' git config user.name "CHATS-Sandbox"
-     GIT_DIR='${actionDir}/external-shadow' GIT_WORK_TREE='<target-project-root>' git add -A
-     GIT_DIR='${actionDir}/external-shadow' GIT_WORK_TREE='<target-project-root>' git commit -m "pre-action snapshot" --allow-empty-message
-3. Record the target project root path and the commit hash.
-4. recovery_commands should be the three-step restore:
-     GIT_DIR='${actionDir}/external-shadow' GIT_WORK_TREE='<target-project-root>' git read-tree <hash>
-     GIT_DIR='${actionDir}/external-shadow' GIT_WORK_TREE='<target-project-root>' git checkout-index -f -a
-     GIT_DIR='${actionDir}/external-shadow' GIT_WORK_TREE='<target-project-root>' git clean -fd
-   This correctly handles create, modify, AND delete scenarios because it snapshots the entire target tree.
+     GIT_DIR='${actionDir}/external-shadow' GIT_WORK_TREE='<root>' git init
+     GIT_DIR='${actionDir}/external-shadow' GIT_WORK_TREE='<root>' git config user.email "chats-sandbox@local"
+     GIT_DIR='${actionDir}/external-shadow' GIT_WORK_TREE='<root>' git config user.name "CHATS-Sandbox"
+     GIT_DIR='${actionDir}/external-shadow' GIT_WORK_TREE='<root>' git add -- <affected file(s), relative to root>
+     GIT_DIR='${actionDir}/external-shadow' GIT_WORK_TREE='<root>' git commit -m "pre-action snapshot" --allow-empty-message
+   NEVER use \`git add -A\` here — the root may contain gigabytes of
+   unrelated files.
+3. Record the root path and the commit hash.
+4. recovery_commands — two-step restore of exactly those files:
+     GIT_DIR='${actionDir}/external-shadow' GIT_WORK_TREE='<root>' git read-tree <hash>
+     GIT_DIR='${actionDir}/external-shadow' GIT_WORK_TREE='<root>' git checkout-index -f -a
+   If the upcoming action CREATES a file that does not exist yet, the
+   recovery for that file is an explicit \`rm '<absolute path>'\` instead.
+   NEVER include \`git clean -fd\` in recovery_commands: on a shared
+   work-tree it deletes every unrelated untracked file under the root.
 
 ### Category B: Remote state (git push, curl POST/PUT/DELETE, API calls)
 STRATEGY — document recovery for out-of-band state:
@@ -446,13 +471,7 @@ export function runSubagentBackup(
     stdout = execFileSync(bin, args, {
       encoding: "utf-8",
       timeout: timeoutMs,
-      env: {
-        ...process.env,
-        // Recursion guard: the subagent's own tool calls will fire our
-        // hooks. This env var makes our hooks exit early inside the
-        // subprocess.
-        CHATS_SANDBOX_NO_HOOK: "1",
-      },
+      env: subagentEnv(),
       stdio: ["pipe", "pipe", "pipe"],
       maxBuffer: 4 * 1024 * 1024, // 4 MB cap
     });
@@ -576,7 +595,7 @@ export function invokeRestoreSubagent(
     const stdout: string = execFileSync(bin, args, {
       encoding: "utf-8",
       timeout: timeoutMs,
-      env: { ...process.env, CHATS_SANDBOX_NO_HOOK: "1" },
+      env: subagentEnv(),
       stdio: ["pipe", "pipe", "pipe"],
       maxBuffer: 4 * 1024 * 1024,
     });
@@ -618,7 +637,7 @@ export function runRunnerForText(
     const stdout: string = execFileSync(bin, args, {
       encoding: "utf-8",
       timeout: Math.max(10_000, timeoutSeconds * 1000),
-      env: { ...process.env, CHATS_SANDBOX_NO_HOOK: "1" },
+      env: subagentEnv(),
       stdio: ["pipe", "pipe", "pipe"],
       maxBuffer: 8 * 1024 * 1024,
     });

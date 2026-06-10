@@ -187,7 +187,9 @@ export const DEFAULT_CONFIG: SandboxConfig = {
   // overhead can disable it via `chats-sandbox config set subagentEnabled false`.
   subagentEnabled: true,
   subagentModel: "haiku",
-  subagentTimeoutSeconds: 60,
+  // Measured: warm `claude -p` backups take 20-35s, but a cold start can
+  // exceed 90s — 60s timed out in stress testing, losing the backup.
+  subagentTimeoutSeconds: 120,
   // Default to bypassPermissions so the subagent has full freedom to
   // run any backup commands it needs (git push, curl, ssh, etc.).
   // Users who want a smaller blast radius can switch to "acceptEdits"
