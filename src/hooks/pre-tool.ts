@@ -130,6 +130,25 @@ async function main(): Promise<void> {
       // non-fatal
     }
 
+    // Session sidecar for the dashboard. UserPromptSubmit also writes
+    // this (with the prompt text), but not every agent wires that hook
+    // — updating it here too means session identity works everywhere.
+    try {
+      const pathMod = require("node:path") as typeof import("node:path");
+      const sandboxDir = pathMod.dirname(pathMod.resolve(config.backupDir));
+      const sessionFile = pathMod.join(sandboxDir, "session.json");
+      let prev: Record<string, unknown> = {};
+      try { prev = JSON.parse(fs.readFileSync(sessionFile, "utf-8")); } catch { /* fresh */ }
+      fs.writeFileSync(sessionFile, JSON.stringify({
+        ...prev,
+        session_id: ctx.session_id ?? prev.session_id ?? null,
+        dialect,
+        ts: new Date().toISOString(),
+      }, null, 2) + "\n", "utf-8");
+    } catch {
+      // non-fatal
+    }
+
     // Allow the tool call, inject backup info as context.
     // If a tier-0 policy rule rewrote the command (e.g. rm → mv to trash),
     // propagate the updatedInput so the agent runs the rewritten form.

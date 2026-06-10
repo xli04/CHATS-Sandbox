@@ -21,6 +21,7 @@ interface PromptContext {
   prompt?: string;
   user_prompt?: string;
   message?: string;
+  session_id?: string;
 }
 
 const MAX_LEN = 200;
@@ -74,6 +75,18 @@ async function main(): Promise<void> {
     }
     const instructionFile = path.join(sandboxDir, "current-instruction.txt");
     fs.writeFileSync(instructionFile, truncated, "utf-8");
+
+    // Session sidecar — read by the dashboard so each instance can show
+    // which conversation it is watching ("multiple dashboards" case).
+    const sessionFile = path.join(sandboxDir, "session.json");
+    let prev: Record<string, unknown> = {};
+    try { prev = JSON.parse(fs.readFileSync(sessionFile, "utf-8")); } catch { /* fresh */ }
+    fs.writeFileSync(sessionFile, JSON.stringify({
+      ...prev,
+      session_id: ctx.session_id ?? prev.session_id ?? null,
+      prompt: truncated,
+      ts: new Date().toISOString(),
+    }, null, 2) + "\n", "utf-8");
   } catch {
     // best-effort; never block on this
   }

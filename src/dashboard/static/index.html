@@ -359,6 +359,9 @@
   .pat-win .ew { color: var(--success); font-family: "JetBrains Mono", monospace; font-size: 10px; margin-right: 5px; letter-spacing: 0.05em; }
   .pat-note { color: var(--muted); font-size: 11px; margin-top: 3px; font-style: italic; }
 
+  /* Agent identity pill — teal outline, stands out among the gray pills */
+  .pill.agent-pill code { color: var(--accent); border: 1px solid var(--accent); padding: 0 6px; font-size: 10.5px; line-height: 1.7; font-weight: 600; }
+
   /* Live-updates pill (status strip) */
   .pill.live { cursor: pointer; user-select: none; }
   .pill.live .dot.on { animation: livepulse 2s ease-in-out infinite; }
@@ -438,7 +441,7 @@
   <div class="brand">
     <span class="sigil">REC</span>
     BackUpper
-    <small>records · rewinds · restores</small>
+    <small id="brand-meta">records · rewinds · restores</small>
   </div>
   <nav>
     <button id="tab-timeline" class="active">Timeline</button>
@@ -619,14 +622,52 @@ async function loadStatus() {
     for (const el of document.querySelectorAll(".status-bar")) el.innerHTML = errHtml;
   }
 }
+// Adapter names → display labels for the masthead/status agent badge.
+const AGENT_LABELS = {
+  "claude-code": "Claude Code",
+  hermes: "Hermes",
+  openclaw: "OpenClaw",
+  openhands: "OpenHands",
+  codex: "Codex",
+  cursor: "Cursor",
+};
+
+// Identify this dashboard instance: project name + agent in the brand
+// line and the browser tab title, so multiple dashboards (different
+// projects / different agents) are distinguishable at a glance.
+function renderIdentity(s) {
+  const agentLabel = (s.agents || []).map((a) => AGENT_LABELS[a] || a).join(" + ");
+  const meta = $("brand-meta");
+  if (meta && s.projectName) {
+    meta.textContent = agentLabel
+      ? `${s.projectName} · ${agentLabel}`
+      : s.projectName;
+    if (s.projectRoot) meta.title = s.projectRoot;
+  }
+  document.title = `BackUpper · ${s.projectName || "?"}${agentLabel ? ` (${agentLabel})` : ""}`;
+}
+
 function renderStatus() {
   const s = currentStatus;
   if (!s) return;
+  renderIdentity(s);
   const left = [];
   left.push(livePaused
     ? `<span class="pill live" id="live-pill" title="Click to resume live updates"><span class="dot off"></span>paused</span>`
     : `<span class="pill live" id="live-pill" title="Updating every ${LIVE_POLL_MS / 1000}s — click to pause"><span class="dot on"></span>live</span>`);
   left.push(`<span class="sep">·</span>`);
+  if (s.agents && s.agents.length) {
+    const label = s.agents.map((a) => AGENT_LABELS[a] || a).join(" + ");
+    left.push(`<span class="pill agent-pill" title="Agent(s) wired in this project"><code>${escapeHtml(label)}</code></span>`);
+    left.push(`<span class="sep">·</span>`);
+  }
+  if (s.session && s.session.id) {
+    const tip = s.session.prompt
+      ? `Conversation ${s.session.id}\nLast prompt: ${s.session.prompt}`
+      : `Conversation ${s.session.id}`;
+    left.push(`<span class="pill" title="${escapeHtml(tip)}">session <code>${escapeHtml(String(s.session.id).slice(0, 8))}</code></span>`);
+    left.push(`<span class="sep">·</span>`);
+  }
   left.push(`<span class="pill"><span class="dot ${s.enabled ? "on" : "off"}"></span>${s.enabled ? "enabled" : "disabled"}</span>`);
   left.push(`<span class="sep">·</span>`);
   left.push(`<span class="pill">mode <code>${escapeHtml(s.backupMode)}</code></span>`);

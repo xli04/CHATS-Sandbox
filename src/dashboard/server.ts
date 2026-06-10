@@ -345,6 +345,7 @@ function handlePostConfig(
 function handleGetStatus(
   res: http.ServerResponse,
   config: SandboxConfig,
+  projectRoot: string,
 ): void {
   const backupRoot = path.resolve(config.backupDir);
   let actionCount = 0;
@@ -357,6 +358,26 @@ function handleGetStatus(
       totalBytes += dirSize(path.join(backupRoot, d));
     }
   }
+
+  // Which coding agent(s) this project is wired for, plus the current
+  // conversation — so each dashboard instance identifies itself when
+  // several are open against different projects/agents.
+  let agents: string[] = [];
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const { detectAdapters } = require("../agents/index.js");
+    agents = detectAdapters(projectRoot).map((a: { name: string }) => a.name);
+  } catch { /* detection optional */ }
+  let session: { id: string | null; prompt: string | null; ts: string | null } | null = null;
+  try {
+    const j = JSON.parse(fs.readFileSync(path.join(path.dirname(backupRoot), "session.json"), "utf-8"));
+    session = {
+      id: typeof j.session_id === "string" ? j.session_id : null,
+      prompt: typeof j.prompt === "string" ? j.prompt : null,
+      ts: typeof j.ts === "string" ? j.ts : null,
+    };
+  } catch { /* no session recorded yet */ }
+
   jsonResponse(res, 200, {
     enabled: config.enabled,
     backupMode: config.backupMode,
@@ -368,6 +389,10 @@ function handleGetStatus(
     subagentEnabled: config.subagentEnabled,
     subagentModel: config.subagentModel,
     subagentPermissionMode: config.subagentPermissionMode,
+    projectName: path.basename(projectRoot),
+    projectRoot,
+    agents,
+    session,
   });
 }
 
@@ -910,7 +935,7 @@ export function startDashboard(options: {
       return;
     }
     if (url === "/api/status" && method === "GET") {
-      handleGetStatus(res, config);
+      handleGetStatus(res, config, projectRoot);
       return;
     }
     if (url === "/api/storage-by-file" && method === "GET") {
