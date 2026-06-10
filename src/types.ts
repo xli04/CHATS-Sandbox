@@ -63,26 +63,89 @@ const OPENHANDS_TOOL_MAP: Record<string, string> = {
   grep: "Grep",
 };
 
+/** Codex CLI payload tool names → canonical. Codex already serializes
+ *  shell as "Bash"; file edits arrive as "apply_patch". */
+const CODEX_TOOL_MAP: Record<string, string> = {
+  apply_patch: "Edit",
+};
+
+/** Cursor payload tool names → canonical. Cursor's shell tool has gone
+ *  by several names across versions; map the known candidates. */
+const CURSOR_TOOL_MAP: Record<string, string> = {
+  Shell: "Bash",
+  shell: "Bash",
+  run_terminal_cmd: "Bash",
+  read_file: "Read",
+  edit_file: "Edit",
+  write_file: "Write",
+};
+
+/**
+ * Which hook dialect produced this payload — decides both tool-name
+ * normalization and (in pre-tool.ts) the OUTPUT shape we must emit.
+ *   claude    — Claude Code / Codex (hookSpecificOutput contract)
+ *   openhands — OpenHands SDK (allow/deny only; event_type key)
+ *   cursor    — Cursor (top-level {permission, updated_input} contract)
+ */
+export type HookDialect = "claude" | "openhands" | "cursor";
+
+export function detectHookDialect(parsed: unknown): HookDialect {
+  const p = (parsed && typeof parsed === "object"
+    ? parsed : {}) as Record<string, unknown>;
+  if (p.hook_event === undefined && typeof p.event_type === "string") {
+    return "openhands";
+  }
+  // Cursor payloads carry conversation/generation ids and workspace
+  // roots; Claude Code and Codex carry session_id/turn_id instead.
+  if (p.conversation_id !== undefined || p.generation_id !== undefined ||
+      p.workspace_roots !== undefined) {
+    return "cursor";
+  }
+  return "claude";
+}
+
+/** Map dialect-specific event names ("preToolUse", "PreToolUse") onto
+ *  the canonical PascalCase set. */
+function canonicalEvent(raw: unknown): string | undefined {
+  if (typeof raw !== "string" || !raw) return undefined;
+  const k = raw.toLowerCase().replace(/[^a-z]/g, "");
+  if (k === "pretooluse") return "PreToolUse";
+  if (k === "posttooluse") return "PostToolUse";
+  if (k === "posttoolusefailure") return "PostToolUseFailure";
+  if (k === "userpromptsubmit") return "UserPromptSubmit";
+  return raw;
+}
+
 export function normalizeHookContext(parsed: unknown): HookContext {
   const p = (parsed && typeof parsed === "object"
     ? parsed : {}) as Record<string, unknown>;
-  const hookEvent = p.hook_event ?? p.event_type;
-  // event_type (vs hook_event) marks the OpenHands SDK payload shape.
-  const isOpenHands = p.hook_event === undefined && typeof p.event_type === "string";
+  const dialect = detectHookDialect(parsed);
+  const hookEvent = canonicalEvent(p.hook_event ?? p.hook_event_name ?? p.event_type);
   let toolName = typeof p.tool_name === "string" ? p.tool_name : "";
   let toolInput = (p.tool_input && typeof p.tool_input === "object")
     ? p.tool_input as Record<string, unknown> : {};
-  if (isOpenHands) {
+
+  if (dialect === "openhands") {
     toolName = OPENHANDS_TOOL_MAP[toolName] ?? toolName;
-    // The SDK's editor tools use "path" where Claude Code uses
-    // "file_path" — mirror it so path-keyed logic sees the usual key.
-    if (typeof toolInput.path === "string" && toolInput.file_path === undefined) {
-      toolInput = { ...toolInput, file_path: toolInput.path };
+  } else if (dialect === "cursor") {
+    toolName = CURSOR_TOOL_MAP[toolName] ?? toolName;
+    // Cursor's beforeShellExecution-style payloads put the command at
+    // the top level; surface it as tool_input.command for the rules.
+    if (toolInput.command === undefined && typeof p.command === "string") {
+      toolInput = { ...toolInput, command: p.command };
+      if (!toolName) toolName = "Bash";
     }
+  } else {
+    toolName = CODEX_TOOL_MAP[toolName] ?? toolName;
   }
+  // Editor tools on several agents use "path" where Claude Code uses
+  // "file_path" — mirror it so path-keyed logic sees the usual key.
+  if (typeof toolInput.path === "string" && toolInput.file_path === undefined) {
+    toolInput = { ...toolInput, file_path: toolInput.path };
+  }
+
   return {
-    hook_event: (typeof hookEvent === "string"
-      ? hookEvent : "PreToolUse") as HookContext["hook_event"],
+    hook_event: (hookEvent ?? "PreToolUse") as HookContext["hook_event"],
     tool_name: toolName,
     tool_input: toolInput,
     tool_output: p.tool_output ?? p.tool_response,
@@ -164,8 +227,10 @@ export interface SandboxConfig {
    *    deployments). The OpenRouter/provider API key is read from the
    *    environment of the parent process, never stored in config.
    *  "openclaw" — headless `openclaw agent --local` one-shot turn (for
-   *    OpenClaw deployments). Provider keys come from the environment. */
-  subagentRunner: "claude" | "hermes" | "openclaw";
+   *    OpenClaw deployments). Provider keys come from the environment.
+   *  "codex"    — headless `codex exec` one-shot turn (for Codex
+   *    deployments). Uses the user's existing codex login. */
+  subagentRunner: "claude" | "hermes" | "openclaw" | "codex";
   /** For subagentRunner="hermes": model id passed to `hermes chat -m`
    *  (e.g. "anthropic/claude-haiku-4.5"). Ignored for the claude runner. */
   subagentHermesModel: string;
@@ -176,6 +241,9 @@ export interface SandboxConfig {
    *  --model` (e.g. "openrouter/anthropic/claude-haiku-4.5"). Empty =
    *  the OpenClaw agent's own default model. */
   subagentOpenclawModel: string;
+  /** For subagentRunner="codex": model id passed to `codex exec -m`
+   *  (e.g. "gpt-5.5-codex"). Empty = codex's own default model. */
+  subagentCodexModel: string;
 }
 
 export const DEFAULT_CONFIG: SandboxConfig = {
@@ -234,6 +302,8 @@ export const DEFAULT_CONFIG: SandboxConfig = {
   subagentHermesProvider: "openrouter",
   // Empty = use the OpenClaw agent's default model for the subagent.
   subagentOpenclawModel: "",
+  // Empty = use codex's default model for the subagent.
+  subagentCodexModel: "",
 };
 
 // ── Backup artifact ──────────────────────────────────────────────────

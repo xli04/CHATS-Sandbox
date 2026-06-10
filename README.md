@@ -13,7 +13,7 @@ npm install && npm run build && npm link
 # Go to your project and install the hooks
 cd /path/to/your/project
 chats-sandbox install            # auto-detects the agent (Claude Code by default)
-# chats-sandbox install hermes   # or target a specific agent: hermes | openhands | openclaw
+# chats-sandbox install hermes   # or target a specific agent: hermes | openhands | openclaw | codex | cursor
 
 # Runs automatically on every tool call from now on.
 
@@ -91,7 +91,7 @@ A two-stage pipeline (modeled on NVIDIA ToolShield): stage 1 a model **proposes*
 ## CLI Commands
 
 ```bash
-chats-sandbox install [agent]           # Wire hooks + slash commands (agent: claude-code | hermes | openhands | openclaw)
+chats-sandbox install [agent]           # Wire hooks + slash commands (agent: claude-code | hermes | openhands | openclaw | codex | cursor)
 chats-sandbox uninstall [agent]         # Remove hooks + slash commands
 chats-sandbox status                    # Show sandbox state
 chats-sandbox config [set <k> <v>]      # Show or update config

@@ -84,8 +84,25 @@ function subagentEnv(): NodeJS.ProcessEnv {
 function buildSubagentInvocation(
   prompt: string,
   config: SandboxConfig,
-): { bin: string; args: string[]; runner: "claude" | "hermes" | "openclaw" } | null {
+): { bin: string; args: string[]; runner: "claude" | "hermes" | "openclaw" | "codex" } | null {
   const runner = config.subagentRunner ?? "claude";
+
+  if (runner === "codex") {
+    if (!isCommandAvailable("codex")) return null;
+    // Headless one-shot turn. IMPORTANT: codex exec waits on stdin when
+    // it's an open pipe ("Reading additional input from stdin…"), so
+    // the spawn site passes input: "" to close it immediately.
+    const args = [
+      "exec",
+      "--skip-git-repo-check",
+      "--sandbox", "danger-full-access",
+    ];
+    if (config.subagentCodexModel) {
+      args.push("-m", config.subagentCodexModel);
+    }
+    args.push(prompt);
+    return { bin: "codex", args, runner };
+  }
 
   if (runner === "openclaw") {
     if (!isCommandAvailable("openclaw")) return null;
@@ -494,7 +511,9 @@ export function runSubagentBackup(
     ? (config.subagentHermesModel || "hermes")
     : invocation.runner === "openclaw"
       ? (config.subagentOpenclawModel || "openclaw")
-      : config.subagentModel;
+      : invocation.runner === "codex"
+        ? (config.subagentCodexModel || "codex")
+        : config.subagentModel;
   tellUser(
     `[CHATS-Sandbox] Out-of-workspace action detected. Invoking ${modelLabel} subagent to back up... ` +
     `(${ctx.tool_name}${cmdPreview ? `: ${cmdPreview.slice(0, 60)}` : ""})`
@@ -510,6 +529,9 @@ export function runSubagentBackup(
       encoding: "utf-8",
       timeout: timeoutMs,
       env: subagentEnv(),
+      // Close stdin immediately — codex exec (and possibly others)
+      // block forever reading an open stdin pipe.
+      input: "",
       stdio: ["pipe", "pipe", "pipe"],
       maxBuffer: 4 * 1024 * 1024, // 4 MB cap
     });
@@ -625,7 +647,9 @@ export function invokeRestoreSubagent(
     ? (config.subagentHermesModel || "hermes")
     : invocation.runner === "openclaw"
       ? (config.subagentOpenclawModel || "openclaw")
-      : config.subagentModel;
+      : invocation.runner === "codex"
+        ? (config.subagentCodexModel || "codex")
+        : config.subagentModel;
   tellUser(
     `[CHATS-Sandbox] Live-restore: invoking ${modelLabel} subagent to reverse remote/dynamic state...`,
   );
@@ -636,6 +660,9 @@ export function invokeRestoreSubagent(
       encoding: "utf-8",
       timeout: timeoutMs,
       env: subagentEnv(),
+      // Close stdin immediately — codex exec (and possibly others)
+      // block forever reading an open stdin pipe.
+      input: "",
       stdio: ["pipe", "pipe", "pipe"],
       maxBuffer: 4 * 1024 * 1024,
     });
@@ -678,6 +705,9 @@ export function runRunnerForText(
       encoding: "utf-8",
       timeout: Math.max(10_000, timeoutSeconds * 1000),
       env: subagentEnv(),
+      // Close stdin immediately — codex exec (and possibly others)
+      // block forever reading an open stdin pipe.
+      input: "",
       stdio: ["pipe", "pipe", "pipe"],
       maxBuffer: 8 * 1024 * 1024,
     });

@@ -43,12 +43,16 @@ import { claudeCodeAdapter } from "./claude-code.js";
 import { hermesAdapter } from "./hermes.js";
 import { openclawAdapter } from "./openclaw.js";
 import { openhandsAdapter } from "./openhands.js";
+import { codexAdapter } from "./codex.js";
+import { cursorAdapter } from "./cursor.js";
 
 export const ALL_ADAPTERS: AgentAdapter[] = [
   claudeCodeAdapter,
   hermesAdapter,
   openclawAdapter,
   openhandsAdapter,
+  codexAdapter,
+  cursorAdapter,
 ];
 
 export function findAdapter(name: string): AgentAdapter | undefined {

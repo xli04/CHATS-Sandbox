@@ -21,7 +21,12 @@ import { loadConfig } from "../config/load.js";
 import { evaluate } from "../engine/rules.js";
 import { runBackup } from "../backup/strategies.js";
 import type { PreToolHookOutput } from "../types.js";
-import { type HookContext, normalizeHookContext } from "../types.js";
+import {
+  type HookContext,
+  type HookDialect,
+  detectHookDialect,
+  normalizeHookContext,
+} from "../types.js";
 
 async function main(): Promise<void> {
   // Recursion guard: if we're running inside a subagent that we spawned,
@@ -38,8 +43,11 @@ async function main(): Promise<void> {
   const raw = Buffer.concat(chunks).toString("utf-8");
 
   let ctx: HookContext;
+  let dialect: HookDialect = "claude";
   try {
-    ctx = normalizeHookContext(JSON.parse(raw));
+    const parsed = JSON.parse(raw);
+    dialect = detectHookDialect(parsed);
+    ctx = normalizeHookContext(parsed);
   } catch {
     process.exit(0);
   }
@@ -61,6 +69,16 @@ async function main(): Promise<void> {
 
   // ── DENY ─────────────────────────────────────────────────────────
   if (result.decision === "deny") {
+    if (dialect === "cursor") {
+      // Cursor's hook contract: top-level permission + messages.
+      process.stdout.write(JSON.stringify({
+        continue: false,
+        permission: "deny",
+        user_message: `[CHATS-Sandbox] ${result.reason}`,
+        agent_message: `[CHATS-Sandbox] ${result.reason}`,
+      }));
+      process.exit(2);
+    }
     const output: PreToolHookOutput = {
       hookSpecificOutput: {
         hookEventName: "PreToolUse",
@@ -114,7 +132,18 @@ async function main(): Promise<void> {
 
     // Allow the tool call, inject backup info as context.
     // If a tier-0 policy rule rewrote the command (e.g. rm → mv to trash),
-    // propagate the updatedInput so Claude runs the rewritten form.
+    // propagate the updatedInput so the agent runs the rewritten form.
+    if (dialect === "cursor") {
+      // Cursor's preToolUse contract: top-level permission, snake_case
+      // updated_input, agent_message for context.
+      process.stdout.write(JSON.stringify({
+        continue: true,
+        permission: "allow",
+        agent_message: contextMsg,
+        ...(backupResult.updatedInput ? { updated_input: backupResult.updatedInput } : {}),
+      }));
+      process.exit(0);
+    }
     const output: PreToolHookOutput = {
       hookSpecificOutput: {
         hookEventName: "PreToolUse",
