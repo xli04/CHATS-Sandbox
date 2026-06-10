@@ -16,9 +16,10 @@
 import * as http from "node:http";
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { execSync } from "node:child_process";
+import { execSync, spawn } from "node:child_process";
 import type { SandboxConfig } from "../types.js";
 import { loadConfig, saveConfig } from "../config/load.js";
+import { experiencesDir } from "../explore/experiences.js";
 
 interface ActionSummary {
   name: string;
@@ -469,12 +470,23 @@ function handlePostRestore(
   req.on("data", (c: Buffer) => chunks.push(c));
   req.on("end", () => {
     const raw = Buffer.concat(chunks).toString("utf-8");
-    let body: { mode?: string } = {};
+    let body: { mode?: string; file?: string } = {};
     if (raw.trim()) {
       try { body = JSON.parse(raw); }
       catch { jsonResponse(res, 400, { error: "invalid JSON" }); return; }
     }
     const mode = body.mode === "loop" ? "loop" : "direct";
+    // Optional single-file restore (direct mode only). Reject path
+    // traversal — the path must be workspace-relative.
+    let fileOnly: string | undefined;
+    if (typeof body.file === "string" && body.file.trim()) {
+      const f = body.file.trim();
+      if (path.isAbsolute(f) || f.split(/[/\\]/).includes("..")) {
+        jsonResponse(res, 400, { error: "file must be a workspace-relative path" });
+        return;
+      }
+      fileOnly = f;
+    }
 
     // Find the action folder with this seq.
     const backupRoot = path.resolve(config.backupDir);
@@ -495,17 +507,20 @@ function handlePostRestore(
       // child_process, keep it out of the dashboard hot path.
       // eslint-disable-next-line @typescript-eslint/no-require-imports
       const restore = require("../restore/restore.js");
-      const fn = mode === "loop" ? restore.restoreActionLoop : restore.restoreActionDirect;
       // Run restore from projectRoot — chdir for the duration of the call.
       const prevCwd = process.cwd();
       process.chdir(projectRoot);
       let results;
       try {
-        results = fn(match, config);
+        results = fileOnly
+          ? restore.restoreActionDirect(match, config, { fileOnly })
+          : mode === "loop"
+            ? restore.restoreActionLoop(match, config)
+            : restore.restoreActionDirect(match, config);
       } finally {
         process.chdir(prevCwd);
       }
-      jsonResponse(res, 200, { ok: true, mode, action: match, results });
+      jsonResponse(res, 200, { ok: true, mode: fileOnly ? "file" : mode, action: match, results });
     } catch (e: unknown) {
       const msg = e instanceof Error ? e.message : String(e);
       jsonResponse(res, 500, { error: `restore failed: ${msg.slice(0, 500)}` });
@@ -624,6 +639,236 @@ function handleGetDiff(
 
 // ── Server ───────────────────────────────────────────────────────────
 
+/** Find an action dir name by seq, or null. */
+function findActionDir(config: SandboxConfig, seq: number): string | null {
+  const backupRoot = path.resolve(config.backupDir);
+  if (!fs.existsSync(backupRoot)) return null;
+  const seqStr = String(seq).padStart(3, "0");
+  return fs.readdirSync(backupRoot).find((d: string) => d.startsWith(`action_${seqStr}_`)) ?? null;
+}
+
+function readArtifacts(config: SandboxConfig, dirName: string): Array<Record<string, unknown>> {
+  try {
+    const meta = path.join(path.resolve(config.backupDir), dirName, "metadata.json");
+    const parsed = JSON.parse(fs.readFileSync(meta, "utf-8"));
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+
+/** Recovery commands recorded on an action's artifacts (T0 + T3). */
+function artifactCommands(artifacts: Array<Record<string, unknown>>): string[] {
+  const out: string[] = [];
+  for (const a of artifacts) {
+    if (Array.isArray(a.recoveryCommands)) out.push(...(a.recoveryCommands as string[]));
+    if (Array.isArray(a.subagentCommands)) out.push(...(a.subagentCommands as string[]));
+  }
+  return out;
+}
+
+/**
+ * GET /api/restore/:seq/preview — dry-run: what WOULD a restore touch?
+ *   direct: files that differ between the action's snapshot and the
+ *           current workspace (numstat), plus recorded recovery commands.
+ *   loop:   the chain of actions that would be undone, newest → target,
+ *           with each step's strategies and command count.
+ * Nothing is mutated.
+ */
+function handleGetRestorePreview(
+  res: http.ServerResponse,
+  config: SandboxConfig,
+  projectRoot: string,
+  seq: number,
+): void {
+  const match = findActionDir(config, seq);
+  if (!match) {
+    jsonResponse(res, 404, { error: `action #${seq} not found` });
+    return;
+  }
+  const artifacts = readArtifacts(config, match);
+
+  // Direct: numstat vs the snapshot commit.
+  const files: Array<{ file: string; plus: number; minus: number }> = [];
+  let directNote: string | undefined;
+  const snapshot = artifacts.find((a) => a.strategy === "git_snapshot");
+  if (snapshot) {
+    const commit = String(snapshot.commitHash ?? snapshot.id ?? "");
+    const shadowDir = String(snapshot.artifactPath ?? "");
+    if (commit && fs.existsSync(shadowDir)) {
+      try {
+        const env = { ...process.env, GIT_DIR: shadowDir, GIT_WORK_TREE: projectRoot };
+        const opts = { encoding: "utf-8" as const, timeout: 10_000, env, cwd: projectRoot, stdio: "pipe" as const };
+        execSync("git add -A", opts);
+        const numstat = execSync(`git diff --cached --numstat ${commit}`, opts).toString();
+        execSync("git reset --quiet", opts);
+        for (const line of numstat.split("\n")) {
+          const m = line.match(/^(\d+|-)\t(\d+|-)\t(.+)$/);
+          if (m) files.push({ file: m[3], plus: m[1] === "-" ? 0 : parseInt(m[1], 10), minus: m[2] === "-" ? 0 : parseInt(m[2], 10) });
+        }
+      } catch (e: unknown) {
+        directNote = `preview failed: ${(e instanceof Error ? e.message : String(e)).slice(0, 200)}`;
+      }
+    } else {
+      directNote = "shadow repo missing";
+    }
+  } else {
+    directNote = "no workspace snapshot (remote/T0-only action)";
+  }
+  const directCommands = artifactCommands(artifacts);
+
+  // Loop: every action from the newest down to the target, in undo order.
+  const backupRoot = path.resolve(config.backupDir);
+  const dirs = fs.existsSync(backupRoot)
+    ? fs.readdirSync(backupRoot).filter((d: string) => /^action_\d+_/.test(d)).sort().reverse()
+    : [];
+  const steps: Array<{ seq: number; name: string; strategies: string[]; commands: number }> = [];
+  for (const d of dirs) {
+    const m = d.match(/^action_(\d+)_/);
+    const dSeq = m ? parseInt(m[1], 10) : -1;
+    if (dSeq < seq) break;
+    const arts = readArtifacts(config, d);
+    steps.push({
+      seq: dSeq,
+      name: d,
+      strategies: [...new Set(arts.map((a) => String(a.strategy ?? "?")))],
+      commands: artifactCommands(arts).length,
+    });
+  }
+
+  jsonResponse(res, 200, {
+    direct: { files, commands: directCommands, note: directNote },
+    loop: { steps },
+  });
+}
+
+/** GET /api/restore-history — the restore ledger, newest first. */
+function handleGetRestoreHistory(res: http.ServerResponse, config: SandboxConfig): void {
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const { readRestoreHistory } = require("../restore/restore.js");
+    jsonResponse(res, 200, { entries: readRestoreHistory(config) });
+  } catch (e) {
+    jsonResponse(res, 500, { error: String(e instanceof Error ? e.message : e) });
+  }
+}
+
+/**
+ * GET /api/actions/:a/diff/:b — diff between two actions' snapshots
+ * (older → newer), i.e. "what changed between #a and #b".
+ */
+function handleGetCompare(
+  res: http.ServerResponse,
+  config: SandboxConfig,
+  projectRoot: string,
+  seqA: number,
+  seqB: number,
+): void {
+  const [lo, hi] = seqA <= seqB ? [seqA, seqB] : [seqB, seqA];
+  const dirA = findActionDir(config, lo);
+  const dirB = findActionDir(config, hi);
+  if (!dirA || !dirB) {
+    jsonResponse(res, 404, { error: `action #${!dirA ? lo : hi} not found` });
+    return;
+  }
+  const snapA = readArtifacts(config, dirA).find((a) => a.strategy === "git_snapshot");
+  const snapB = readArtifacts(config, dirB).find((a) => a.strategy === "git_snapshot");
+  if (!snapA || !snapB) {
+    jsonResponse(res, 200, { diff: "", stat: "", a: lo, b: hi, note: `action #${!snapA ? lo : hi} has no workspace snapshot to compare` });
+    return;
+  }
+  const commitA = String(snapA.commitHash ?? snapA.id ?? "");
+  const commitB = String(snapB.commitHash ?? snapB.id ?? "");
+  const shadowDir = String(snapA.artifactPath ?? "");
+  if (!commitA || !commitB || !fs.existsSync(shadowDir)) {
+    jsonResponse(res, 200, { diff: "", stat: "", a: lo, b: hi, note: "shadow repo or commit missing" });
+    return;
+  }
+  try {
+    const env = { ...process.env, GIT_DIR: shadowDir, GIT_WORK_TREE: projectRoot };
+    const opts = { encoding: "utf-8" as const, timeout: 10_000, env, cwd: projectRoot, stdio: "pipe" as const };
+    const stat = execSync(`git diff --stat --no-color ${commitA} ${commitB}`, opts).toString().trim();
+    const diff = execSync(`git diff --no-color ${commitA} ${commitB}`, opts).toString().slice(0, 200_000);
+    jsonResponse(res, 200, { diff, stat, a: lo, b: hi });
+  } catch (e: unknown) {
+    jsonResponse(res, 200, { diff: "", stat: "", a: lo, b: hi, note: `compare failed: ${(e instanceof Error ? e.message : String(e)).slice(0, 200)}` });
+  }
+}
+
+/**
+ * GET /api/experiences — learned easy-win reversal patterns per MCP
+ * server (written by `chats-sandbox explore` into
+ * .chats-sandbox/experiences/<server>.json), plus whether an explore
+ * child process is currently running.
+ */
+let exploreChild: { pid: number; server: string | null; startedAt: string } | null = null;
+
+function handleGetExperiences(res: http.ServerResponse, config: SandboxConfig): void {
+  const dir = experiencesDir(config);
+  const servers: unknown[] = [];
+  try {
+    if (fs.existsSync(dir)) {
+      for (const f of fs.readdirSync(dir).filter((x: string) => x.endsWith(".json"))) {
+        try {
+          const data = JSON.parse(fs.readFileSync(path.join(dir, f), "utf-8"));
+          if (data && Array.isArray(data.patterns)) servers.push(data);
+        } catch {
+          // skip corrupt file
+        }
+      }
+    }
+  } catch {
+    // experiences dir unreadable — report none
+  }
+  jsonResponse(res, 200, { servers, exploreRunning: exploreChild !== null, explore: exploreChild });
+}
+
+/**
+ * POST /api/explore — body: { "server"?: string }. Spawns
+ * `chats-sandbox explore [server]` as a detached child (it drives the
+ * subagent runner and can take minutes); the UI polls /api/experiences
+ * to pick up the result. One run at a time.
+ */
+function handlePostExplore(
+  req: http.IncomingMessage,
+  res: http.ServerResponse,
+  projectRoot: string,
+): void {
+  if (exploreChild) {
+    jsonResponse(res, 409, { error: "an explore run is already in progress", explore: exploreChild });
+    return;
+  }
+  const chunks: Buffer[] = [];
+  req.on("data", (c: Buffer) => chunks.push(c));
+  req.on("end", () => {
+    let server: string | null = null;
+    try {
+      const parsed = JSON.parse(Buffer.concat(chunks).toString("utf-8") || "{}");
+      if (typeof parsed.server === "string" && /^[A-Za-z0-9_-]{1,64}$/.test(parsed.server)) {
+        server = parsed.server;
+      }
+    } catch {
+      // no/invalid body → explore all discovered servers
+    }
+    try {
+      // argv[1] is this CLI's entry (dist/cli.js), whether launched
+      // directly or via the linked `chats-sandbox` bin.
+      const args = [process.argv[1], "explore", ...(server ? [server] : [])];
+      const child = spawn(process.execPath, args, {
+        cwd: projectRoot,
+        stdio: "ignore",
+      });
+      exploreChild = { pid: child.pid ?? -1, server, startedAt: new Date().toISOString() };
+      child.on("exit", () => { exploreChild = null; });
+      child.on("error", () => { exploreChild = null; });
+      jsonResponse(res, 200, { started: true, pid: child.pid, server });
+    } catch (e) {
+      exploreChild = null;
+      jsonResponse(res, 500, { error: `failed to start explore: ${e instanceof Error ? e.message : String(e)}` });
+    }
+  });
+}
+
 export function startDashboard(options: {
   projectRoot: string;
   port?: number;
@@ -672,11 +917,31 @@ export function startDashboard(options: {
       handleGetStorageByFile(res, config);
       return;
     }
+    if (url === "/api/experiences" && method === "GET") {
+      handleGetExperiences(res, config);
+      return;
+    }
+    if (url === "/api/explore" && method === "POST") {
+      handlePostExplore(req, res, projectRoot);
+      return;
+    }
 
-    // POST /api/restore/:seq  — body: { "mode": "direct" | "loop" }
+    if (url === "/api/restore-history" && method === "GET") {
+      handleGetRestoreHistory(res, config);
+      return;
+    }
+
+    // POST /api/restore/:seq — body: { "mode": "direct" | "loop", "file"?: string }
     const restoreMatch = url.match(/^\/api\/restore\/(\d+)$/);
     if (restoreMatch && method === "POST") {
       handlePostRestore(req, res, config, projectRoot, parseInt(restoreMatch[1], 10));
+      return;
+    }
+
+    // GET /api/restore/:seq/preview — dry-run, nothing mutated
+    const previewMatch = url.match(/^\/api\/restore\/(\d+)\/preview$/);
+    if (previewMatch && method === "GET") {
+      handleGetRestorePreview(res, config, projectRoot, parseInt(previewMatch[1], 10));
       return;
     }
 
@@ -684,6 +949,13 @@ export function startDashboard(options: {
     const diffMatch = url.match(/^\/api\/actions\/(\d+)\/diff$/);
     if (diffMatch && method === "GET") {
       handleGetDiff(res, config, projectRoot, parseInt(diffMatch[1], 10));
+      return;
+    }
+
+    // GET /api/actions/:a/diff/:b — diff between two snapshots
+    const cmpMatch = url.match(/^\/api\/actions\/(\d+)\/diff\/(\d+)$/);
+    if (cmpMatch && method === "GET") {
+      handleGetCompare(res, config, projectRoot, parseInt(cmpMatch[1], 10), parseInt(cmpMatch[2], 10));
       return;
     }
 

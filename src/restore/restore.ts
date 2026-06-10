@@ -415,7 +415,7 @@ function allSucceeded(results: RestoreResult[]): boolean {
  * After a successful full-state restore (not --file mode), intermediate
  * folders (actions AFTER the target) are deleted.
  */
-export function restoreActionDirect(
+function restoreActionDirectInner(
   actionName: string,
   config: SandboxConfig,
   options?: { fileOnly?: string }
@@ -499,7 +499,7 @@ export function restoreActionDirect(
  * After a successful restore, intermediate folders (those we walked through)
  * are deleted — they're off the main timeline now.
  */
-export function restoreActionLoop(
+function restoreActionLoopInner(
   targetActionName: string,
   config: SandboxConfig
 ): RestoreResult[] {
@@ -582,6 +582,89 @@ export function restoreActionLoop(
     });
   }
 
+  return results;
+}
+
+// ── Restore history ledger ───────────────────────────────────────────
+// Every restore attempt (CLI or dashboard, success or failure) is
+// appended to .chats-sandbox/restore-history.jsonl so there is an audit
+// trail of when the workspace was rewound and how it went. The ledger
+// must never block a restore — all failures are swallowed.
+
+export interface RestoreLogEntry {
+  ts: string;
+  mode: "direct" | "loop" | "file";
+  action: string;
+  seq: number | null;
+  fileOnly?: string;
+  steps: number;
+  ok: number;
+  failed: number;
+}
+
+function restoreHistoryPath(config: SandboxConfig): string {
+  return path.join(path.dirname(path.resolve(config.backupDir)), "restore-history.jsonl");
+}
+
+function logRestoreOp(
+  config: SandboxConfig,
+  mode: "direct" | "loop" | "file",
+  actionName: string,
+  results: RestoreResult[],
+  fileOnly?: string,
+): void {
+  try {
+    const m = actionName.match(/^action_(\d+)_/);
+    const entry: RestoreLogEntry = {
+      ts: new Date().toISOString(),
+      mode,
+      action: actionName,
+      seq: m ? parseInt(m[1], 10) : null,
+      ...(fileOnly ? { fileOnly } : {}),
+      steps: results.length,
+      ok: results.filter((r) => r.success).length,
+      failed: results.filter((r) => !r.success).length,
+    };
+    const file = restoreHistoryPath(config);
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.appendFileSync(file, JSON.stringify(entry) + "\n", "utf-8");
+  } catch {
+    // ledger is best-effort
+  }
+}
+
+/** Read the restore ledger, newest first. */
+export function readRestoreHistory(config: SandboxConfig, limit = 100): RestoreLogEntry[] {
+  try {
+    const file = restoreHistoryPath(config);
+    if (!fs.existsSync(file)) return [];
+    const lines = fs.readFileSync(file, "utf-8").split("\n").filter((l: string) => l.trim());
+    const out: RestoreLogEntry[] = [];
+    for (const l of lines) {
+      try { out.push(JSON.parse(l) as RestoreLogEntry); } catch { /* skip bad line */ }
+    }
+    return out.reverse().slice(0, limit);
+  } catch {
+    return [];
+  }
+}
+
+export function restoreActionDirect(
+  actionName: string,
+  config: SandboxConfig,
+  options?: { fileOnly?: string }
+): RestoreResult[] {
+  const results = restoreActionDirectInner(actionName, config, options);
+  logRestoreOp(config, options?.fileOnly ? "file" : "direct", actionName, results, options?.fileOnly);
+  return results;
+}
+
+export function restoreActionLoop(
+  targetActionName: string,
+  config: SandboxConfig
+): RestoreResult[] {
+  const results = restoreActionLoopInner(targetActionName, config);
+  logRestoreOp(config, "loop", targetActionName, results);
   return results;
 }
 
