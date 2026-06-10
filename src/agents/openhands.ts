@@ -32,7 +32,12 @@ interface HookMatcher { matcher: string; hooks: HookEntry[] }
 interface HooksJson { hooks?: Record<string, HookMatcher[]> }
 
 function preCmd(pkgRoot: string): string {
-  return `node "${path.join(pkgRoot, "hooks", "pre-tool.js")}"`;
+  // CHATS_SANDBOX_NO_REWRITE=1: the SDK's PreToolUse hooks are
+  // allow/deny only — they cannot apply updatedInput. Tier-0
+  // run-and-rewrite would double-execute the destructive command, so
+  // the hook skips tier-0 and relies on tiers 1-3 (the tier-2 git
+  // snapshot covers everything in the workspace).
+  return `CHATS_SANDBOX_NO_REWRITE=1 node "${path.join(pkgRoot, "hooks", "pre-tool.js")}"`;
 }
 function postCmd(pkgRoot: string): string {
   return `node "${path.join(pkgRoot, "hooks", "post-tool.js")}"`;
@@ -118,7 +123,9 @@ export const openhandsAdapter: AgentAdapter = {
     log.push("  hook_config = HookConfig.load(working_dir=os.getcwd())");
     log.push("  Conversation(agent=agent, workspace=cwd, hook_config=hook_config)");
     log.push("");
-    log.push("Every PreToolUse / PostToolUse then fires tier-0..3 backup.");
+    log.push("Every PreToolUse / PostToolUse then fires the tiered backup.");
+    log.push("(Tier-0 command rewriting is disabled on OpenHands — its hook");
+    log.push(" API is allow/deny only — so actions are covered by tiers 1-3.)");
     log.push("To check backup state: chats-sandbox status");
     log.push("To view timeline:      chats-sandbox dashboard");
     log.push("To disable:            chats-sandbox uninstall openhands");

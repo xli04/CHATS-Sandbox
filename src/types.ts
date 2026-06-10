@@ -50,16 +50,41 @@ export function describeToolAction(
   return `${toolName}(${String(arg).slice(0, 200)})`;
 }
 
+/** OpenHands SDK tool names → the Claude-Code names the backup logic
+ *  keys on. Applied only to payloads in the SDK's shape (event_type),
+ *  so other agents' identically-named tools are unaffected — Hermes
+ *  and OpenClaw do this mapping in their plugins instead. */
+const OPENHANDS_TOOL_MAP: Record<string, string> = {
+  terminal: "Bash",
+  file_editor: "Edit",
+  planning_file_editor: "Edit",
+  apply_patch: "Edit",
+  glob: "Glob",
+  grep: "Grep",
+};
+
 export function normalizeHookContext(parsed: unknown): HookContext {
   const p = (parsed && typeof parsed === "object"
     ? parsed : {}) as Record<string, unknown>;
   const hookEvent = p.hook_event ?? p.event_type;
+  // event_type (vs hook_event) marks the OpenHands SDK payload shape.
+  const isOpenHands = p.hook_event === undefined && typeof p.event_type === "string";
+  let toolName = typeof p.tool_name === "string" ? p.tool_name : "";
+  let toolInput = (p.tool_input && typeof p.tool_input === "object")
+    ? p.tool_input as Record<string, unknown> : {};
+  if (isOpenHands) {
+    toolName = OPENHANDS_TOOL_MAP[toolName] ?? toolName;
+    // The SDK's editor tools use "path" where Claude Code uses
+    // "file_path" — mirror it so path-keyed logic sees the usual key.
+    if (typeof toolInput.path === "string" && toolInput.file_path === undefined) {
+      toolInput = { ...toolInput, file_path: toolInput.path };
+    }
+  }
   return {
     hook_event: (typeof hookEvent === "string"
       ? hookEvent : "PreToolUse") as HookContext["hook_event"],
-    tool_name: typeof p.tool_name === "string" ? p.tool_name : "",
-    tool_input: (p.tool_input && typeof p.tool_input === "object")
-      ? p.tool_input as Record<string, unknown> : {},
+    tool_name: toolName,
+    tool_input: toolInput,
     tool_output: p.tool_output ?? p.tool_response,
     session_id: typeof p.session_id === "string" ? p.session_id : undefined,
   };

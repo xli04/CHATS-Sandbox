@@ -652,9 +652,15 @@ function touchesOutsideWorkspace(ctx: HookContext): boolean {
       if (pattern.test(cmd)) return true;
     }
 
-    // Check if any absolute path in the command is outside workspace
+    // Check if any absolute path in the command is outside workspace.
+    // Require at least two path segments: single-segment tokens like
+    // "/retries" are almost always sed/awk substitution fragments
+    // (`sed s/retries: 3/retries: 9/`), not real filesystem targets —
+    // treating them as paths fired a pointless tier-3 subagent for
+    // innocent in-workspace edits.
     const absolutePaths = cmd.match(/\/[\w./-]+/g) ?? [];
     for (const p of absolutePaths) {
+      if (p.split("/").filter(Boolean).length < 2) continue;
       try {
         const resolved = path.resolve(p);
         if (
@@ -802,10 +808,17 @@ export function runBackup(
   // for this action — we don't also want tier-2 to snapshot the workspace
   // (the file is already safe in trash, and snapshot would just record
   // the trashed state).
+  // CHATS_SANDBOX_NO_REWRITE=1: the host agent's hook system cannot
+  // apply updatedInput (e.g. the OpenHands SDK's PreToolUse is
+  // allow/deny only). Tier-0 run-and-rewrite would then execute the
+  // destructive command here AND the agent would run the original a
+  // second time — so skip tier-0 entirely and let tiers 1-3 cover the
+  // action instead.
+  const noRewrite = process.env.CHATS_SANDBOX_NO_REWRITE === "1";
   const { applyPolicyRules } = require("./policy_rules.js");
   const pendingDir = path.join(path.resolve(config.backupDir), _pendingActionName ?? "");
   const trashDir = path.join(pendingDir, "trash");
-  const policyResult = applyPolicyRules(ctx, trashDir);
+  const policyResult = noRewrite ? null : applyPolicyRules(ctx, trashDir);
   if (policyResult) {
     const dir = materializeActionDir(config);
     const artifact: BackupArtifact = {
