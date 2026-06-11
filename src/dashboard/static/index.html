@@ -158,6 +158,9 @@
   }
   .detail-pane { background: var(--bg); border: 1px solid var(--line); padding: 16px 18px; min-height: 400px; }
 
+  /* Pane title above the action tape */
+  .tl-pane-title { font-size: 13px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; color: var(--text); padding: 8px 6px 6px; border-bottom: 3px double var(--line-strong); margin-bottom: 4px; }
+
   /* Timeline rows */
   .tl-rows { position: relative; padding: 4px 0; }
   .tl-vline { position: absolute; left: 20px; top: 14px; bottom: 14px; width: 1px; background: var(--line-strong); z-index: 0; }
@@ -211,14 +214,14 @@
   .tl-group-header .count { color: var(--muted); font-size: 10px; font-weight: 400; }
 
   /* Legend */
-  .tl-legend { border-top: 1px dashed var(--line); margin-top: 6px; padding: 8px 6px; display: flex; gap: 14px; font-size: 10.5px; color: var(--muted); flex-wrap: wrap; }
-  .tl-legend .item { display: inline-flex; align-items: center; gap: 5px; }
-  .tl-legend .item .ld { width: 6px; height: 6px; border-radius: 50%; }
+  .tl-legend { border-top: 1px dashed var(--line); margin-top: 6px; padding: 9px 6px; display: flex; gap: 16px; font-size: 12.5px; color: var(--text-dim); flex-wrap: wrap; }
+  .tl-legend .item { display: inline-flex; align-items: center; gap: 6px; }
+  .tl-legend .item .ld { width: 8px; height: 8px; border-radius: 50%; }
   .tl-legend .item.snap .ld { background: var(--t2); }
   .tl-legend .item.rew  .ld { background: var(--t0); }
   .tl-legend .item.man  .ld { background: var(--t1); }
   .tl-legend .item.sub  .ld { background: var(--t3); }
-  .tl-legend .item b { color: var(--text-dim); font-family: "JetBrains Mono", monospace; font-weight: 600; }
+  .tl-legend .item b { color: var(--text); font-family: "JetBrains Mono", monospace; font-weight: 700; font-size: 12px; }
 
   /* Detail pane */
   .detail-empty { text-align: center; padding: 60px 20px; color: var(--muted); font-size: 14px; }
@@ -861,7 +864,8 @@ function renderTimeline() {
       : `<div class="empty">No matches. Try a different filter.</div>`;
     return;
   }
-  pane.innerHTML = groupView === "file" ? renderByFile(filtered) : renderByTime(filtered);
+  const title = `<div class="tl-pane-title">Action Timeline</div>`;
+  pane.innerHTML = title + (groupView === "file" ? renderByFile(filtered) : renderByTime(filtered));
   wireRowEvents();
 }
 
