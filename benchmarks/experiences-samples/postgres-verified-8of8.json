@@ -1,0 +1,66 @@
+{
+  "server": "postgres",
+  "generated": "2026-06-08T23:06:35.816Z",
+  "observed_tools": [
+    "mcp__postgres__execute_sql",
+    "mcp__postgres__list_schemas"
+  ],
+  "patterns": [
+    {
+      "action": "DELETE rows from a table",
+      "easy_win": "Pre-DELETE: INSERT INTO _chats_trash.<table> SELECT *, '<ckpt_id>' AS _chats_checkpoint_id FROM <table> WHERE <predicate>. Reversal: INSERT INTO <table> SELECT id,... FROM _chats_trash.<table> WHERE _chats_checkpoint_id='<id>', then purge shadow rows.",
+      "applies_to": "Any DELETE with a deterministic WHERE predicate",
+      "verified": true,
+      "verify_note": "Created chats_probe_p1 with 3 rows, snapshotted 2 to _chats_trash, deleted them, re-inserted from trash; all original PKs and values confirmed restored."
+    },
+    {
+      "action": "UPDATE rows (overwrite existing data)",
+      "easy_win": "Pre-UPDATE: INSERT INTO _chats_audit.<table> SELECT *, '<ckpt_id>' AS _chats_checkpoint_id FROM <table> WHERE <predicate>. Reversal: UPDATE <table> SET cols=snap.cols FROM _chats_audit.<table> snap WHERE pk matches and ckpt matches.",
+      "applies_to": "Any UPDATE that overwrites column values",
+      "verified": true,
+      "verify_note": "Created chats_probe_p2 with 3 rows, snapshotted 2 to _chats_audit, overwrote to 'OVERWRITTEN'/999, restored via UPDATE FROM snap; original val and score confirmed on all rows."
+    },
+    {
+      "action": "DROP TABLE",
+      "easy_win": "Instead of DROP: ALTER TABLE <schema>.<table> SET SCHEMA _chats_trash; ALTER TABLE _chats_trash.<table> RENAME TO <table>_<ckpt_id>. Reversal: SET SCHEMA back + RENAME to original name.",
+      "applies_to": "Any DROP TABLE where the table must be recoverable",
+      "verified": true,
+      "verify_note": "Moved chats_probe_p3 to _chats_trash via SET SCHEMA + RENAME; public.chats_probe_p3 confirmed absent (to_regclass returned NULL); reversed with SET SCHEMA + RENAME; both rows with original PKs confirmed intact."
+    },
+    {
+      "action": "TRUNCATE TABLE (wipe all rows)",
+      "easy_win": "Pre-TRUNCATE: CREATE TABLE _chats_trash.<table>_<ckpt_id> AS SELECT * FROM <table>. Reversal: INSERT INTO <table> SELECT * FROM checkpoint copy; call setval(sequence, max(pk)).",
+      "applies_to": "Any TRUNCATE TABLE",
+      "verified": true,
+      "verify_note": "Saved all 3 rows of chats_probe_p4 to _chats_trash checkpoint table, truncated, re-inserted from checkpoint with setval reset; all 3 rows with original PKs confirmed restored."
+    },
+    {
+      "action": "DROP SCHEMA (with CASCADE)",
+      "easy_win": "Instead of DROP SCHEMA: ALTER SCHEMA <name> RENAME TO _chats_trash_<name>_<ckpt_id>. Reversal: ALTER SCHEMA _chats_trash_<name>_<ckpt_id> RENAME TO <name>. O(1) metadata-only, all contents move atomically.",
+      "applies_to": "Any DROP SCHEMA [CASCADE]",
+      "verified": true,
+      "verify_note": "Created chats_probe_schema_p5 with a table and 2 rows; renamed schema to _chats_trash_…_ckpt_p5_001; original schema confirmed absent in information_schema.schemata; reversed RENAME restored schema with table and data fully intact."
+    },
+    {
+      "action": "ALTER TABLE DROP COLUMN",
+      "easy_win": "Instead of DROP COLUMN: ALTER TABLE <table> RENAME COLUMN <col> TO _chats_dropped_<col>. Data remains in row storage at zero overhead. Reversal: RENAME COLUMN back to original name.",
+      "applies_to": "Any ALTER TABLE DROP COLUMN",
+      "verified": true,
+      "verify_note": "Created chats_probe_p6 with drop_col INT; renamed to _chats_dropped_drop_col; data (42, 99) confirmed still readable under new name; reversed RENAME restored original column name with values intact."
+    },
+    {
+      "action": "INSERT new rows (agent-created records)",
+      "easy_win": "After INSERT … RETURNING pk, capture PKs into _chats_trash.chats_probe_inserts_log (checkpoint_id, table_name, pk_value). Reversal: DELETE FROM <table> WHERE pk IN (SELECT pk_value FROM log WHERE checkpoint_id='<id>').",
+      "applies_to": "Any agent-driven INSERT where new rows must be reversible",
+      "verified": true,
+      "verify_note": "Inserted 3 rows into chats_probe_p7 using RETURNING id piped into log table; all 3 PKs tracked; reversal DELETE removed exactly those rows (confirmed count=0); no pre-existing data touched."
+    },
+    {
+      "action": "ALTER TABLE ... ALTER COLUMN TYPE (destructive cast)",
+      "easy_win": "Before type change: ADD COLUMN _chats_orig_<col> <old_type>; UPDATE SET _chats_orig_<col>=<col>. Proceed with ALTER COLUMN TYPE. Reversal: ALTER COLUMN TYPE <old_type> USING _chats_orig_<col>; DROP COLUMN _chats_orig_<col>.",
+      "applies_to": "Any ALTER COLUMN TYPE where the cast may be lossy",
+      "verified": true,
+      "verify_note": "Created chats_probe_p8 with amount TEXT; shadow column _chats_orig_amount saved originals; cast amount to INT; reversed using USING _chats_orig_amount clause; dropped shadow column; TEXT values '100','200','300' confirmed restored with correct pg_typeof=text."
+    }
+  ]
+}

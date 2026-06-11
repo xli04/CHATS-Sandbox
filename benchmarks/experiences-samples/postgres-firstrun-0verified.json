@@ -1,0 +1,45 @@
+{
+  "server": "postgres",
+  "generated": "2026-06-08T22:40:45.709Z",
+  "observed_tools": [
+    "mcp__postgres__execute_sql",
+    "mcp__postgres__list_schemas"
+  ],
+  "patterns": [
+    {
+      "action": "DELETE rows from a table",
+      "easy_win": "Before executing the DELETE, snapshot affected rows into a dedicated graveyard schema: CREATE SCHEMA IF NOT EXISTS _chats_bin; then INSERT INTO _chats_bin.deleted_rows (schema_name, table_name, row_data, deleted_at, session_id) SELECT '<schema>', '<table>', row_to_json(t), now(), '<session>' FROM <table> t WHERE <same predicate as DELETE>. Reverse = INSERT INTO <schema>.<table> SELECT (row_data->>'col1')::type, ... FROM _chats_bin.deleted_rows WHERE session_id = '<session>', restoring original rows with original PKs and timestamps intact.",
+      "applies_to": "mcp__postgres__execute_sql"
+    },
+    {
+      "action": "UPDATE rows (overwrite column values)",
+      "easy_win": "Before executing the UPDATE, snapshot old values: INSERT INTO _chats_bin.updated_rows (schema_name, table_name, pk_col, pk_val, old_data, op_time, session_id) SELECT '<schema>', '<table>', '<pk>', <pk_expr>, row_to_json(t), now(), '<session>' FROM <table> t WHERE <same predicate as UPDATE>. Reverse = for each row in updated_rows where session_id matches, execute UPDATE <table> SET col = (old_data->>'col')::type, ... WHERE <pk_col> = pk_val; original entity id and created_at are preserved.",
+      "applies_to": "mcp__postgres__execute_sql"
+    },
+    {
+      "action": "DROP TABLE",
+      "easy_win": "Replace DROP TABLE <name> with ALTER TABLE <schema>.<name> SET SCHEMA _chats_bin followed by ALTER TABLE _chats_bin.<name> RENAME TO _dropped_<name>_<epoch>. The table and all its rows, indexes, and sequences survive in the _chats_bin schema. Reverse = ALTER TABLE _chats_bin._dropped_<name>_<epoch> RENAME TO <name> followed by ALTER TABLE _chats_bin.<name> SET SCHEMA <schema>; all original oids, PKs, and foreign key values remain intact.",
+      "applies_to": "mcp__postgres__execute_sql"
+    },
+    {
+      "action": "TRUNCATE TABLE (bulk row erasure)",
+      "easy_win": "Before TRUNCATE, materialize a full snapshot: CREATE TABLE _chats_bin.truncated_<table>_<epoch> AS SELECT * FROM <schema>.<table>. This is a one-time copy but cheaper than a full remote scrape and keeps original values. Reverse = INSERT INTO <schema>.<table> SELECT * FROM _chats_bin.truncated_<table>_<epoch>; original PKs and timestamps are preserved because the copy was made pre-truncate.",
+      "applies_to": "mcp__postgres__execute_sql"
+    },
+    {
+      "action": "ALTER TABLE DROP COLUMN",
+      "easy_win": "Replace ALTER TABLE t DROP COLUMN col with ALTER TABLE t RENAME COLUMN col TO _chats_dropped_col_<epoch>. The column and all its data survive in-place; no data movement needed. Reverse = ALTER TABLE t RENAME COLUMN _chats_dropped_col_<epoch> TO col; the column reappears at its original ordinal position with all original values.",
+      "applies_to": "mcp__postgres__execute_sql"
+    },
+    {
+      "action": "DROP SCHEMA",
+      "easy_win": "Replace DROP SCHEMA <name> [CASCADE] with ALTER SCHEMA <name> RENAME TO _chats_dropped_<name>_<epoch>. All tables, functions, and types in the schema survive under the renamed schema. Reverse = ALTER SCHEMA _chats_dropped_<name>_<epoch> RENAME TO <name>; all contained objects regain their original fully-qualified names with no id or timestamp churn.",
+      "applies_to": "mcp__postgres__execute_sql"
+    },
+    {
+      "action": "INSERT rows (creation of new entities that must be undone)",
+      "easy_win": "After executing the INSERT, capture inserted PKs: INSERT INTO _chats_bin.inserted_rows (schema_name, table_name, pk_col, pk_vals, inserted_at, session_id) VALUES ('<schema>', '<table>', '<pk>', array_agg(<pk>) from the RETURNING clause, now(), '<session>'). Reverse = DELETE FROM <schema>.<table> WHERE <pk_col> = ANY(SELECT unnest(pk_vals) FROM _chats_bin.inserted_rows WHERE session_id = '<session>'); no scrape needed, identity of pre-existing rows is untouched.",
+      "applies_to": "mcp__postgres__execute_sql"
+    }
+  ]
+}
