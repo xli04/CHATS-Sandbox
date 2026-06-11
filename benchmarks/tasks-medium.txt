@@ -1,0 +1,6 @@
+# 5 medium tasks chosen where O(changes) backup should dominate per-action snapshot/copy.
+pytorch-model-recovery
+gcode-to-text
+optimal-transport
+multi-source-data-merger
+decommissioning-service-with-sensitive-data

@@ -1,0 +1,4 @@
+task,agent,condition,wall_seconds,backup_bytes,actions,test_pass,notes
+hello-world,openclaw,none,34,0,0,pass,ec=0
+hello-world,openclaw,plugin,33,182850,2,pass,ec=0
+hello-world,openclaw,git-add,37,528829,2,pass,ec=0

@@ -1,0 +1,22 @@
+# 20 easy terminal-bench tasks (filesystem-write workloads, no heavy services).
+# First 10 = proven set from the earlier sweep; next 10 = additional easy picks.
+hello-world
+heterogeneous-dates
+analyze-access-logs
+aimo-airline-departures
+jsonl-aggregator
+count-call-stack
+log-summary
+csv-to-parquet
+fix-permissions
+gomoku-planner
+assign-seats
+bank-trans-filter
+countdown-game
+extract-safely
+fix-git
+grid-pattern-transform
+jq-data-processing
+mahjong-winninghand
+ancient-puzzle
+broken-python

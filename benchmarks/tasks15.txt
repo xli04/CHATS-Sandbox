@@ -1,0 +1,16 @@
+# 15 easy tasks, all python-capable bases (python agents install via pip).
+hello-world
+heterogeneous-dates
+aimo-airline-departures
+assign-seats
+bank-trans-filter
+fix-git
+jq-data-processing
+grid-pattern-transform
+ancient-puzzle
+schedule-vacation
+flood-monitoring-basic
+new-encrypt-command
+png-generation
+multistep-definite-integral
+debug-long-program
