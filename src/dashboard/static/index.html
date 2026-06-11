@@ -361,8 +361,10 @@
   .pat-win .ew { color: var(--success); font-family: "JetBrains Mono", monospace; font-size: 10px; margin-right: 5px; letter-spacing: 0.05em; }
   .pat-note { color: var(--muted); font-size: 11px; margin-top: 3px; font-style: italic; }
 
-  /* Agent identity pill — teal outline, stands out among the gray pills */
+  /* Identity pills — agent in teal, session in slate; outlined chips so
+     the "who/which conversation" block stands out among the gray pills */
   .pill.agent-pill code { color: var(--accent); border: 1px solid var(--accent); padding: 0 6px; font-size: 10.5px; line-height: 1.7; font-weight: 600; }
+  .pill.session-pill code { color: var(--accent-2); border: 1px solid var(--accent-2); padding: 0 6px; font-size: 10.5px; line-height: 1.7; font-weight: 600; }
 
   /* Live-updates pill (status strip) */
   .pill.live { cursor: pointer; user-select: none; }
@@ -667,7 +669,7 @@ function renderStatus() {
     const tip = s.session.prompt
       ? `Conversation ${s.session.id}\nLast prompt: ${s.session.prompt}`
       : `Conversation ${s.session.id}`;
-    left.push(`<span class="pill" title="${escapeHtml(tip)}">session <code>${escapeHtml(String(s.session.id).slice(0, 8))}</code></span>`);
+    left.push(`<span class="pill session-pill" title="${escapeHtml(tip)}">session <code>${escapeHtml(String(s.session.id).slice(0, 8))}</code></span>`);
     left.push(`<span class="sep">·</span>`);
   }
   left.push(`<span class="pill"><span class="dot ${s.enabled ? "on" : "off"}"></span>${s.enabled ? "enabled" : "disabled"}</span>`);
