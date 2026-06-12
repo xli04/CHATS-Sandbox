@@ -1,0 +1,17 @@
+task,cond,wall,backup_bytes,hook_ms,actions,changed,restore_pct,extras,done,notes
+upgrade-core,none,11,0,0,0,2,83,0,yes,ec=0
+upgrade-core,plugin,10,35711,424,2,2,100,0,yes,ec=0
+upgrade-core,git-add,8,27740,39,2,2,83,0,yes,ec=0
+upgrade-core,cp-all,9,54222,40,2,2,83,0,yes,ec=0
+install-data-stack,none,17,0,0,0,5,100,5,yes,ec=0
+install-data-stack,plugin,15,34409,351,1,5,100,5,yes,ec=0
+install-data-stack,git-add,15,27740,43,2,5,100,5,yes,ec=0
+install-data-stack,cp-all,17,54222,39,2,5,100,5,yes,ec=0
+install-and-remove,none,12,0,0,0,6,92,5,yes,ec=0
+install-and-remove,plugin,18,37554,729,3,6,100,5,yes,ec=0
+install-and-remove,git-add,12,28229,71,3,6,92,5,yes,ec=0
+install-and-remove,cp-all,17,81179,78,3,6,92,5,yes,ec=0
+install-heavy,none,17,0,0,0,6,100,6,yes,ec=0
+install-heavy,plugin,22,35448,395,2,6,100,6,yes,ec=0
+install-heavy,git-add,21,27741,46,2,6,100,6,yes,ec=0
+install-heavy,cp-all,17,54222,42,2,6,100,6,yes,ec=0

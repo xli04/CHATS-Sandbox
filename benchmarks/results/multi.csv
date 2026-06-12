@@ -1,0 +1,8 @@
+task,agent,condition,wall_seconds,backup_bytes,actions,test_pass,notes
+hello-world,hermes,plugin,26,116670,1,pass,ec=0
+hello-world,openhands,plugin,17,108850,1,pass,ec=0
+hello-world,claude,plugin,9,172232,2,pass,ec=0
+hello-world,openclaw,plugin,27,169600,1,pass,ec=0
+hello-world,hermes,git-add,21,1204959,4,pass,ec=0
+hello-world,openclaw,cp-all,28,173666,2,pass,ec=0
+hello-world,openhands,git-add,15,436748,2,pass,ec=0

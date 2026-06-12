@@ -288,6 +288,12 @@ recovery instructions:
 3. Write the captured state as JSON to: ${actionDir}/remote-state.json
    Include enough fields that a future restore subagent could recreate
    the state (title, body, author, timestamps, IDs, parent IDs, etc.).
+   THE DATA ITSELF, NOT A SUMMARY: for a SQL/database mutation
+   (DELETE/UPDATE/DROP/TRUNCATE), capture the actual affected rows —
+   SELECT * with the same WHERE clause (or the whole table for
+   DROP/TRUNCATE) — into remote-state.json. A schema + row count alone
+   is NOT a backup; the restore must be able to re-INSERT every row.
+   If the result is large, page through it; do not truncate.
 
 4. recovery_commands MUST reverse the EFFECT of the action, not merely
    undo the UI interaction or summarize what happened. Decide the

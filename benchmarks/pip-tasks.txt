@@ -1,0 +1,6 @@
+# Pip-environment tasks. Format: name|instruction|done-check (container shell, exit 0 = agent did the work)
+# Seeded baseline env: requests==2.31.0 flask==2.3.3 click==8.1.3
+upgrade-core|Upgrade the requests and flask packages to their latest versions using pip. Confirm the new versions with pip show, then stop.|python3 -c "import requests,sys; sys.exit(0 if requests.__version__!='2.31.0' else 1)"
+install-data-stack|Install numpy, pandas and pyyaml using pip. Confirm each with pip show, then stop.|python3 -c "import pandas"
+install-and-remove|Install httpx using pip, then uninstall flask using pip. Confirm httpx is installed and flask is gone, then stop.|bash -c "python3 -c 'import httpx' && ! python3 -c 'import flask' 2>/dev/null"
+install-heavy|Install scikit-learn using pip. Confirm it imports, then stop.|python3 -c "import sklearn"
