@@ -282,7 +282,7 @@
   .bk-summary { margin-left: auto; font-size: 12px; color: var(--muted); }
   .bk-summary code { color: var(--text-dim); font-family: "JetBrains Mono", monospace; }
   .bk-table { border: 1px solid var(--line); }
-  .bk-head, .bk-row { display: grid; grid-template-columns: 20px 1.6fr 0.9fr 1.4fr 1.2fr; gap: 10px; padding: 8px 12px; align-items: center; }
+  .bk-head, .bk-row { display: grid; grid-template-columns: 20px 1.5fr 0.7fr 90px 1.3fr 1.1fr; gap: 10px; padding: 8px 12px; align-items: center; }
   .bk-head { background: var(--bg-soft); border-bottom: 1px solid var(--line); font-size: 10.5px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); font-weight: 600; }
   .bk-row { border-bottom: 1px solid var(--line); font-size: 13.5px; font-weight: 500; cursor: pointer; }
   .bk-row:hover { background: var(--hover-bg); }
@@ -363,6 +363,28 @@
   .pat-win { color: var(--text-dim); margin-top: 2px; line-height: 1.45; }
   .pat-win .ew { color: var(--success); font-family: "JetBrains Mono", monospace; font-size: 10px; margin-right: 5px; letter-spacing: 0.05em; }
   .pat-note { color: var(--muted); font-size: 11px; margin-top: 3px; font-style: italic; }
+
+  /* Collapsible detail sections — key info first, expand for more */
+  .detail-acc { margin-top: 10px; border: 1px solid var(--line); background: var(--bg); }
+  .detail-acc summary { cursor: pointer; padding: 7px 10px; font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); font-weight: 600; user-select: none; list-style: none; display: flex; align-items: center; gap: 7px; }
+  .detail-acc summary::-webkit-details-marker { display: none; }
+  .detail-acc summary::before { content: "▸"; color: var(--accent); transition: transform 0.12s; }
+  .detail-acc[open] summary::before { transform: rotate(90deg); }
+  .detail-acc summary:hover { background: var(--hover-bg); color: var(--text); }
+  .detail-acc .acc-body { padding: 4px 10px 12px; }
+  .detail-acc summary .hint { font-weight: 400; text-transform: none; letter-spacing: 0; color: var(--muted); margin-left: auto; font-size: 11px; }
+
+  /* Key terms: dotted underline + native tooltip — hover for definition */
+  .term { text-decoration: underline dotted var(--muted); text-underline-offset: 3px; cursor: help; }
+
+  /* Sort-direction hint in the timeline title */
+  .tl-dir { font-weight: 400; color: var(--muted); font-size: 10.5px; margin-left: 8px; letter-spacing: 0; text-transform: none; }
+
+  /* Clickable file names → content viewer */
+  .file-link { cursor: pointer; }
+  .file-link:hover { color: var(--accent); text-decoration: underline; }
+  .modal.modal-wide { width: min(860px, 94vw); }
+  .file-view { max-height: 62vh; overflow: auto; background: var(--bg-soft); border: 1px solid var(--line); padding: 10px 12px; font-family: "JetBrains Mono", monospace; font-size: 12px; line-height: 1.5; white-space: pre; margin: 10px 0 0; }
 
   /* Identity pills — agent in teal, session in slate; outlined chips so
      the "who/which conversation" block stands out among the gray pills */
@@ -471,12 +493,6 @@
         <span class="search-icon">⌕</span>
         <input type="text" id="search" placeholder="Filter actions — file, command, content…" />
       </div>
-      <select id="filter-tool" title="Filter by tool">
-        <option value="">All tools</option>
-        <option value="Edit">Edit</option>
-        <option value="Write">Write</option>
-        <option value="Bash">Bash</option>
-      </select>
       <select id="filter-view" title="Group view">
         <option value="time">By time</option>
         <option value="file">By file</option>
@@ -497,7 +513,6 @@
     <div class="bk-toolbar">
       <div class="bk-viewtoggle">
         <button id="bk-view-file" class="active">By file</button>
-        <button id="bk-view-size">By size</button>
         <button id="bk-view-storage">Location Table</button>
         <button id="bk-view-log">Restore log</button>
       </div>
@@ -549,6 +564,16 @@
       <button class="btn" id="modal-cancel">Cancel</button>
       <button class="btn" id="modal-direct">Direct jump</button>
       <button class="btn primary" id="modal-loop">Reverse-loop</button>
+    </div>
+  </div>
+</div>
+
+<div class="modal-backdrop" id="modal-file">
+  <div class="modal modal-wide">
+    <h3 id="file-modal-title" style="font-family:'JetBrains Mono',monospace;font-size:13px;word-break:break-all;"></h3>
+    <pre class="file-view" id="file-modal-body"></pre>
+    <div class="modal-actions">
+      <button class="btn" id="file-modal-close">Close</button>
     </div>
   </div>
 </div>
@@ -606,10 +631,6 @@ $("search").addEventListener("input", (e) => {
   searchQuery = e.target.value.trim().toLowerCase();
   renderTimeline();
 });
-$("filter-tool").addEventListener("change", (e) => {
-  toolFilter = e.target.value;
-  renderTimeline();
-});
 $("filter-view").addEventListener("change", (e) => {
   groupView = e.target.value;
   try { localStorage.setItem("chats-sandbox-view", groupView); } catch {}
@@ -629,6 +650,36 @@ async function loadStatus() {
     for (const el of document.querySelectorAll(".status-bar")) el.innerHTML = errHtml;
   }
 }
+// Plain-language definitions for key terms — surfaced as hover
+// tooltips so the dashboard is self-contained for new users.
+const TERM_HELP = {
+  policy_rewrite: "Tier 0 backup: the destructive command was rewritten into a reversible form (e.g. rm becomes move-to-trash) before it ran. Restore replays the exact inverse — no AI involved.",
+  git_snapshot: "Tier 2 backup: the workspace was committed to a hidden shadow git repository before this action ran. Restore checks that snapshot back out.",
+  subagent: "Tier 3 backup: an AI subagent captured state that lives outside the workspace (remote service, database, system files) and recorded recovery commands.",
+  pip_freeze: "Tier 1 backup: a package-version manifest (pip freeze) taken before the action. Restore reinstalls those exact versions.",
+  npm_list: "Tier 1 backup: an npm package manifest taken before the action.",
+  env_snapshot: "Tier 1 backup: a snapshot of environment variables taken before the action.",
+  git_tag: "Tier 1 backup: a git tag recorded at the pre-action commit.",
+  "shadow.git": "The hidden shadow git repository (.chats-sandbox/shadow-repo) holding all workspace snapshots, deduplicated and compressed.",
+  "sandbox-trash": "The per-action trash folder where tier-0 rewrites park files instead of deleting them.",
+  "external-shadow": "A tier-3 shadow git repo covering files outside the workspace.",
+  git: "Workspace snapshots in the shadow git repository (tier 2).",
+  trash: "Files parked in per-action trash by tier-0 rewrites instead of being deleted.",
+  created: "This file did not exist before — it was created during these actions.",
+  modified: "This file existed before and its content was changed.",
+  deleted: "This file was removed (tier-0 keeps its content in trash, so it is recoverable).",
+};
+const TIER_HELP = {
+  T0: "Tier 0 — command rewrite: destructive command replaced with a reversible one (rm → trash). Cheapest, exact.",
+  T1: "Tier 1 — manifest: environment recipe (package versions, env vars) recorded before the action.",
+  T2: "Tier 2 — snapshot: whole workspace committed to the shadow git repo before the action.",
+  T3: "Tier 3 — subagent: an AI subagent backed up out-of-workspace or remote state.",
+};
+function helpAttr(label) {
+  const h = TERM_HELP[label];
+  return h ? ` title="${escapeHtml(h)}"` : "";
+}
+
 // Adapter names → display labels for the masthead/status agent badge.
 const AGENT_LABELS = {
   "claude-code": "Claude Code",
@@ -726,7 +777,6 @@ async function loadActions() {
 
 function getFilteredActions() {
   return currentActions.filter((a) => {
-    if (toolFilter && a.toolName !== toolFilter) return false;
     if (searchQuery) {
       const hay = [
         a.instruction || "",
@@ -830,10 +880,7 @@ function renderTimelineRowHtml(a) {
       `<span class="tl-sep">·</span>` +
       `<span class="tl-detail">${det}</span>`;
   } else if (c.kind === "write") {
-    content =
-      `<span class="tl-file">${escapeHtml(c.file)}</span>` +
-      `<span class="tl-sep">·</span>` +
-      `<span class="tl-detail"><span class="new">new file</span></span>`;
+    content = `<span class="tl-file">${escapeHtml(c.file)}</span>`;
   } else if (c.kind === "bash") {
     content = `<span class="tl-cmd"><span class="verb">${escapeHtml(c.verb)}</span>${escapeHtml(shrink(c.target, 32))}</span>`;
   } else {
@@ -845,9 +892,9 @@ function renderTimelineRowHtml(a) {
   // The spine node IS the tier label (T0/T1/T2/T3) — no separate dot,
   // no branch. Colour reinforces the tier but the text carries it.
   return `<div class="tl-row ${tier.cls}" data-seq="${a.seq}">
-    <div class="tl-node ${tier.cls}" title="${tier.tag} ${tier.name}">${tier.tag}</div>
+    <div class="tl-node ${tier.cls} term" title="${escapeHtml(TIER_HELP[tier.tag] || tier.name)}">${tier.tag}</div>
     <div class="tl-content">
-      <span class="tl-idx">#${String(a.seq).padStart(2, "0")}</span>
+      <span class="tl-idx" title="action ${String(a.seq).padStart(3, "0")}">${String(a.seq).padStart(2, "0")}</span>
       <span class="tl-tool ${toolLetter}">${toolLetter}</span>
       ${content}
     </div>
@@ -864,7 +911,7 @@ function renderTimeline() {
       : `<div class="empty">No matches. Try a different filter.</div>`;
     return;
   }
-  const title = `<div class="tl-pane-title">Action Timeline</div>`;
+  const title = `<div class="tl-pane-title">Action Timeline <span class="tl-dir" title="The newest action is at the top">newest ↓ oldest</span></div>`;
   pane.innerHTML = title + (groupView === "file" ? renderByFile(filtered) : renderByTime(filtered));
   wireRowEvents();
 }
@@ -899,11 +946,10 @@ function renderByFile(actions) {
 }
 
 function legendHtml() {
+  const item = (cls, tag, word) =>
+    `<span class="item ${cls} term" title="${escapeHtml(TIER_HELP[tag])}"><span class="ld"></span><b>${tag}</b> ${word}</span>`;
   return `<div class="tl-legend">
-    <span class="item rew"><span class="ld"></span><b>T0</b> rewrite</span>
-    <span class="item man"><span class="ld"></span><b>T1</b> manifest</span>
-    <span class="item snap"><span class="ld"></span><b>T2</b> snapshot</span>
-    <span class="item sub"><span class="ld"></span><b>T3</b> subagent</span>
+    ${item("rew", "T0", "rewrite")}${item("man", "T1", "manifest")}${item("snap", "T2", "snapshot")}${item("sub", "T3", "subagent")}
   </div>`;
 }
 
@@ -958,7 +1004,7 @@ function renderDetail(seq) {
     return;
   }
   const strats = (a.strategies || [])
-    .map((s) => `<span class="detail-strat ${escapeAttr(s)}">${escapeHtml(s)}</span>`)
+    .map((s) => `<span class="detail-strat ${escapeAttr(s)}${TERM_HELP[s] ? " term" : ""}"${helpAttr(s)}>${escapeHtml(s)}</span>`)
     .join(" ");
   const ageLabel = (a.ageMs && a.ageMs > 0) ? formatAge(a.ageMs) : "";
   const metaBits = [];
@@ -970,7 +1016,7 @@ function renderDetail(seq) {
   const headerHtml = `<div class="detail-header">
     <div>
       <div class="detail-title-row">
-        <span class="detail-seq">#${String(a.seq).padStart(3, "0")}</span>
+        <span class="detail-seq">action ${String(a.seq).padStart(3, "0")}</span>
         ${strats}
       </div>
       <div class="detail-meta">${metaBits.join(" · ")}</div>
@@ -982,50 +1028,50 @@ function renderDetail(seq) {
     ? `<div class="detail-instruction">${escapeHtml(a.instruction)}</div>`
     : "";
 
-  let subagentSection = "";
+  // Collapsible sections: only the instruction shows by default; each
+  // block expands on demand (design: key items first, details opt-in).
+  const acc = (id, title, body, hint = "") => body
+    ? `<details class="detail-acc" id="acc-${id}"><summary>${title}${hint ? `<span class="hint">${hint}</span>` : ""}</summary><div class="acc-body">${body}</div></details>`
+    : "";
+
+  let subagentBody = "";
   if (a.subagent) {
     const meta = [];
     if (a.subagent.externalShadowFileCount > 0) meta.push(`${a.subagent.externalShadowFileCount} files`);
     if (a.subagent.recoveryCommandCount > 0)    meta.push(`${a.subagent.recoveryCommandCount} recovery cmds`);
     if (a.subagent.liveRestore)                 meta.push(`live-restore`);
-    subagentSection = `<div class="detail-section" style="border-left:2px solid var(--accent-2);padding-left:10px">
-      <h4 style="color:var(--accent-2)">Subagent capture</h4>
-      <div class="kv">${escapeHtml(a.subagent.description || "")}</div>
-      ${meta.length ? `<div class="kv" style="color:var(--muted);margin-top:4px">${meta.join(" · ")}</div>` : ""}
-    </div>`;
+    subagentBody = `<div class="kv">${escapeHtml(a.subagent.description || "")}</div>
+      ${meta.length ? `<div class="kv" style="color:var(--muted);margin-top:4px">${meta.join(" · ")}</div>` : ""}`;
   }
 
-  let filesSection = "";
+  let filesBody = "", filesHint = "";
   if (a.files && a.files.length) {
     const shown = a.files.slice(0, 8);
     const extra = a.files.length - shown.length;
-    filesSection = `<div class="detail-section">
-      <h4>Workspace files</h4>
-      <div class="file-list">${shown.map((f) =>
-        `<span class="file-item"><code>${escapeHtml(f)}</code><button class="file-restore" data-file-restore="${escapeHtml(f)}" title="Restore only this file from this action's snapshot">↶</button></span>`
-      ).join(", ")}${extra > 0 ? ` <span style="color:var(--muted)">+${extra} more</span>` : ""}</div>
-    </div>`;
-  }
-
-  let statsSection = "";
-  if (a.stats) {
-    statsSection = `<div class="detail-section"><h4>Stats</h4><div class="stat">${escapeHtml(a.stats)}</div></div>`;
+    filesHint = `${a.files.length} file${a.files.length === 1 ? "" : "s"}`;
+    filesBody = `<div class="file-list">${shown.map((f) =>
+      `<span class="file-item"><code class="file-link" data-view-file="${escapeHtml(f)}" title="Click to view current file content">${escapeHtml(f)}</code><button class="file-restore" data-file-restore="${escapeHtml(f)}" title="Restore only this file from this action's snapshot">↶</button></span>`
+    ).join(", ")}${extra > 0 ? ` <span style="color:var(--muted)">+${extra} more</span>` : ""}</div>
+    ${a.stats ? `<div class="stat" style="margin-top:6px">${escapeHtml(a.stats)}</div>` : ""}`;
   }
 
   const others = currentActions.filter((x) => x.seq !== a.seq).sort((x, y) => y.seq - x.seq);
   const cmpOptions = others
-    .map((x) => `<option value="${x.seq}">#${String(x.seq).padStart(2, "0")}</option>`)
+    .map((x) => `<option value="${x.seq}">action ${String(x.seq).padStart(2, "0")}</option>`)
     .join("");
-  const diffSection = `<div class="detail-section">
-    <h4><span id="diff-label">Diff vs current</span>${others.length
-      ? ` <select id="compare-select" title="Diff this action's snapshot against another action's"><option value="">compare with…</option>${cmpOptions}</select>`
-      : ""}</h4>
-    <pre class="detail-diff" id="detail-diff">Loading diff…</pre>
-  </div>`;
+  const diffBody = `${others.length
+      ? `<div style="margin-bottom:6px"><select id="compare-select" title="Diff this action's snapshot against another action's"><option value="">compare with…</option>${cmpOptions}</select></div>`
+      : ""}
+    <pre class="detail-diff" id="detail-diff">Loading diff…</pre>`;
 
   const historySection = renderFileHistory(a);
 
-  pane.innerHTML = headerHtml + instr + subagentSection + filesSection + statsSection + diffSection + historySection;
+  pane.innerHTML = headerHtml + instr
+    + `<div id="detail-extra"></div>`
+    + acc("subagent", "Subagent capture", subagentBody)
+    + acc("files", "Workspace files", filesBody, filesHint)
+    + acc("diff", `<span id="diff-label">Diff vs current</span>`, diffBody)
+    + (historySection ? acc("history", "File history", historySection) : "");
 
   $("detail-restore-btn").onclick = () => openRestoreModal(a.seq);
   for (const el of pane.querySelectorAll(".file-history .step")) {
@@ -1042,6 +1088,12 @@ function renderDetail(seq) {
       restoreSingleFile(s, btn.dataset.fileRestore);
     });
   }
+  for (const el of pane.querySelectorAll("[data-view-file]")) {
+    el.addEventListener("click", (ev) => {
+      ev.stopPropagation();
+      openFileModal(el.dataset.viewFile);
+    });
+  }
   const cmp = $("compare-select");
   if (cmp) {
     cmp.onchange = () => {
@@ -1052,6 +1104,26 @@ function renderDetail(seq) {
   }
   loadDiff(seq);
 }
+
+// File content viewer — fetches the file's CURRENT workspace content.
+async function openFileModal(relPath) {
+  $("file-modal-title").textContent = relPath;
+  $("file-modal-body").textContent = "Loading…";
+  $("modal-file").classList.add("show");
+  try {
+    const r = await fetch(`/api/file?path=${encodeURIComponent(relPath)}`);
+    const d = await r.json();
+    $("file-modal-body").textContent = r.ok
+      ? d.content + (d.truncated ? "\n\n… (truncated — file is larger)" : "")
+      : (d.error || `HTTP ${r.status}`);
+  } catch (e) {
+    $("file-modal-body").textContent = String(e);
+  }
+}
+$("file-modal-close").onclick = () => $("modal-file").classList.remove("show");
+$("modal-file").addEventListener("click", (ev) => {
+  if (ev.target === $("modal-file")) $("modal-file").classList.remove("show");
+});
 
 // Restore a single file from one action's snapshot (other files and
 // later actions untouched — mirrors `chats-sandbox restore N --file`).
@@ -1088,7 +1160,7 @@ async function loadCompare(aSeq, bSeq) {
   el.style.color = "";
   try {
     const d = await (await fetch(`/api/actions/${aSeq}/diff/${bSeq}`)).json();
-    if (label) label.textContent = `Diff #${String(d.a).padStart(2, "0")} → #${String(d.b).padStart(2, "0")} (snapshot → snapshot)`;
+    if (label) label.textContent = `Diff action ${String(d.a).padStart(2, "0")} → action ${String(d.b).padStart(2, "0")} (snapshot → snapshot)`;
     if (d.diff) {
       el.innerHTML = colorizeDiff(d.diff);
     } else {
@@ -1110,49 +1182,42 @@ async function loadDiff(seq) {
       diffEl.innerHTML = colorizeDiff(d.diff);
     } else if (d.note) {
       diffEl.textContent = d.policyRewrite
-        ? "tier-0 rewrite — no workspace snapshot needed (see Policy rewrite below)"
+        ? "tier-0 rewrite — no workspace snapshot needed (see Command rewrite above)"
         : d.note;
       diffEl.style.color = "var(--muted)";
     } else {
       diffEl.textContent = "(no diff available)";
       diffEl.style.color = "var(--muted)";
     }
-    const extra = document.createElement("div");
-    // Tier-0 policy rewrite: the original destructive action and what
-    // CHATS-Sandbox revised it to (the reversible equivalent).
+    // Extra sections render as collapsed accordions in #detail-extra
+    // (between the instruction and the standard sections).
+    const accx = (title, body) =>
+      `<details class="detail-acc"><summary>${title}</summary><div class="acc-body">${body}</div></details>`;
+    let extraHtml = "";
+    // Tier-0 command rewrite: the raw destructive command and the
+    // reversible form it was revised to.
     if (d.policyRewrite) {
       const pr = d.policyRewrite;
       // Strip a "Bash(...)" wrapper for readability.
       const origCmd = (pr.original || "").replace(/^\w+\((.*)\)$/s, "$1") || pr.original;
-      let rw = `<div class="detail-section">
-        <h4>Policy rewrite <span class="detail-strat" style="color:var(--warn);border-color:var(--warn)">T0 · reversible</span></h4>
-        <div class="kv" style="margin-bottom:4px"><span style="color:var(--muted)">original</span> <span class="strike" style="text-decoration-color:var(--danger);color:var(--text)">${escapeHtml(origCmd)}</span></div>
-        <div class="kv"><span style="color:var(--muted)">revised&nbsp;</span> <span style="color:var(--success)">${escapeHtml(pr.description || "intercepted")}</span></div>`;
+      let rw = `<div class="kv" style="margin-bottom:4px"><span style="color:var(--muted)">raw command&nbsp;</span> <span class="strike" style="text-decoration-color:var(--danger);color:var(--text)">${escapeHtml(origCmd)}</span></div>
+        <div class="kv"><span style="color:var(--muted)">revised command&nbsp;</span> <span style="color:var(--success)">${escapeHtml(pr.description || "intercepted")}</span></div>`;
       if (pr.recovery && pr.recovery.length) {
         rw += `<div class="kv" style="color:var(--muted);text-transform:uppercase;font-size:10px;letter-spacing:0.06em;margin-top:8px;margin-bottom:3px">Reverses on restore</div>
           <ol style="margin:0;padding-left:20px;font-size:11.5px;color:var(--text-dim);line-height:1.5">${pr.recovery.map((c) => `<li>${escapeHtml(c)}</li>`).join("")}</ol>`;
       }
-      rw += `</div>`;
-      extra.innerHTML += rw;
+      extraHtml += accx(`<span class="term"${helpAttr("policy_rewrite")}>Command rewrite</span>`, rw);
     }
     if (d.subagent && d.subagent.recovery && d.subagent.recovery.length) {
-      const liveTag = d.subagent.liveRestore
-        ? ` <span class="detail-strat" style="color:var(--warn);border-color:var(--warn)">live-restore</span>`
-        : "";
-      extra.innerHTML += `<div class="detail-section">
-        <h4>Recovery plan${liveTag}</h4>
-        <ol style="margin:0;padding-left:20px;font-size:12.5px;color:var(--text-dim);line-height:1.55">${d.subagent.recovery.map((c) => `<li>${escapeHtml(c)}</li>`).join("")}</ol>
-      </div>`;
+      extraHtml += accx(`Recovery plan${d.subagent.liveRestore ? ` <span class="hint">live-restore</span>` : ""}`,
+        `<ol style="margin:0;padding-left:20px;font-size:12.5px;color:var(--text-dim);line-height:1.55">${d.subagent.recovery.map((c) => `<li>${escapeHtml(c)}</li>`).join("")}</ol>`);
     }
     if (d.remoteState) {
-      extra.innerHTML += `<div class="detail-section">
-        <h4>Captured remote state</h4>
-        <pre class="detail-diff">${escapeHtml(JSON.stringify(d.remoteState, null, 2))}</pre>
-      </div>`;
+      extraHtml += accx("Captured remote state",
+        `<pre class="detail-diff">${escapeHtml(JSON.stringify(d.remoteState, null, 2))}</pre>`);
     }
-    if (extra.innerHTML) {
-      diffEl.parentElement.insertAdjacentElement("afterend", extra);
-    }
+    const slot = $("detail-extra");
+    if (slot && extraHtml) slot.innerHTML = extraHtml;
   } catch (e) {
     diffEl.textContent = "error loading diff: " + String(e);
     diffEl.style.color = "var(--danger)";
@@ -1183,12 +1248,12 @@ function renderFileHistory(a) {
     const rel = (x.files || []).find((f) => baseName(f) === primary) || primary;
     return `<span class="step ${klass}${isCurrent ? " current" : ""}" data-seq="${x.seq}">
       <span class="sd"></span>
-      <span>#${String(x.seq).padStart(2, "0")} ${escapeHtml(label)}</span>
+      <span title="action ${String(x.seq).padStart(3, "0")}">${String(x.seq).padStart(2, "0")} ${escapeHtml(label)}</span>
       <button class="step-restore" data-file-restore="${escapeHtml(rel)}" data-file-seq="${x.seq}" title="Restore just this file from #${x.seq}">↶</button>
     </span>`;
   }).join(`<span class="arrow">→</span>`);
 
-  return `<div class="file-history">
+  return `<div class="file-history" style="margin-top:0;padding-top:0;border-top:none">
     <div class="title">History of <code>${escapeHtml(primary)}</code></div>
     <div class="strip">${steps}</div>
   </div>`;
@@ -1211,13 +1276,12 @@ let bkExpanded = null;
 
 function setBkView(v) {
   bkView = v;
-  for (const id of ["file", "size", "storage", "log"]) {
+  for (const id of ["file", "storage", "log"]) {
     $("bk-view-" + id).classList.toggle("active", id === v);
   }
   renderBackups();
 }
 $("bk-view-file").onclick    = () => setBkView("file");
-$("bk-view-size").onclick    = () => setBkView("size");
 $("bk-view-storage").onclick = () => setBkView("storage");
 $("bk-view-log").onclick     = () => setBkView("log");
 
@@ -1225,7 +1289,7 @@ function loadBackups() {
   bkSizeData = null;           // invalidate — sizes change when actions change
   bkLogData = null;            // restores may have happened
   renderBackups();
-  if (bkView === "size") loadBkSizes();
+  loadBkSizes();               // size column in the by-file view
 }
 
 // Restore-history ledger (audit trail of every rewind, CLI included).
@@ -1256,7 +1320,7 @@ function renderBkLogView() {
     const when = (e.ts || "").replace("T", " ").slice(0, 19);
     const ok = e.failed === 0;
     const target = e.seq !== null && e.seq !== undefined
-      ? `#${String(e.seq).padStart(2, "0")}` + (e.fileOnly ? ` · ${e.fileOnly}` : "")
+      ? `action ${String(e.seq).padStart(2, "0")}` + (e.fileOnly ? ` · ${e.fileOnly}` : "")
       : (e.action || "?");
     html += `<div class="bk-log-row">
       <span class="when">${escapeHtml(when)}</span>
@@ -1277,39 +1341,7 @@ async function loadBkSizes() {
   } catch {
     bkSizeData = { files: [], totalBytes: 0, shadowOnDiskBytes: 0 };
   }
-  if (bkView === "size") renderBackups();
-}
-
-function renderBkSizeTable() {
-  const table = $("bk-table");
-  if (!bkSizeData) {
-    table.innerHTML = `<div class="empty">Loading sizes…</div>`;
-    loadBkSizes();
-    return;
-  }
-  const rows = bkSizeData.files || [];
-  if (!rows.length) {
-    table.innerHTML = `<div class="empty">No backed-up file contents yet.</div>`;
-    return;
-  }
-  const max = rows[0].bytes || 1;
-  let html = `<div class="bk-size-note">Logical size of each file's heaviest backed-up snapshot. ` +
-    `Shadow repo on disk (deduped + compressed): <code>${formatBytes(bkSizeData.shadowOnDiskBytes || 0)}</code>.</div>`;
-  html += `<div class="bk-size-head"><span>#</span><span>File</span><span>Size</span><span></span><span>Kind</span></div>`;
-  rows.forEach((r, i) => {
-    const pct = Math.max(2, Math.round((r.bytes / max) * 100));
-    const kindCls = r.kind === "deleted" ? "danger" : "git";
-    const base = r.file.split("/").pop();
-    const parent = r.file.length > base.length ? "…/" + r.file.slice(0, r.file.length - base.length).split("/").filter(Boolean).slice(-1)[0] + "/" : "";
-    html += `<div class="bk-size-row">
-      <span class="bk-size-rank">${i + 1}</span>
-      <span class="bk-size-file" title="${escapeHtml(r.file)}">${escapeHtml(parent)}${escapeHtml(base)}</span>
-      <span class="bk-size-bytes">${formatBytes(r.bytes)}</span>
-      <span class="bk-size-bar"><span class="fill" style="width:${pct}%"></span></span>
-      <span class="bk-tag ${kindCls}">${r.kind}${r.actionCount > 1 ? ` ·${r.actionCount}×` : ""}</span>
-    </div>`;
-  });
-  table.innerHTML = html;
+  renderBackups();
 }
 
 // Short label for a storage path, detected from its prefix.
@@ -1361,7 +1393,7 @@ function renderBkStorageView() {
       </div>
       <div class="bk-stg-path" title="${escapeHtml([...g.paths].join("\n"))}">${escapeHtml(onePath)}</div>
       ${acts.map((x) => `<div class="bk-stg-row" data-seq="${x.seq}">
-        <span class="seq">#${String(x.seq).padStart(2, "0")}</span>
+        <span class="seq" title="action ${String(x.seq).padStart(3, "0")}">${String(x.seq).padStart(2, "0")}</span>
         <span class="tool">${escapeHtml(x.tool)}</span>
         <span class="desc">${escapeHtml(x.desc)}</span>
       </div>`).join("")}
@@ -1435,7 +1467,7 @@ function bkDetailHtml(file, acts) {
         `<span class="path" title="${escapeHtml(s.path || "")}">${escapeHtml(p)}</span>`;
     }).join("");
     return `<div class="bk-detail-line">
-      <span class="seq">#${String(a.seq).padStart(2, "0")}</span>
+      <span class="seq" title="action ${String(a.seq).padStart(3, "0")}">${String(a.seq).padStart(2, "0")}</span>
       <span class="time">${escapeHtml(t)}</span>
       ${st || `<span class="path" style="color:var(--muted)">no storage recorded</span>`}
       <button class="btn small" data-bk-restore="${a.seq}">↶ Checkout</button>
@@ -1488,10 +1520,6 @@ function renderBackups() {
     `<code>${map.size}</code> files · <code>${nGit}</code> snapshots · ` +
     `<code>${nTrash}</code> rewrites · <code>${nSub}</code> subagent`;
 
-  if (bkView === "size") {
-    renderBkSizeTable();
-    return;
-  }
   if (bkView === "storage") {
     renderBkStorageView();
     return;
@@ -1503,8 +1531,15 @@ function renderBackups() {
     return mb - ma;
   });
 
+  // Per-file backed-up size from /api/storage-by-file (heaviest
+  // snapshot per path, summed when several paths share a basename).
+  const sizeByBase = {};
+  for (const r of (bkSizeData && bkSizeData.files) || []) {
+    const b = baseName(r.file);
+    sizeByBase[b] = (sizeByBase[b] || 0) + r.bytes;
+  }
   let html = `<div class="bk-head">
-    <span></span><span>File</span><span>State</span>
+    <span></span><span>File</span><span>State</span><span>Size</span>
     <span>Backed up to</span><span>Storage</span>
   </div>`;
 
@@ -1523,18 +1558,22 @@ function renderBackups() {
       }
     }
     const tags = [];
-    if (g) tags.push(`<span class="bk-tag git">git × ${g}</span>`);
-    if (t) tags.push(`<span class="bk-tag trash">trash × ${t}</span>`);
-    if (s) tags.push(`<span class="bk-tag sub">subagent × ${s}</span>`);
+    if (g) tags.push(`<span class="bk-tag git term"${helpAttr("git")}>git × ${g}</span>`);
+    if (t) tags.push(`<span class="bk-tag trash term"${helpAttr("trash")}>trash × ${t}</span>`);
+    if (s) tags.push(`<span class="bk-tag sub term"${helpAttr("subagent")}>subagent × ${s}</span>`);
     const storageLabel = [...labels].join(" + ") || "—";
     const exp = bkExpanded === file;
 
+    const szCell = sizeByBase[file] !== undefined
+      ? formatBytes(sizeByBase[file])
+      : (bkSizeData ? "—" : "…");
     html += `<div class="bk-row${exp ? " expanded" : ""}" data-file="${escapeAttr(file)}">
       <span class="bk-caret">›</span>
       <span class="bk-file" title="${escapeHtml(dp.full)}">${escapeHtml(dp.shown)}</span>
-      <span class="bk-state ${state}">${state}</span>
+      <span class="bk-state ${state}${TERM_HELP[state] ? " term" : ""}"${helpAttr(state)}>${state}</span>
+      <span class="bk-size-bytes" title="Backed-up bytes for this file (heaviest snapshot)">${szCell}</span>
       <span class="bk-tags">${tags.join("") || "—"}</span>
-      <span class="bk-storage" title="${escapeHtml(storageLabel)}">${escapeHtml(storageLabel)}</span>
+      <span class="bk-storage${TERM_HELP[storageLabel] ? " term" : ""}" title="${escapeHtml(TERM_HELP[storageLabel] || storageLabel)}">${escapeHtml(storageLabel)}</span>
     </div>`;
     html += `<div class="bk-detail">${bkDetailHtml(file, acts)}</div>`;
   }
@@ -1587,7 +1626,7 @@ let restoreSeq = null;
 function openRestoreModal(seq) {
   restoreSeq = seq;
   const a = currentActions.find((x) => x.seq === seq);
-  $("modal-title").textContent = `Restore action #${String(seq).padStart(3, "0")}`;
+  $("modal-title").textContent = `Restore action ${String(seq).padStart(3, "0")}`;
   $("modal-desc").textContent = a && a.instruction
     ? `Pre-state of: "${truncate(a.instruction, 140)}"`
     : `Pre-state of action #${seq}.`;
@@ -1627,7 +1666,7 @@ async function loadRestorePreview(seq) {
     html += `<h5>Reverse-loop — ${steps.length} action${steps.length === 1 ? "" : "s"} would be undone${totalCmds ? ` · ${totalCmds} recorded command${totalCmds === 1 ? "" : "s"}` : ""}</h5>`;
     html += `<div class="pv-block">`;
     for (const s of steps.slice(0, 8)) {
-      html += `<div class="pv-step"><span class="sq">#${String(s.seq).padStart(2, "0")}</span> ${escapeHtml((s.strategies || []).join(", "))}${s.commands ? ` · ${s.commands} cmd${s.commands === 1 ? "" : "s"}` : ""}</div>`;
+      html += `<div class="pv-step"><span class="sq">${String(s.seq).padStart(2, "0")}</span> ${escapeHtml((s.strategies || []).join(", "))}${s.commands ? ` · ${s.commands} cmd${s.commands === 1 ? "" : "s"}` : ""}</div>`;
     }
     if (steps.length > 8) html += `<div class="pv-note">…and ${steps.length - 8} more</div>`;
     html += `</div>`;

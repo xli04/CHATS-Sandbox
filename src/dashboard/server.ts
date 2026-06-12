@@ -821,6 +821,57 @@ function handleGetCompare(
 }
 
 /**
+ * GET /api/file?path=<rel> — current content of a workspace file, for
+ * the dashboard's click-to-view. Path must stay inside the project
+ * root; binary-ish files and oversize content are handled gracefully.
+ */
+function handleGetFile(
+  res: http.ServerResponse,
+  projectRoot: string,
+  relPath: string,
+): void {
+  if (!relPath || path.isAbsolute(relPath) || relPath.split(/[/\\]/).includes("..")) {
+    jsonResponse(res, 400, { error: "path must be workspace-relative" });
+    return;
+  }
+  const abs = path.resolve(projectRoot, relPath);
+  if (!abs.startsWith(path.resolve(projectRoot) + path.sep)) {
+    jsonResponse(res, 400, { error: "path escapes the workspace" });
+    return;
+  }
+  try {
+    const st = fs.statSync(abs);
+    if (!st.isFile()) {
+      jsonResponse(res, 400, { error: "not a regular file" });
+      return;
+    }
+    const CAP = 256 * 1024;
+    const fd = fs.openSync(abs, "r");
+    const buf = Buffer.alloc(Math.min(st.size, CAP));
+    fs.readSync(fd, buf, 0, buf.length, 0);
+    fs.closeSync(fd);
+    // Crude binary sniff: NUL byte in the first 8KB.
+    if (buf.subarray(0, 8192).includes(0)) {
+      jsonResponse(res, 200, { path: relPath, content: `(binary file, ${st.size} bytes — not displayed)`, size: st.size, truncated: false });
+      return;
+    }
+    jsonResponse(res, 200, {
+      path: relPath,
+      content: buf.toString("utf-8"),
+      size: st.size,
+      truncated: st.size > CAP,
+    });
+  } catch (e: unknown) {
+    const code = (e as NodeJS.ErrnoException).code;
+    jsonResponse(res, 404, {
+      error: code === "ENOENT"
+        ? "file not found in the current workspace (it may have been deleted — restore the action to bring it back)"
+        : `read failed: ${e instanceof Error ? e.message : String(e)}`,
+    });
+  }
+}
+
+/**
  * GET /api/experiences — learned easy-win reversal patterns per MCP
  * server (written by `chats-sandbox explore` into
  * .chats-sandbox/experiences/<server>.json), plus whether an explore
@@ -940,6 +991,11 @@ export function startDashboard(options: {
     }
     if (url === "/api/storage-by-file" && method === "GET") {
       handleGetStorageByFile(res, config);
+      return;
+    }
+    const fileMatch = url.match(/^\/api\/file\?path=(.+)$/);
+    if (fileMatch && method === "GET") {
+      handleGetFile(res, projectRoot, decodeURIComponent(fileMatch[1]));
       return;
     }
     if (url === "/api/experiences" && method === "GET") {
