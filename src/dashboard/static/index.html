@@ -374,6 +374,22 @@
   .detail-acc .acc-body { padding: 4px 10px 12px; }
   .detail-acc summary .hint { font-weight: 400; text-transform: none; letter-spacing: 0; color: var(--muted); margin-left: auto; font-size: 11px; }
 
+  /* Clickable tier legend + description box */
+  .tl-legend .item { cursor: pointer; }
+  .tl-legend .item:hover b { color: var(--accent); }
+  .tl-tier-info { display: none; margin: 4px 6px 6px; padding: 7px 10px; border: 1px solid var(--line); border-left: 3px solid var(--accent); background: var(--bg-soft); font-size: 11.5px; line-height: 1.5; color: var(--text-dim); }
+  .tl-tier-info.show { display: block; }
+  .tl-tier-info b { color: var(--accent); font-family: "JetBrains Mono", monospace; }
+
+  /* Accordion contents stay compact — the fold is for detail, not headlines */
+  .detail-acc .acc-body { font-size: 11.5px; }
+  .detail-acc .acc-body .kv { font-size: 11.5px; font-weight: 400; }
+  .detail-acc .acc-body .detail-diff { font-size: 11px; max-height: 280px; }
+  .detail-acc .acc-body .file-list code { font-size: 11px; font-weight: 400; }
+  .detail-acc .acc-body .stat { font-size: 11px; }
+  .detail-acc .acc-body ol { font-size: 11px !important; }
+  .detail-acc .acc-body .file-history .strip { font-size: 11px; }
+
   /* Key terms: dotted underline + native tooltip — hover for definition */
   .term { text-decoration: underline dotted var(--muted); text-underline-offset: 3px; cursor: help; }
 
@@ -947,10 +963,10 @@ function renderByFile(actions) {
 
 function legendHtml() {
   const item = (cls, tag, word) =>
-    `<span class="item ${cls} term" title="${escapeHtml(TIER_HELP[tag])}"><span class="ld"></span><b>${tag}</b> ${word}</span>`;
+    `<span class="item ${cls}" data-tier="${tag}" title="Click for a description"><span class="ld"></span><b>${tag}</b> ${word}</span>`;
   return `<div class="tl-legend">
     ${item("rew", "T0", "rewrite")}${item("man", "T1", "manifest")}${item("snap", "T2", "snapshot")}${item("sub", "T3", "subagent")}
-  </div>`;
+  </div><div class="tl-tier-info" id="tier-info"></div>`;
 }
 
 function inferFile(a) {
@@ -967,7 +983,26 @@ function inferFile(a) {
   return null;
 }
 
+function wireLegendClicks() {
+  const box = $("tier-info");
+  if (!box) return;
+  for (const el of document.querySelectorAll(".tl-legend .item")) {
+    el.addEventListener("click", () => {
+      const tag = el.dataset.tier;
+      if (box.dataset.cur === tag && box.classList.contains("show")) {
+        box.classList.remove("show");
+        box.dataset.cur = "";
+        return;
+      }
+      box.dataset.cur = tag;
+      box.innerHTML = `<b>${tag}</b> · ${escapeHtml(TIER_HELP[tag] || "")}`;
+      box.classList.add("show");
+    });
+  }
+}
+
 function wireRowEvents() {
+  wireLegendClicks();
   for (const row of document.querySelectorAll(".tl-row")) {
     row.addEventListener("click", (ev) => {
       if (ev.target.closest(".tl-restore")) return;
@@ -1200,8 +1235,8 @@ async function loadDiff(seq) {
       const pr = d.policyRewrite;
       // Strip a "Bash(...)" wrapper for readability.
       const origCmd = (pr.original || "").replace(/^\w+\((.*)\)$/s, "$1") || pr.original;
-      let rw = `<div class="kv" style="margin-bottom:4px"><span style="color:var(--muted)">raw command&nbsp;</span> <span class="strike" style="text-decoration-color:var(--danger);color:var(--text)">${escapeHtml(origCmd)}</span></div>
-        <div class="kv"><span style="color:var(--muted)">revised command&nbsp;</span> <span style="color:var(--success)">${escapeHtml(pr.description || "intercepted")}</span></div>`;
+      let rw = `<div class="kv" style="margin-bottom:3px;font-size:11.5px"><span style="color:var(--muted)">raw command&nbsp;</span> <span class="strike" style="text-decoration-color:var(--danger);color:var(--text)">${escapeHtml(origCmd)}</span></div>
+        <div class="kv" style="font-size:11.5px"><span style="color:var(--muted)">revised command&nbsp;</span> <span style="color:var(--success)">${escapeHtml(pr.description || "intercepted")}</span></div>`;
       if (pr.recovery && pr.recovery.length) {
         rw += `<div class="kv" style="color:var(--muted);text-transform:uppercase;font-size:10px;letter-spacing:0.06em;margin-top:8px;margin-bottom:3px">Reverses on restore</div>
           <ol style="margin:0;padding-left:20px;font-size:11.5px;color:var(--text-dim);line-height:1.5">${pr.recovery.map((c) => `<li>${escapeHtml(c)}</li>`).join("")}</ol>`;
