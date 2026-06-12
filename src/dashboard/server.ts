@@ -110,10 +110,30 @@ function jsonResponse(res: http.ServerResponse, status: number, body: unknown): 
   res.end(JSON.stringify(body));
 }
 
+/** Load the central backup-latency ledger (one JSONL at the sandbox
+ *  root, excluded from storage accounting). Last entry per action wins. */
+function loadBackupTimings(backupRoot: string): Record<string, number> {
+  const out: Record<string, number> = {};
+  try {
+    const ledger = path.join(path.dirname(backupRoot), "backup-timings.jsonl");
+    for (const line of fs.readFileSync(ledger, "utf-8").split("\n")) {
+      if (!line.trim()) continue;
+      try {
+        const e = JSON.parse(line);
+        if (e.action && typeof e.addedLatencyMs === "number") {
+          out[e.action] = e.addedLatencyMs;
+        }
+      } catch { /* skip bad line */ }
+    }
+  } catch { /* no ledger yet */ }
+  return out;
+}
+
 function buildActionSummary(
   backupRoot: string,
   dirName: string,
   cwd: string,
+  timings?: Record<string, number>,
 ): ActionSummary {
   const dir = path.join(backupRoot, dirName);
   const metaPath = path.join(dir, "metadata.json");
@@ -182,11 +202,15 @@ function buildActionSummary(
   const { dirSize } = require("../backup/strategies.js");
   const sizeBytes = dirSize(dir);
 
-  let backupMs: number | undefined;
-  try {
-    const t = JSON.parse(fs.readFileSync(path.join(dir, "timing.json"), "utf-8"));
-    if (typeof t.addedLatencyMs === "number") backupMs = t.addedLatencyMs;
-  } catch { /* older actions have no timing sidecar */ }
+  let backupMs: number | undefined = timings?.[dirName];
+  if (backupMs === undefined) {
+    // Back-compat: actions recorded before the central ledger carry a
+    // per-action timing.json sidecar.
+    try {
+      const t = JSON.parse(fs.readFileSync(path.join(dir, "timing.json"), "utf-8"));
+      if (typeof t.addedLatencyMs === "number") backupMs = t.addedLatencyMs;
+    } catch { /* none */ }
+  }
 
   // If a subagent artifact exists, build a separate summary — the
   // `files` / `stats` above describe only the workspace git_snapshot,
@@ -294,7 +318,8 @@ function handleGetActions(
     .filter((d: string) => d.startsWith("action_"))
     .sort();
 
-  const actions = dirs.map((d) => buildActionSummary(backupRoot, d, cwd));
+  const timings = loadBackupTimings(backupRoot);
+  const actions = dirs.map((d) => buildActionSummary(backupRoot, d, cwd, timings));
   jsonResponse(res, 200, { actions });
 }
 

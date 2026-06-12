@@ -122,15 +122,20 @@ async function main(): Promise<void> {
     // Backup latency: the time this hook held up the agent between
     // emitting the tool call and its execution — process birth (node
     // boot included) to now. The user-facing "cost of safety" number.
-    // Recorded only when an action was actually created.
+    // All actions append to ONE ledger at the sandbox root
+    // (.chats-sandbox/backup-timings.jsonl) so the record never counts
+    // toward backup storage (accounting only sums action dirs + shadow
+    // repo). Append-only JSONL keeps parallel hooks race-safe.
     if (backupResult.actionDir) {
       try {
-        fs.writeFileSync(
-          path.join(backupResult.actionDir, "timing.json"),
+        const sandboxRoot = path.dirname(path.dirname(backupResult.actionDir));
+        fs.appendFileSync(
+          path.join(sandboxRoot, "backup-timings.jsonl"),
           JSON.stringify({
+            action: path.basename(backupResult.actionDir),
             addedLatencyMs: Math.round(Date.now() - performance.timeOrigin),
             recordedAt: new Date().toISOString(),
-          }),
+          }) + "\n",
         );
       } catch { /* non-fatal */ }
     }
