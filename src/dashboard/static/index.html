@@ -392,10 +392,9 @@
   .detail-acc .acc-body ol { font-size: 11px !important; }
   .detail-acc .acc-body .file-history .strip { font-size: 11px; }
 
-  /* Key terms: dotted underline; hover shows the native tooltip and
-     click opens a small inline explanation box */
-  .term { text-decoration: underline dotted var(--muted); text-underline-offset: 3px; cursor: help; }
-  .term-pop { margin: 6px 0; padding: 7px 10px; border: 1px solid var(--line); border-left: 3px solid var(--accent); background: var(--bg-soft); font-size: 11.5px; line-height: 1.5; color: var(--text-dim); max-width: 560px; }
+  /* Key terms: dotted underline, definition on hover (native tooltip).
+     Only the tier legend under the timeline is click-to-explain. */
+  .term { text-decoration: underline dotted var(--muted); text-underline-offset: 3px; }
 
   /* Sort-direction hint in the timeline title */
   .tl-dir { font-weight: 400; color: var(--muted); font-size: 10.5px; margin-left: 8px; letter-spacing: 0; text-transform: none; }
@@ -1156,31 +1155,6 @@ async function openFileModal(relPath) {
     $("file-modal-body").textContent = String(e);
   }
 }
-// Key terms (.term) carry their definition in title=""; hovering shows
-// the native tooltip, and clicking shows a small inline explanation box
-// (so the help is reachable on touch / for chips that look clickable).
-let termPopOwner = null;
-document.addEventListener("click", (ev) => {
-  const t = ev.target.closest(".term");
-  // ignore terms that already have their own click behavior
-  if (!t || t.closest(".tl-legend")) return;
-  const help = t.getAttribute("title");
-  if (!help) return;
-  const existing = document.querySelector(".term-pop");
-  if (existing) {
-    existing.remove();
-    if (termPopOwner === t) { termPopOwner = null; return; }  // same chip → just close
-  }
-  termPopOwner = t;
-  const pop = document.createElement("div");
-  pop.className = "term-pop";
-  pop.textContent = help;
-  // Attach BELOW the nearest block (header, section, table row…) so the
-  // box never breaks the layout of the row containing the chip.
-  const anchor = t.closest(".detail-header, .detail-section, .file-history, .bk-row, .bk-stg-head, .bk-log-row, .pat-row, .status-bar") || t;
-  anchor.insertAdjacentElement("afterend", pop);
-});
-
 $("file-modal-close").onclick = () => $("modal-file").classList.remove("show");
 $("modal-file").addEventListener("click", (ev) => {
   if (ev.target === $("modal-file")) $("modal-file").classList.remove("show");
