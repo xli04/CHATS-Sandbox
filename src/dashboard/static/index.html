@@ -378,6 +378,16 @@
 
   .detail-section h4 .sec-hint { font-weight: 400; text-transform: none; letter-spacing: 0; color: var(--muted); margin-left: 6px; }
 
+  /* Timeline rows scroll inside a capped viewport (~14 rows); the
+     selected-action box and legend stay pinned below. */
+  .tl-scroll { max-height: 470px; overflow-y: auto; }
+  .tl-selected-info { display: none; margin: 6px 6px 0; padding: 8px 10px; border: 1px solid var(--line); border-left: 3px solid var(--accent); background: var(--bg-soft); font-size: 11.5px; line-height: 1.5; color: var(--text-dim); }
+  .tl-selected-info.show { display: block; }
+  .tl-selected-info .tsi-head { display: flex; align-items: center; gap: 8px; margin-bottom: 3px; }
+  .tl-selected-info .tsi-head b { color: var(--accent); font-family: "JetBrains Mono", monospace; font-size: 11px; }
+  .tl-selected-info .tsi-body { color: var(--text); word-break: break-word; }
+  .tl-selected-info .tsi-meta { color: var(--muted); font-size: 10.5px; margin-top: 3px; }
+
   /* Clickable tier legend + description box */
   .tl-legend .item { cursor: pointer; }
   .tl-legend .item:hover b { color: var(--accent); }
@@ -944,7 +954,8 @@ function renderTimeline() {
 function renderByTime(actions) {
   const sorted = [...actions].sort((a, b) => b.seq - a.seq);
   const rows = sorted.map(renderTimelineRowHtml).join("");
-  return `<div class="tl-rows"><div class="tl-vline"></div>${rows}</div>` + legendHtml();
+  return `<div class="tl-scroll"><div class="tl-rows"><div class="tl-vline"></div>${rows}</div></div>`
+    + selectedInfoShell() + legendHtml();
 }
 
 function renderByFile(actions) {
@@ -967,7 +978,36 @@ function renderByFile(actions) {
       ${sorted.map(renderTimelineRowHtml).join("")}
     </div>`;
   }
-  return html + legendHtml();
+  return `<div class="tl-scroll">${html}</div>` + selectedInfoShell() + legendHtml();
+}
+
+function selectedInfoShell() {
+  return `<div class="tl-selected-info" id="tl-selected-info"></div>`;
+}
+
+// Describe the selected action at the foot of the timeline — visible
+// even when the selected row is scrolled out of view.
+function updateTimelineInfo(seq) {
+  const box = $("tl-selected-info");
+  if (!box) return;
+  const a = currentActions.find((x) => x.seq === seq);
+  if (!a) { box.classList.remove("show"); box.innerHTML = ""; return; }
+  const tier = tierOf(a);
+  const what = a.instruction || a.originalAction || describeFallback(a);
+  const metaBits = [];
+  if (a.timeFormatted) metaBits.push(a.timeFormatted);
+  if (a.toolName) metaBits.push(`${a.toolName} tool`);
+  if (typeof a.sizeBytes === "number") metaBits.push(formatBytes(a.sizeBytes));
+  box.innerHTML = `<div class="tsi-head"><b>action ${String(a.seq).padStart(3, "0")}</b><span class="tl-node ${tier.cls}" style="position:static">${tier.tag}</span></div>
+    <div class="tsi-body">${escapeHtml(what)}</div>
+    <div class="tsi-meta">${escapeHtml(metaBits.join(" · "))}</div>`;
+  box.classList.add("show");
+}
+function describeFallback(a) {
+  const c = compactContent(a);
+  if (c.kind === "bash") return `${c.verb} ${c.target || ""}`.trim();
+  if (c.kind === "edit" || c.kind === "write") return c.file || "";
+  return c.text || "";
 }
 
 function legendHtml() {
@@ -1028,6 +1068,7 @@ function wireRowEvents() {
   if (selectedSeq !== null) {
     const row = document.querySelector(`.tl-row[data-seq="${selectedSeq}"]`);
     if (row) row.classList.add("selected");
+    updateTimelineInfo(selectedSeq);
   }
 }
 
@@ -1037,6 +1078,7 @@ function selectAction(seq) {
   document.querySelectorAll(".tl-row").forEach((r) => {
     r.classList.toggle("selected", parseInt(r.dataset.seq, 10) === seq);
   });
+  updateTimelineInfo(seq);
   renderDetail(seq);
 }
 
@@ -1085,7 +1127,7 @@ function renderDetail(seq) {
     if (a.subagent.externalShadowFileCount > 0) meta.push(`${a.subagent.externalShadowFileCount} files`);
     if (a.subagent.recoveryCommandCount > 0)    meta.push(`${a.subagent.recoveryCommandCount} recovery cmds`);
     if (a.subagent.liveRestore)                 meta.push(`live-restore`);
-    subagentSection = `<details class="detail-acc"><summary>Subagent capture${meta.length ? `<span class="hint">${meta.join(" · ")}</span>` : ""}</summary><div class="acc-body"><div class="kv" style="font-size:11.5px;font-weight:400">${escapeHtml(a.subagent.description || "")}</div></div></details>`;
+    subagentSection = `<details class="detail-acc"><summary>Subagent capture</summary><div class="acc-body"><div class="kv" style="font-size:11.5px;font-weight:400">${escapeHtml(a.subagent.description || "")}</div>${meta.length ? `<div class="kv" style="color:var(--muted);margin-top:3px;font-size:11px">${meta.join(" · ")}</div>` : ""}</div></details>`;
   }
 
   let filesBody = "";
