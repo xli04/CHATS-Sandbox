@@ -17,6 +17,7 @@
  */
 
 import * as fs from "node:fs";
+import * as path from "node:path";
 import { loadConfig } from "../config/load.js";
 import { evaluate } from "../engine/rules.js";
 import { runBackup } from "../backup/strategies.js";
@@ -116,6 +117,22 @@ async function main(): Promise<void> {
 
     if (config.verbose) {
       process.stderr.write(contextMsg + "\n");
+    }
+
+    // Backup latency: the time this hook held up the agent between
+    // emitting the tool call and its execution — process birth (node
+    // boot included) to now. The user-facing "cost of safety" number.
+    // Recorded only when an action was actually created.
+    if (backupResult.actionDir) {
+      try {
+        fs.writeFileSync(
+          path.join(backupResult.actionDir, "timing.json"),
+          JSON.stringify({
+            addedLatencyMs: Math.round(Date.now() - performance.timeOrigin),
+            recordedAt: new Date().toISOString(),
+          }),
+        );
+      } catch { /* non-fatal */ }
     }
 
     // Write timing info for post-tool hook

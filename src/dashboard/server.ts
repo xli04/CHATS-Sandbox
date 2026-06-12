@@ -34,6 +34,9 @@ interface ActionSummary {
   originalAction: string;
   sizeBytes: number;
   ageMs: number;
+  /** Latency the backup hook added between the agent's tool call and
+   *  its execution (ms) — from the action's timing.json sidecar. */
+  backupMs?: number;
   /** Where this action's artifacts physically live on disk. One entry
    *  per artifact in metadata.json. Powers the Backups tab's
    *  file→storage inventory. */
@@ -179,6 +182,12 @@ function buildActionSummary(
   const { dirSize } = require("../backup/strategies.js");
   const sizeBytes = dirSize(dir);
 
+  let backupMs: number | undefined;
+  try {
+    const t = JSON.parse(fs.readFileSync(path.join(dir, "timing.json"), "utf-8"));
+    if (typeof t.addedLatencyMs === "number") backupMs = t.addedLatencyMs;
+  } catch { /* older actions have no timing sidecar */ }
+
   // If a subagent artifact exists, build a separate summary — the
   // `files` / `stats` above describe only the workspace git_snapshot,
   // which is confusing when the "real" backup happened out-of-workspace.
@@ -253,6 +262,7 @@ function buildActionSummary(
 
   return {
     name: dirName,
+    backupMs,
     seq,
     timestamp,
     timeFormatted,

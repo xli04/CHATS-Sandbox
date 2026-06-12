@@ -1063,6 +1063,8 @@ function renderDetail(seq) {
   if (ageLabel)          metaBits.push(escapeHtml(ageLabel));
   if (typeof a.sizeBytes === "number") metaBits.push(escapeHtml(formatBytes(a.sizeBytes)));
   if (a.toolName)        metaBits.push(`<code>${escapeHtml(a.toolName)}</code> tool`);
+  if (typeof a.backupMs === "number")
+    metaBits.push(`<span class="term" title="Backup latency: time CHATS-Sandbox held the agent between emitting this tool call and executing it — the cost of safety for this action">+${a.backupMs < 1000 ? a.backupMs + " ms" : (a.backupMs / 1000).toFixed(1) + " s"} backup</span>`);
 
   const headerHtml = `<div class="detail-header">
     <div>

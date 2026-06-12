@@ -696,6 +696,10 @@ export interface BackupResult {
    *  tool_input the hook should return as updatedInput. Undefined when
    *  no rewrite happened. */
   updatedInput?: Record<string, unknown>;
+  /** Folder of the action recorded for this backup (when one was
+   *  created) — lets the hook attach action-level records such as the
+   *  added-latency timing. */
+  actionDir?: string;
 }
 
 /**
@@ -821,6 +825,7 @@ export function runBackup(
   const policyResult = noRewrite ? null : applyPolicyRules(ctx, trashDir);
   if (policyResult) {
     const dir = materializeActionDir(config);
+    result.actionDir = dir;
     const artifact: BackupArtifact = {
       id: policyResult.ruleId.slice(0, 8),
       timestamp: new Date().toISOString(),
@@ -846,6 +851,7 @@ export function runBackup(
   const gitSnapshot = gitSnapshotBackup(ctx, config);
   if (gitSnapshot) {
     const dir = materializeActionDir(config);
+    result.actionDir = dir;
     result.artifacts.push(gitSnapshot);
     writeMetadata(dir, gitSnapshot);
   }
@@ -854,6 +860,7 @@ export function runBackup(
   // Only relevant for known patterns. Materializes folder only if it fires.
   const targetedFn = () => {
     const dir = materializeActionDir(config);
+    result.actionDir = dir;
     return tryTargetedManifest(ctx, dir);
   };
   const command = String(ctx.tool_input.command ?? "");
@@ -868,6 +875,7 @@ export function runBackup(
     const targeted = targetedFn();
     if (targeted) {
       const dir = materializeActionDir(config);
+    result.actionDir = dir;
       result.artifacts.push(targeted);
       writeMetadata(dir, targeted);
       targetedSucceeded = true;
@@ -890,6 +898,7 @@ export function runBackup(
       try {
         // Materialize the folder so the subagent has somewhere to write
         const dir = materializeActionDir(config);
+    result.actionDir = dir;
         subagentArtifact = runSubagentBackup(ctx, dir, config);
         if (subagentArtifact) {
           result.artifacts.push(subagentArtifact);
