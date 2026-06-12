@@ -1,0 +1,7 @@
+instance,agent,cond,wall,backup_bytes,actions,backup_ms,tiers,test_pass,notes
+psf__requests-1766,hermes,plugin,109,1323503,11,47334,T0+T1+T2+T3,pass,ec=0
+psf__requests-1921,hermes,plugin,213,1364650,14,53604,T0+T1+T2+T3,pass,ec=0
+pallets__flask-5014,hermes,plugin,126,1661768,8,26546,T0+T1+T2+T3,pass,ec=0
+pydata__xarray-4094,hermes,plugin,333,3589203,18,118630,T0+T1+T2+T3,pass,ec=0
+sphinx-doc__sphinx-8459,hermes,plugin,323,7009661,30,27904,T0+T1+T2+T3,pass,ec=0
+pytest-dev__pytest-6202,hermes,plugin,900,14529476,19,774332,T0+T1+T2+T3,pass,ec=124
