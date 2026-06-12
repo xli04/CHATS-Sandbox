@@ -1159,22 +1159,26 @@ async function openFileModal(relPath) {
 // Key terms (.term) carry their definition in title=""; hovering shows
 // the native tooltip, and clicking shows a small inline explanation box
 // (so the help is reachable on touch / for chips that look clickable).
+let termPopOwner = null;
 document.addEventListener("click", (ev) => {
   const t = ev.target.closest(".term");
   // ignore terms that already have their own click behavior
   if (!t || t.closest(".tl-legend")) return;
   const help = t.getAttribute("title");
   if (!help) return;
-  const existing = t.nextElementSibling;
-  if (existing && existing.classList && existing.classList.contains("term-pop")) {
+  const existing = document.querySelector(".term-pop");
+  if (existing) {
     existing.remove();
-    return;
+    if (termPopOwner === t) { termPopOwner = null; return; }  // same chip → just close
   }
-  document.querySelectorAll(".term-pop").forEach((el) => el.remove());
+  termPopOwner = t;
   const pop = document.createElement("div");
   pop.className = "term-pop";
   pop.textContent = help;
-  t.insertAdjacentElement("afterend", pop);
+  // Attach BELOW the nearest block (header, section, table row…) so the
+  // box never breaks the layout of the row containing the chip.
+  const anchor = t.closest(".detail-header, .detail-section, .file-history, .bk-row, .bk-stg-head, .bk-log-row, .pat-row, .status-bar") || t;
+  anchor.insertAdjacentElement("afterend", pop);
 });
 
 $("file-modal-close").onclick = () => $("modal-file").classList.remove("show");
