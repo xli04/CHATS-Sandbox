@@ -279,6 +279,8 @@
   .bk-viewtoggle button + button { border-left: 1px solid var(--line); }
   .bk-viewtoggle button:hover { color: var(--text); }
   .bk-viewtoggle button.active { background: var(--bg-soft); color: var(--text); }
+  #bk-size-filter { margin-left: 10px; font-size: 12px; padding: 3px 8px; background: var(--bg); border: 1px solid var(--line); color: var(--text-dim); font-family: inherit; cursor: pointer; }
+  #bk-size-filter:hover { border-color: var(--line-strong); color: var(--text); }
   .bk-summary { margin-left: auto; font-size: 12px; color: var(--muted); }
   .bk-summary code { color: var(--text-dim); font-family: "JetBrains Mono", monospace; }
   .bk-table { border: 1px solid var(--line); }
@@ -535,6 +537,12 @@
         <button id="bk-view-storage">Location Table</button>
         <button id="bk-view-log">Restore log</button>
       </div>
+      <select id="bk-size-filter" title="Show only files whose backed-up size is at least this">
+        <option value="0">any size</option>
+        <option value="10240">≥ 10 KB</option>
+        <option value="102400">≥ 100 KB</option>
+        <option value="1048576">≥ 1 MB</option>
+      </select>
       <span class="bk-summary" id="bk-summary"></span>
     </div>
     <div class="bk-table" id="bk-table">
@@ -1071,14 +1079,13 @@ function renderDetail(seq) {
     ? `<div class="detail-section"><h4>${title}</h4>${body}</div>`
     : "";
 
-  let subagentBody = "";
+  let subagentSection = "";
   if (a.subagent) {
     const meta = [];
     if (a.subagent.externalShadowFileCount > 0) meta.push(`${a.subagent.externalShadowFileCount} files`);
     if (a.subagent.recoveryCommandCount > 0)    meta.push(`${a.subagent.recoveryCommandCount} recovery cmds`);
     if (a.subagent.liveRestore)                 meta.push(`live-restore`);
-    subagentBody = `<div class="kv" style="font-size:11.5px;font-weight:400">${escapeHtml(a.subagent.description || "")}</div>
-      ${meta.length ? `<div class="kv" style="color:var(--muted);margin-top:3px;font-size:11px">${meta.join(" · ")}</div>` : ""}`;
+    subagentSection = `<details class="detail-acc"><summary>Subagent capture${meta.length ? `<span class="hint">${meta.join(" · ")}</span>` : ""}</summary><div class="acc-body"><div class="kv" style="font-size:11.5px;font-weight:400">${escapeHtml(a.subagent.description || "")}</div></div></details>`;
   }
 
   let filesBody = "";
@@ -1103,7 +1110,7 @@ function renderDetail(seq) {
 
   pane.innerHTML = headerHtml + instr
     + `<div id="detail-extra"></div>`
-    + sec("Subagent capture", subagentBody)
+    + subagentSection
     + sec(`Workspace files${a.files && a.files.length ? ` <span class="sec-hint">${a.files.length}</span>` : ""}`, filesBody)
     + sec(`<span id="diff-label">Diff vs current</span>`, diffBody)
     + (historySection || "");
@@ -1236,15 +1243,7 @@ async function loadDiff(seq) {
       const origCmd = (pr.original || "").replace(/^\w+\((.*)\)$/s, "$1") || pr.original;
       let rw = `<div class="kv" style="margin-bottom:3px;font-size:11.5px;font-weight:400"><span style="color:var(--muted)">raw command&nbsp;</span> <span class="strike" style="text-decoration-color:var(--danger);color:var(--text)">${escapeHtml(origCmd)}</span></div>
         <div class="kv" style="font-size:11.5px;font-weight:400"><span style="color:var(--muted)">revised command&nbsp;</span> <span style="color:var(--success)">${escapeHtml(pr.description || "intercepted")}</span></div>`;
-      if (pr.recovery && pr.recovery.length) {
-        rw += `<div class="kv" style="color:var(--muted);text-transform:uppercase;font-size:10px;letter-spacing:0.06em;margin-top:8px;margin-bottom:3px">Reverses on restore</div>
-          <ol style="margin:0;padding-left:20px;font-size:11px;color:var(--text-dim);line-height:1.5">${pr.recovery.map((c) => `<li>${escapeHtml(c)}</li>`).join("")}</ol>`;
-      }
       extraHtml += `<div class="detail-section"><h4><span class="term"${helpAttr("policy_rewrite")}>Command rewrite</span></h4>${rw}</div>`;
-    }
-    if (d.subagent && d.subagent.recovery && d.subagent.recovery.length) {
-      extraHtml += accx(`Recovery plan <span class="hint">${d.subagent.recovery.length} command${d.subagent.recovery.length === 1 ? "" : "s"}${d.subagent.liveRestore ? " · live-restore" : ""}</span>`,
-        `<ol style="margin:0;padding-left:20px;font-size:11px;color:var(--text-dim);line-height:1.5">${d.subagent.recovery.map((c) => `<li>${escapeHtml(c)}</li>`).join("")}</ol>`);
     }
     if (d.remoteState) {
       extraHtml += accx("Captured remote state",
@@ -1313,11 +1312,17 @@ function setBkView(v) {
   for (const id of ["file", "storage", "log"]) {
     $("bk-view-" + id).classList.toggle("active", id === v);
   }
+  $("bk-size-filter").style.display = v === "file" ? "" : "none";
   renderBackups();
 }
 $("bk-view-file").onclick    = () => setBkView("file");
 $("bk-view-storage").onclick = () => setBkView("storage");
 $("bk-view-log").onclick     = () => setBkView("log");
+let bkSizeMin = 0;
+$("bk-size-filter").addEventListener("change", (e) => {
+  bkSizeMin = parseInt(e.target.value, 10) || 0;
+  renderBackups();
+});
 
 function loadBackups() {
   bkSizeData = null;           // invalidate — sizes change when actions change
@@ -1577,9 +1582,11 @@ function renderBackups() {
     <span>Backed up to</span><span>Storage</span>
   </div>`;
 
+  let hidden = 0;
   for (const [file, acts] of entries) {
     const dp = bkDisplayPath(file, acts);
     const state = bkFileState(acts);
+    if (bkSizeMin > 0 && (sizeByBase[file] || 0) < bkSizeMin) { hidden++; continue; }
     let g = 0, t = 0, s = 0;
     const labels = new Set();
     for (const a of acts) {
@@ -1610,6 +1617,9 @@ function renderBackups() {
       <span class="bk-storage${TERM_HELP[storageLabel] ? " term" : ""}" title="${escapeHtml(TERM_HELP[storageLabel] || storageLabel)}">${escapeHtml(storageLabel)}</span>
     </div>`;
     html += `<div class="bk-detail">${bkDetailHtml(file, acts)}</div>`;
+  }
+  if (hidden > 0) {
+    html += `<div class="bk-size-note" style="border-top:1px solid var(--line);border-bottom:none">${hidden} file${hidden === 1 ? "" : "s"} below the size filter hidden.</div>`;
   }
   table.innerHTML = html;
 
