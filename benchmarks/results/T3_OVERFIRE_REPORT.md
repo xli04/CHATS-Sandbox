@@ -59,23 +59,28 @@ reference to the interpreter path** and then did expensive, redundant work.
 
 ## 3. Proposed solution
 
-**Primary fix — make `touchesOutsideWorkspace()` flag writes, not
-references** (`src/backup/strategies.ts:600`):
+**Primary fix — strip argv[0] before the path scan**
+(`src/backup/strategies.ts:655`):
 
-- Strip the leading executable token of each sub-command (the program
-  being run is a read; the interpreter path must not count).
-- Split the command on `;`, `&&`, `||`, `|` and classify each segment:
-  an absolute outside path counts only if it is a **write target** —
-  i.e. it follows a redirection (`>`, `>>`) or is an argument to a
-  mutating verb (`cp mv rm tee dd touch mkdir ln install truncate
-  chmod chown`). Read references (interpreter, `-r reqs.txt`, input
-  files) are ignored.
-- Keep the existing `outsidePatterns` verb list unchanged — `pip
-  install`, `git push`, `apt`, `docker run`, `curl -X POST`, etc. are
-  genuine out-of-workspace mutations and already precise.
+The program being run is a read, never a mutation target. Split the
+command on `;`, `&&`, `||`, `|` and drop the leading executable token of
+each segment before scanning for outside-workspace absolute paths.
+**Every other token is still scanned**, so the heuristic keeps its
+existing safe bias toward over-firing.
+
+A fuller "classify each path as read vs write" rewrite was considered
+and **rejected**: it would flip the failure polarity from over-firing
+(slow but safe) to under-firing (silent, unrecoverable state) for any
+mutating verb not on a hand-maintained list — `rsync`, `tar -x -C`,
+`unzip -d`, `make install`, and especially `python -c
+"open('/etc/x','w')"`, where the write target hides inside a string
+argument. For a recovery tool a false negative is strictly worse than a
+slow backup, so the minimal fix is also the safer one.
 
 Effect: `python -m pytest …` stops escalating to T3; real writes like
-`echo x > /etc/foo` and `cp build /opt/lib` still do.
+`echo x > /etc/foo`, `cp build /opt/lib`, `tar -x -C /opt`, and
+`python -c "open('/etc/x','w')"` still fire. `pip install` is handled by
+the T1 manifest tier (not T3) as before.
 
 **Create-only state needs no content backup, and is already neutral.**
 pytest only *creates* files (measured footprint: `.pytest_cache/`); it
