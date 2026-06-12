@@ -653,12 +653,26 @@ function touchesOutsideWorkspace(ctx: HookContext): boolean {
     }
 
     // Check if any absolute path in the command is outside workspace.
+    // First strip the leading executable token of each &&/||/|/;-
+    // separated segment: the PROGRAM being run is a read, never a
+    // mutation target. Without this, `/opt/conda/.../python -m pytest`
+    // escalated to a tier-3 subagent purely because the interpreter
+    // lives outside the workspace — a false positive on every
+    // conda/venv command. We only strip argv[0]; every other token is
+    // still scanned, so genuine outside writes (redirections, paths
+    // passed to cp/rm/tar/etc., even `python -c "open('/etc/x','w')"`)
+    // still fire. This keeps the heuristic biased toward over-firing
+    // (safe but slow) rather than under-firing (unrecoverable).
+    const scanCmd = cmd
+      .split(/(?:&&|\|\||[|;])/)
+      .map((seg) => seg.replace(/^\s*\S+\s*/, " ")) // drop argv[0] of each segment
+      .join(" ");
     // Require at least two path segments: single-segment tokens like
     // "/retries" are almost always sed/awk substitution fragments
     // (`sed s/retries: 3/retries: 9/`), not real filesystem targets —
     // treating them as paths fired a pointless tier-3 subagent for
     // innocent in-workspace edits.
-    const absolutePaths = cmd.match(/\/[\w./-]+/g) ?? [];
+    const absolutePaths = scanCmd.match(/\/[\w./-]+/g) ?? [];
     for (const p of absolutePaths) {
       if (p.split("/").filter(Boolean).length < 2) continue;
       try {
