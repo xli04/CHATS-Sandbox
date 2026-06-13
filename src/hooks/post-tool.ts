@@ -9,6 +9,7 @@ import * as fs from "node:fs";
 import { loadConfig } from "../config/load.js";
 import { captureEffect, logEffect } from "../engine/effects.js";
 import { type HookContext, normalizeHookContext } from "../types.js";
+import { timingFilePath } from "./timing-path.js";
 
 async function main(): Promise<void> {
   // Recursion guard: exit early if running inside a sandbox-spawned subagent
@@ -109,7 +110,7 @@ let _cachedTiming: TimingData | null = null;
 function loadTimingFile(ctx: HookContext): TimingData | null {
   if (_cachedTiming !== null) return _cachedTiming;
   try {
-    const tmpFile = `/tmp/chats-sandbox-timing-${ctx.session_id ?? "default"}.json`;
+    const tmpFile = timingFilePath(ctx);
     if (fs.existsSync(tmpFile)) {
       const data = JSON.parse(fs.readFileSync(tmpFile, "utf-8")) as TimingData;
       fs.unlinkSync(tmpFile); // consume it

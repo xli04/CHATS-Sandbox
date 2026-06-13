@@ -262,8 +262,12 @@ const gitResetHard: PolicyRule = {
       updatedInput: noopInput(ctx),
       preCommands: [saveCmd, command],
       recoveryCommands: [`git reset --hard ${head}`],
-      description: `Saved HEAD ${head.slice(0, 12)} before git reset --hard.`,
+      description: `Saved HEAD ${head.slice(0, 12)} before git reset --hard (worktree captured by snapshot).`,
       ruleId: "git-reset-hard",
+      // `git reset --hard` also destroys uncommitted worktree changes,
+      // which the saved HEAD sha alone cannot restore. Keep tier-2 so
+      // the shadow snapshot captures the dirty worktree before reset.
+      preserveLowerTiers: true,
     };
   },
 };

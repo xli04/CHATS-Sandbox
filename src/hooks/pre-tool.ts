@@ -21,6 +21,7 @@ import * as path from "node:path";
 import { loadConfig } from "../config/load.js";
 import { evaluate } from "../engine/rules.js";
 import { runBackup } from "../backup/strategies.js";
+import { timingFilePath } from "./timing-path.js";
 import type { PreToolHookOutput } from "../types.js";
 import {
   type HookContext,
@@ -49,18 +50,53 @@ async function main(): Promise<void> {
     const parsed = JSON.parse(raw);
     dialect = detectHookDialect(parsed);
     ctx = normalizeHookContext(parsed);
-  } catch {
+  } catch (e) {
+    // Unparseable input: we genuinely cannot act on it. Allow, but say
+    // so on stderr — a silent allow is how a broken hook hides.
+    process.stderr.write(`[CHATS-Sandbox] could not parse hook input, allowing: ${e}\n`);
     process.exit(0);
   }
 
-  const config = loadConfig();
+  let config;
+  try {
+    config = loadConfig();
+  } catch (e) {
+    process.stderr.write(`[CHATS-Sandbox] config load failed, allowing: ${e}\n`);
+    process.exit(0);
+  }
 
   if (!config.enabled) {
     process.exit(0);
   }
 
-  // Evaluate rules
-  const result = evaluate(ctx, config);
+  // Evaluate rules. A deny that cannot be evaluated must FAIL CLOSED:
+  // letting an evaluation error silently downgrade a deny to allow is
+  // the worst failure mode for a guard. Backup-tier errors below are
+  // allowed to fail open (a missed backup is recoverable-by-omission,
+  // a wrongly-allowed destructive command is not), but the deny gate
+  // itself blocks on error.
+  let result;
+  try {
+    result = evaluate(ctx, config);
+  } catch (e) {
+    process.stderr.write(`[CHATS-Sandbox] rule evaluation failed — blocking to fail closed: ${e}\n`);
+    const reason = `[CHATS-Sandbox] rule evaluation error; blocked to fail safe`;
+    if (dialect === "cursor") {
+      process.stdout.write(JSON.stringify({
+        continue: false, permission: "deny",
+        user_message: reason, agent_message: reason,
+      }));
+    } else {
+      process.stdout.write(JSON.stringify({
+        hookSpecificOutput: {
+          hookEventName: "PreToolUse",
+          permissionDecision: "deny",
+          permissionDecisionReason: reason,
+        },
+      }));
+    }
+    process.exit(2);
+  }
 
   if (config.verbose) {
     process.stderr.write(
@@ -147,11 +183,18 @@ async function main(): Promise<void> {
       } catch { /* non-fatal */ }
     }
 
-    // Write timing info for post-tool hook
+    // Write timing info for post-tool hook. Field name is `backupId`
+    // (singular) — post-tool reads `.backupId`; the old code wrote
+    // `backupIds` (array) so the read was always undefined and no effect
+    // was ever correlated to its backup. Path is scoped by a hash of
+    // cwd+session, not a predictable `…-${session ?? "default"}.json`
+    // in /tmp, so agents that send no session_id (hermes/openclaw/
+    // openhands) on different projects no longer share one
+    // world-writable file (cross-attribution / local-user pre-creation).
     try {
-      const tmpFile = `/tmp/chats-sandbox-timing-${ctx.session_id ?? "default"}.json`;
-      fs.writeFileSync(tmpFile, JSON.stringify({
+      fs.writeFileSync(timingFilePath(ctx), JSON.stringify({
         startTime: Date.now(),
+        backupId: backupResult.artifacts[0]?.id ?? null,
         backupIds: backupResult.artifacts.map((a) => a.id),
         needsSubagent: backupResult.needsSubagent,
       }));

@@ -34,6 +34,27 @@ const READ_ONLY_TOOLS = new Set([
   "process",   // process list/poll — read-only
 ]);
 
+/**
+ * True only when `chats-sandbox` is the command actually being invoked
+ * — the first token (after any leading NAME=value env-assignments) of
+ * some &&/||/|/;/&/newline-separated segment, matched by basename.
+ * A plain substring test was a universal backup bypass: any destructive
+ * command that merely *mentioned* the string (a comment, an unrelated
+ * path like `.chats-sandbox-old`) skipped every backup tier.
+ */
+export function invokesChatsSandbox(command: string): boolean {
+  for (const seg of command.split(/(?:&&|\|\||[|;&\n])/)) {
+    const tokens = seg.trim().split(/\s+/).filter(Boolean);
+    let i = 0;
+    while (i < tokens.length && /^[A-Za-z_]\w*=/.test(tokens[i])) i++;
+    const argv0 = tokens[i];
+    if (!argv0) continue;
+    const base = argv0.split("/").pop() ?? argv0;
+    if (base === "chats-sandbox") return true;
+  }
+  return false;
+}
+
 export function evaluate(ctx: HookContext, config: SandboxConfig): RuleResult {
   const toolName = ctx.tool_name;
   const toolInput = ctx.tool_input;
@@ -78,7 +99,7 @@ export function evaluate(ctx: HookContext, config: SandboxConfig): RuleResult {
   }
 
   // ── 3b. Skip our own CLI commands (they manage backups, not create risk) ──
-  if (toolName === "Bash" && /\bchats-sandbox\b/.test(commandStr)) {
+  if (toolName === "Bash" && invokesChatsSandbox(commandStr)) {
     return {
       decision: "pass",
       reason: "chats-sandbox CLI command (internal)",

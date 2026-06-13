@@ -40,6 +40,13 @@ export interface PolicyRuleResult {
   description: string;
   /** Stable rule id (for debugging + UI). */
   ruleId: string;
+  /** When true, the tier-0 artifact is recorded but the pipeline does
+   *  NOT short-circuit — tier-2 still snapshots the workspace. Used by
+   *  rules whose own recovery is partial (e.g. `git reset --hard` saves
+   *  the HEAD sha but cannot reconstruct the dirty worktree it
+   *  destroys; the tier-2 snapshot captures that). Default (undefined)
+   *  keeps the normal terminating behavior. */
+  preserveLowerTiers?: boolean;
 }
 
 export interface PolicyRule {

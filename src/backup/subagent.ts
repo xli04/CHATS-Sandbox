@@ -596,6 +596,46 @@ export function runSubagentBackup(
   const elapsedSec = ((Date.now() - startTime) / 1000).toFixed(1);
   logDebug(`parse success: ${parsed.description}`);
 
+  // VERIFY the backup before trusting it. The subagent reports success
+  // as free text; without a check, a hallucinated backup ("done!") is
+  // recorded as recoverable and the destructive action proceeds — the
+  // exact case where restore later fails on a nonexistent artifact.
+  // A backup is trustworthy only when it produced something durable:
+  //   - a declared artifact_path that exists and is non-empty, OR
+  //   - it's a live_restore action (recovery is re-derived from remote
+  //     state at restore time — no local artifact to check), OR
+  //   - the action is remote/MCP AND recovery_commands were recorded
+  //     (the snapshot lives in the remote system, e.g. an in-DB copy).
+  const declaredPaths = (parsed.artifact_paths ?? [])
+    .map((p) => (path.isAbsolute(p) ? p : path.join(actionDir, p)));
+  const durableArtifact = declaredPaths.some((p) => {
+    try { return fs.statSync(p).size > 0; } catch { return false; }
+  });
+  // "Live" actions mutate state that lives in an external system
+  // (remote, daemon, cluster), not in a local file — so recovery is
+  // inherently re-derived from that system and there is no local
+  // artifact to verify. recovery_commands is the backup for these.
+  const isRemote = ctx.tool_name.startsWith("mcp__") ||
+    /\b(git\s+push|curl|wget|ssh|scp|docker|kubectl|systemctl)\b/.test(
+      String((ctx.tool_input as { command?: unknown }).command ?? ""));
+  const liveRestore = parsed.live_restore ?? false;
+  const hasRecovery = (parsed.recovery_commands ?? []).length > 0;
+  const verified = durableArtifact || liveRestore || (isRemote && hasRecovery);
+
+  if (!verified) {
+    logDebug(
+      "subagent backup UNVERIFIED: no durable artifact " +
+      `(declared ${declaredPaths.length} path(s), none exist+nonempty), ` +
+      "not live_restore, not remote-with-recovery — refusing to record.",
+    );
+    tellUser(
+      "[CHATS-Sandbox] Subagent reported a backup but produced no verifiable " +
+      "artifact — NOT recording it as recoverable. Out-of-workspace state may " +
+      "be unprotected; proceed with caution.",
+    );
+    return null;
+  }
+
   // Persist the raw subagent response as a file alongside the artifact
   const id = Math.random().toString(36).slice(2, 10);
   const artifactFile = path.join(actionDir, `subagent_${id}.json`);
@@ -614,7 +654,7 @@ export function runSubagentBackup(
     strategy: "subagent",
     artifactPath: artifactFile,
     subagentCommands: parsed.recovery_commands,
-    liveRestore: parsed.live_restore ?? false,
+    liveRestore,
     originalAction: describeToolAction(ctx.tool_name, ctx.tool_input),
   };
 }

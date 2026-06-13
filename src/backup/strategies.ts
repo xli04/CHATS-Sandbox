@@ -113,10 +113,18 @@ export function getCurrentActionId(): string | null {
 
 function listActionDirs(backupRoot: string): string[] {
   if (!fs.existsSync(backupRoot)) return [];
+  // Sort by NUMERIC seq, not lexically: a plain .sort() puts
+  // action_1000 before action_999, so "oldest first" inverts at seq
+  // ≥ 1000 and count/size pruning would evict the NEWEST action (incl.
+  // the one just created). Tie-break on the timestamp suffix.
+  const seqOf = (d: string): number => {
+    const n = parseInt(d.split("_")[1] ?? "", 10);
+    return Number.isNaN(n) ? -1 : n;
+  };
   return fs
     .readdirSync(backupRoot)
     .filter((d: string) => d.startsWith("action_"))
-    .sort();
+    .sort((a, b) => seqOf(a) - seqOf(b) || a.localeCompare(b));
 }
 
 /**
@@ -249,8 +257,15 @@ function ensureSharedShadowRepo(config: SandboxConfig): string {
     fs.writeFileSync(
       path.join(infoDir, "exclude"),
       [
+        // NOTE: .env / .env.* are intentionally NOT excluded — they are
+        // the file class users most want recoverable, an Edit/Write of
+        // .env is in-workspace (no tier-3) with no Bash command (no
+        // tier-1 manifest), so the shadow snapshot is the ONLY tier that
+        // can capture their pre-state. The shadow repo is local under
+        // .chats-sandbox and never pushed, so capturing secrets there is
+        // no more exposed than the working file itself.
         "node_modules/", ".git/", "dist/", "build/", "__pycache__/",
-        "*.pyc", ".env", ".env.*", ".venv/", "venv/", ".cache/",
+        "*.pyc", ".venv/", "venv/", ".cache/",
         ".chats-sandbox/",
         ".DS_Store", "Thumbs.db",  // macOS/Windows filesystem noise
       ].join("\n") + "\n",
@@ -875,7 +890,14 @@ export function runBackup(
     result.artifacts.push(artifact);
     result.updatedInput = policyResult.updatedInput;
     writeMetadata(dir, artifact);
-    return result;
+    // Most tier-0 rewrites are self-sufficient (the file is safe in
+    // trash) and terminate the pipeline. A rule may opt out via
+    // preserveLowerTiers when its own recovery is partial — e.g.
+    // `git reset --hard` saves the HEAD sha but the tier-2 snapshot
+    // below is what captures the dirty worktree it destroys.
+    if (!policyResult.preserveLowerTiers) {
+      return result;
+    }
   }
 
   const outsideWorkspace = touchesOutsideWorkspace(ctx);
