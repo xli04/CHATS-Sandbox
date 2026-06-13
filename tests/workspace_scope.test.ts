@@ -230,3 +230,55 @@ describe("workspace scope: MCP tool detection", () => {
     });
   }
 });
+
+// ── Interpreter-path discrimination (regression for T3 over-fire) ────
+// The argv[0] interpreter binary lives outside the workspace
+// (/opt/conda/bin/python) but is a READ, not a mutation. These cases
+// guard the strip-interpreter logic against both failure directions:
+// over-firing on benign reads, and under-firing on genuine outside
+// writes. Covers gaps the first strip-argv[0] attempt missed
+// (multiline, env-prefix, redirections, env-assignment paths, bare
+// outside executables).
+describe("workspace scope: interpreter vs write discrimination", () => {
+  beforeEach(() => resetAction());
+
+  function fires(cmd: string): boolean {
+    const { workspace, config, originalCwd } = setup();
+    try {
+      fs.writeFileSync(path.join(workspace, "a.py"), "x\n");
+      return runBackup(makeCtx("Bash", { command: cmd }), config).needsSubagent;
+    } finally {
+      teardown(workspace, originalCwd);
+    }
+  }
+
+  // Interpreter reads — must NOT escalate to the subagent.
+  const benign: Array<[string, string]> = [
+    ["/opt/miniconda3/envs/testbed/bin/python -m pytest tests/", "single-line conda interpreter"],
+    ["cd a.py\n/opt/miniconda3/envs/testbed/bin/python -m pytest", "multiline interpreter (line 2)"],
+    ["/usr/bin/node build.js", "absolute node interpreter, in-ws script"],
+    ["pytest -q", "bare pytest"],
+  ];
+  for (const [cmd, label] of benign) {
+    it(`interpreter read does NOT fire: ${label}`, () => {
+      assert.equal(fires(cmd), false, `should not escalate: ${cmd}`);
+    });
+  }
+
+  // Genuine outside writes — MUST escalate (data-loss direction).
+  const writes: Array<[string, string]> = [
+    ["echo x > /etc/foo", "redirect to /etc"],
+    ["cd src && >/etc/myapp/state.json", "redirect target after &&"],
+    ["DEST=/etc/cron.d/nightly bash scripts/install-cron.sh", "env-assignment outside path"],
+    ["/usr/local/bin/reset-db.sh", "bare outside (non-interpreter) executable"],
+    ["/etc/init.d/nginx stop", "init.d script (non-interpreter)"],
+    ["cp build.tar /opt/lib/", "cp into /opt"],
+    ["python -c \"open('/etc/x','w')\"", "outside write inside interpreter -c arg"],
+    ["/opt/conda/bin/python -c \"open('/etc/x','w')\"", "abs interpreter + outside write arg"],
+  ];
+  for (const [cmd, label] of writes) {
+    it(`outside write DOES fire: ${label}`, () => {
+      assert.equal(fires(cmd), true, `should escalate: ${cmd}`);
+    });
+  }
+});

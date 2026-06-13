@@ -50,7 +50,11 @@ tool executing — process birth to hook completion — appended to one
 ledger, `.chats-sandbox/backup-timings.jsonl`, written in
 `src/hooks/pre-tool.ts` (the `addedLatencyMs` field). The ledger lives
 at the sandbox root, *outside* `backups/`, so it never counts toward
-storage accounting. This is what made the bug below measurable.
+storage accounting. This is what made the bug below measurable. (Note: the dashboard's
+storage figure sums the `action_*` dirs and the shadow repo via
+`dirSize`; the SWE harness's byte column `du`s the whole
+`.chats-sandbox` minus the ledger — a slightly wider scope, so the two
+surfaces are close but not identical.)
 
 ### 1.4 How the bug surfaced
 
@@ -212,35 +216,46 @@ was either free (T2 already had the workspace) or worthless (cache);
 none captured genuine outside state. T2 behaved correctly and cheaply;
 **T3 false-fired on a read reference to the interpreter binary.**
 
-**The fix** (`strategies.ts:655`): before the absolute-path scan, strip
-the leading executable token of each `&&`/`||`/`|`/`;`-separated
-segment — the program being run is a read and must not count. **Every
-other token is still scanned**, so the heuristic keeps its existing bias
-toward *over*-firing (a slow but safe backup) rather than *under*-firing
-(silent, unrecoverable state):
+**The fix** (`strategies.ts:655`). The interpreter/executable being RUN
+is the one token we must not count — it's a read, not a mutation. We
+exclude *only* that token, and *only* when it is an absolute path whose
+basename is a known language runtime (`python`, `node`, `ruby`, `bash`,
+`pytest`, …). The scan now walks each command segment (split on
+`&&`/`||`/`|`/`;`/`&`/newline), skips leading `NAME=value`
+env-assignments to find the real argv[0], and scans every remaining
+token — redirection targets (`>/etc/x`), env-assignment values
+(`DEST=/etc/x …`), script args, paths inside quotes
+(`python -c "open('/etc/x','w')"`), and bare non-interpreter
+executables (`/usr/local/bin/reset.sh`) all still fire. Only a
+recognized interpreter at argv[0] is ever skipped, so the heuristic
+keeps its bias toward over-firing (slow but safe) over under-firing
+(silent unrecoverable state).
 
-```js
-const scanCmd = cmd
-  .split(/(?:&&|\|\||[|;])/)
-  .map((seg) => seg.replace(/^\s*\S+\s*/, " "))  // drop argv[0] of each segment
-  .join(" ");
-const absolutePaths = scanCmd.match(/\/[\w./-]+/g) ?? [];
-```
+**An earlier, broken attempt is the cautionary tale.** The first fix
+(commit 8ccb473) stripped each segment's leading token by raw-text
+regex (`seg.replace(/^\s*\S+\s*/, " ")`). A reviewer showed it failed
+in *both* directions: it deleted genuine outside-write tokens
+(`cd src && >/etc/x`, `DEST=/etc/x …` → silently no backup — the
+data-loss direction), and it still over-fired on the common multi-line
+and env-prefixed interpreter forms (newline wasn't a separator;
+env-prefix shifted the interpreter to token two). The original 9-case
+oracle missed all of these because it only tested single-line,
+space-separated, argv[0]=interpreter commands. The token-aware
+allowlist above fixes both directions.
 
-A fuller "classify every path as read vs write" rewrite was
-**considered and rejected**: it would flip the failure polarity to
-*under*-firing for any mutating verb not on a hand-maintained list —
-`rsync`, `tar -x -C`, `unzip -d`, `make install`, and especially
-`python -c "open('/etc/x','w')"`, where the write target hides inside a
-string argument. For a recovery tool a false negative (unrecoverable
-state) is strictly worse than a slow backup, so the minimal fix is also
-the safer one.
+**A full read/write path classifier was considered and rejected**: it
+would flip the polarity to under-firing for any mutating verb not on a
+hand-maintained list — `rsync`, `tar -x -C`, `make install`, and
+especially `python -c "open('/etc/x','w')"`, where the write hides in a
+string argument. For a recovery tool a false negative is strictly worse
+than a slow backup.
 
-**Verification.** A 9-case oracle confirms: the interpreter-path bug is
-gone; genuine outside writes — redirections (`echo x > /etc/foo`),
-`cp`/`rm`/`tar -x -C` to `/opt`, and `python -c "open('/etc/x','w')"` —
-all still fire T3; `pip install` is still covered by the T1 manifest
-(not T3). The full unit suite passes 172/172.
+**Verification.** A 15-case regression suite in
+`tests/workspace_scope.test.ts` now covers every gap: single-line /
+multi-line / env-prefixed interpreter reads (must not fire);
+redirections, env-assignment paths, bare outside executables, init.d
+scripts, cp/rm/tar to `/opt`, and interpreter `-c` writes (must fire);
+`pip install` covered by T1, not T3. Full suite passes **184/184**.
 
 **Expected effect.** `pytest-dev__pytest-6202` drops from 774 s /
 14.5 MB / 7 subagents to a single ~50 ms T2 snapshot of a few KB. Since

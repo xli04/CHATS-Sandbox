@@ -652,42 +652,62 @@ function touchesOutsideWorkspace(ctx: HookContext): boolean {
       if (pattern.test(cmd)) return true;
     }
 
-    // Check if any absolute path in the command is outside workspace.
-    // First strip the leading executable token of each &&/||/|/;-
-    // separated segment: the PROGRAM being run is a read, never a
-    // mutation target. Without this, `/opt/conda/.../python -m pytest`
-    // escalated to a tier-3 subagent purely because the interpreter
-    // lives outside the workspace — a false positive on every
-    // conda/venv command. We only strip argv[0]; every other token is
-    // still scanned, so genuine outside writes (redirections, paths
-    // passed to cp/rm/tar/etc., even `python -c "open('/etc/x','w')"`)
-    // still fire. This keeps the heuristic biased toward over-firing
-    // (safe but slow) rather than under-firing (unrecoverable).
-    const scanCmd = cmd
-      .split(/(?:&&|\|\||[|;])/)
-      .map((seg) => seg.replace(/^\s*\S+\s*/, " ")) // drop argv[0] of each segment
-      .join(" ");
-    // Require at least two path segments: single-segment tokens like
-    // "/retries" are almost always sed/awk substitution fragments
-    // (`sed s/retries: 3/retries: 9/`), not real filesystem targets —
-    // treating them as paths fired a pointless tier-3 subagent for
-    // innocent in-workspace edits.
-    const absolutePaths = scanCmd.match(/\/[\w./-]+/g) ?? [];
-    for (const p of absolutePaths) {
-      if (p.split("/").filter(Boolean).length < 2) continue;
-      try {
-        const resolved = path.resolve(p);
-        if (
-          !resolved.startsWith(workspace + path.sep) &&
-          resolved !== workspace &&
-          !resolved.startsWith("/dev/") &&
-          !resolved.startsWith("/proc/") &&
-          !resolved.startsWith("/tmp/")
-        ) {
-          return true;
+    // Scan for absolute paths outside the workspace. The one token we
+    // must NOT count is the interpreter/executable being RUN: its
+    // install path (e.g. /opt/conda/bin/python) is a read, not a
+    // mutation, and counting it fired a tier-3 subagent on every
+    // conda/venv command (the SWE-bench pytest 774s pathology).
+    //
+    // We exclude only that single token, and only when it is an
+    // absolute path whose basename is a known language runtime. We do
+    // this per command segment, splitting on &&/||/|/;/&/newline and
+    // skipping any leading NAME=value env-assignments to find the real
+    // argv[0]. EVERYTHING ELSE is still scanned — redirection targets
+    // (`>/etc/x`), env-assignment values (`DEST=/etc/x …`), script
+    // args, paths inside quotes (`python -c "open('/etc/x','w')"`),
+    // and bare non-interpreter executables (`/usr/local/bin/reset.sh`)
+    // — so genuine outside writes still fire. The heuristic keeps its
+    // bias toward over-firing (slow but safe) over under-firing
+    // (silent unrecoverable state): only a recognized interpreter at
+    // argv[0] is ever skipped.
+    const INTERPRETER = /^(?:python[0-9.]*|node|nodejs|ts-node|tsx|deno|bun|ruby|perl|php|bash|sh|dash|zsh|fish|java|Rscript|pytest)$/;
+    const isOutside = (token: string): boolean => {
+      // Require ≥2 path segments: single-segment tokens like "/retries"
+      // are almost always sed/awk substitution fragments, not paths.
+      const paths = token.match(/\/[\w./-]+/g) ?? [];
+      for (const p of paths) {
+        if (p.split("/").filter(Boolean).length < 2) continue;
+        try {
+          const resolved = path.resolve(p);
+          if (
+            !resolved.startsWith(workspace + path.sep) &&
+            resolved !== workspace &&
+            !resolved.startsWith("/dev/") &&
+            !resolved.startsWith("/proc/") &&
+            !resolved.startsWith("/tmp/")
+          ) {
+            return true;
+          }
+        } catch {
+          // ignore unresolvable
         }
-      } catch {
-        // ignore
+      }
+      return false;
+    };
+
+    for (const seg of cmd.split(/(?:&&|\|\||[|;&\n])/)) {
+      const tokens = seg.trim().split(/\s+/).filter(Boolean);
+      if (tokens.length === 0) continue;
+      // Skip leading env-assignments (NAME=value) to locate argv[0].
+      let ai = 0;
+      while (ai < tokens.length && /^[A-Za-z_]\w*=/.test(tokens[ai])) ai++;
+      const argv0 = tokens[ai];
+      const argv0IsInterpreter =
+        !!argv0 && argv0.startsWith("/") &&
+        INTERPRETER.test(argv0.split("/").pop() ?? "");
+      for (let j = 0; j < tokens.length; j++) {
+        if (j === ai && argv0IsInterpreter) continue; // skip interpreter exe
+        if (isOutside(tokens[j])) return true;
       }
     }
   }
@@ -888,8 +908,10 @@ export function runBackup(
   if (hasTargetedPattern) {
     const targeted = targetedFn();
     if (targeted) {
+      // targetedFn already materialized the dir and set result.actionDir;
+      // materializeActionDir is memoized per action so this is the same
+      // path, fetched here only to write the artifact's metadata.
       const dir = materializeActionDir(config);
-    result.actionDir = dir;
       result.artifacts.push(targeted);
       writeMetadata(dir, targeted);
       targetedSucceeded = true;
@@ -912,7 +934,7 @@ export function runBackup(
       try {
         // Materialize the folder so the subagent has somewhere to write
         const dir = materializeActionDir(config);
-    result.actionDir = dir;
+        result.actionDir = dir;
         subagentArtifact = runSubagentBackup(ctx, dir, config);
         if (subagentArtifact) {
           result.artifacts.push(subagentArtifact);

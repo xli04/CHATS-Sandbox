@@ -35,7 +35,8 @@ interface ActionSummary {
   sizeBytes: number;
   ageMs: number;
   /** Latency the backup hook added between the agent's tool call and
-   *  its execution (ms) — from the action's timing.json sidecar. */
+   *  its execution (ms) — from the central backup-timings.jsonl
+   *  ledger at the sandbox root. */
   backupMs?: number;
   /** Where this action's artifacts physically live on disk. One entry
    *  per artifact in metadata.json. Powers the Backups tab's
@@ -202,15 +203,13 @@ function buildActionSummary(
   const { dirSize } = require("../backup/strategies.js");
   const sizeBytes = dirSize(dir);
 
-  let backupMs: number | undefined = timings?.[dirName];
-  if (backupMs === undefined) {
-    // Back-compat: actions recorded before the central ledger carry a
-    // per-action timing.json sidecar.
-    try {
-      const t = JSON.parse(fs.readFileSync(path.join(dir, "timing.json"), "utf-8"));
-      if (typeof t.addedLatencyMs === "number") backupMs = t.addedLatencyMs;
-    } catch { /* none */ }
-  }
+  // Backup latency comes solely from the central ledger
+  // (backup-timings.jsonl). The short-lived per-action timing.json
+  // sidecar (commits d52bd12..df1ba41) never shipped in a release, so
+  // there is no back-compat branch to read — and mixing its
+  // hook-internal-duration semantics with the ledger's process-lifetime
+  // value under one label would be wrong anyway.
+  const backupMs: number | undefined = timings?.[dirName];
 
   // If a subagent artifact exists, build a separate summary — the
   // `files` / `stats` above describe only the workspace git_snapshot,

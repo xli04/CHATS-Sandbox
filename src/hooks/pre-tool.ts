@@ -124,11 +124,18 @@ async function main(): Promise<void> {
     // boot included) to now. The user-facing "cost of safety" number.
     // All actions append to ONE ledger at the sandbox root
     // (.chats-sandbox/backup-timings.jsonl) so the record never counts
-    // toward backup storage (accounting only sums action dirs + shadow
-    // repo). Append-only JSONL keeps parallel hooks race-safe.
+    // toward backup storage (storage accounting sums action_* dirs and
+    // the shadow repo, both under backupDir; the ledger lives one level
+    // up). Derive that root from config.backupDir — the SAME derivation
+    // the dashboard uses (server.ts loadBackupTimings) — rather than
+    // dirname(dirname(actionDir)), which silently lands in the
+    // workspace if backupDir is set to a flat path. Append-only JSONL
+    // keeps parallel-hook WRITES safe; the action-name key can still
+    // collide under the known parallel seq-race (single session
+    // serializes, so unaffected in practice).
     if (backupResult.actionDir) {
       try {
-        const sandboxRoot = path.dirname(path.dirname(backupResult.actionDir));
+        const sandboxRoot = path.dirname(path.resolve(config.backupDir));
         fs.appendFileSync(
           path.join(sandboxRoot, "backup-timings.jsonl"),
           JSON.stringify({
