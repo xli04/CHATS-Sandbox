@@ -22,6 +22,7 @@ import { loadConfig } from "../config/load.js";
 import { evaluate } from "../engine/rules.js";
 import { runBackup } from "../backup/strategies.js";
 import { timingFilePath } from "./timing-path.js";
+import { pendingRecoveryNotice } from "./recovery-notice.js";
 import type { PreToolHookOutput } from "../types.js";
 import {
   type HookContext,
@@ -132,6 +133,12 @@ async function main(): Promise<void> {
     const backupResult = runBackup(ctx, config);
 
     const contextParts: string[] = [];
+
+    // Recovery awareness: if a restore rewound the workspace since the
+    // agent's last action, tell it ONCE, up front — backups are routine
+    // but a recovery silently changes files the agent already read.
+    const recovery = pendingRecoveryNotice(config);
+    if (recovery) contextParts.push(recovery);
 
     // Report what deterministic backup produced
     for (const artifact of backupResult.artifacts) {

@@ -134,3 +134,39 @@ describe("#3 git reset --hard keeps the tier-2 worktree snapshot", () => {
     }
   });
 });
+
+// ── Recovery awareness: one concise notice after a restore ───────────
+import { pendingRecoveryNotice } from "../src/hooks/recovery-notice.js";
+
+describe("recovery notice fires once after a restore", () => {
+  it("returns a concise notice the first time, null thereafter", () => {
+    const { ws, config, cwd } = envSetup();
+    try {
+      const ledger = path.join(ws, ".chats-sandbox", "restore-history.jsonl");
+      fs.mkdirSync(path.dirname(ledger), { recursive: true });
+      fs.appendFileSync(ledger, JSON.stringify({
+        ts: "2026-06-13T00:00:00.000Z", mode: "direct",
+        action: "action_005_20260613", seq: 5, steps: 3, ok: 3, failed: 0,
+      }) + "\n");
+
+      const first = pendingRecoveryNotice(config);
+      assert.ok(first, "expected a notice after a restore");
+      assert.match(first!, /Recovery: workspace rewound to action 005/);
+      assert.match(first!, /Re-read open files/);
+
+      // Same restore must not announce again.
+      assert.equal(pendingRecoveryNotice(config), null);
+
+      // A NEW restore announces once more.
+      fs.appendFileSync(ledger, JSON.stringify({
+        ts: "2026-06-13T01:00:00.000Z", mode: "direct",
+        action: "action_006_20260613", seq: 6, steps: 1, ok: 1, failed: 0,
+      }) + "\n");
+      assert.ok(pendingRecoveryNotice(config), "a newer restore should announce");
+      assert.equal(pendingRecoveryNotice(config), null);
+    } finally {
+      process.chdir(cwd);
+      fs.rmSync(ws, { recursive: true, force: true });
+    }
+  });
+});
