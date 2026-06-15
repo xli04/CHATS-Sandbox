@@ -36,6 +36,12 @@ interface SubagentResponse {
    *  (remote/dynamic state) and restore should spawn a fresh subagent
    *  instead of replaying the commands. */
   live_restore?: boolean;
+  /** True when the subagent inspected the upcoming action and determined
+   *  it is READ-ONLY — it changes nothing outside the workspace, so no
+   *  backup is needed. Honored as a clean skip (no artifact, no warning),
+   *  NOT a failure. Safe because tiers 0–2 still cover the workspace
+   *  independently; this only suppresses the generic tier-3 backup. */
+  no_backup_needed?: boolean;
 }
 
 function isCommandAvailable(cmd: string): boolean {
@@ -327,17 +333,32 @@ note — having SOMETHING beats having nothing.
 ### Category E: Anything else
 Do your best to capture some recoverable state in ${actionDir}, or document clearly what cannot be recovered.
 
+### Category R: The action is READ-ONLY (no backup needed)
+If, after inspecting the upcoming action, you determine it only READS or
+inspects state and changes NOTHING outside the workspace — no file
+writes/deletes/moves, no package installs, no environment/remote/system/
+database mutation (e.g. \`git log\`, \`grep\`, \`cat\`, a SELECT query, a
+status/list/describe call) — then NO backup is needed. Return
+\`no_backup_needed: true\` with empty backup_commands/recovery_commands.
+Do NOT fabricate a backup for a read.
+BE CONSERVATIVE: only do this when you are CERTAIN the action mutates
+nothing. If there is ANY doubt — an unfamiliar tool, a flag you don't
+recognize, a command that *might* write — perform the backup instead.
+A wrongly-skipped backup of a real mutation is unrecoverable; an extra
+backup of a read is harmless.
+
 ## OUTPUT FORMAT
 
 Your result is a single JSON object with this exact shape:
 
-{"description":"...","backup_commands":["cmd1","cmd2"],"recovery_commands":["cmd1","cmd2"],"artifact_paths":["path1"],"live_restore":false}
+{"description":"...","backup_commands":["cmd1","cmd2"],"recovery_commands":["cmd1","cmd2"],"artifact_paths":["path1"],"live_restore":false,"no_backup_needed":false}
 
 - description: short human-readable summary
 - backup_commands: the commands you ACTUALLY RAN to create the backup
 - recovery_commands: commands that would reverse the upcoming action (these will be executed verbatim by chats-sandbox restore)
 - artifact_paths: files you created inside the backup storage directory
 - live_restore: true ONLY when the recovery_commands can't be trusted later because the target state is remote or dynamic — e.g. the upcoming action does a git push (remote history moves), a curl POST/PUT/DELETE to an external API, a docker push to a registry, a kubectl apply to a cluster, a production DB write, etc. In those cases chats-sandbox will spawn a fresh restore subagent instead of replaying your commands blindly. For local file writes (Category A), pip/npm installs (Category C), env mutations (Category D), set live_restore=false.
+- no_backup_needed: true ONLY when the action is READ-ONLY (Category R) — it changes nothing outside the workspace. When true, leave backup_commands and recovery_commands empty. Default false. Be conservative: when in doubt, perform the backup and leave this false.
 
 ## HOW THE RESULT IS COLLECTED — IMPORTANT
 
@@ -376,6 +397,7 @@ function extractOurShape(candidate: unknown): SubagentResponse | null {
         ? (c.artifact_paths as unknown[]).map(String)
         : undefined,
       live_restore: typeof c.live_restore === "boolean" ? c.live_restore : undefined,
+      no_backup_needed: c.no_backup_needed === true,
     };
   }
   return null;
@@ -471,11 +493,15 @@ function parseSubagentOutput(raw: string): SubagentResponse | null {
  * Returns a BackupArtifact with strategy="subagent" on success, or null
  * on any failure (missing claude CLI, timeout, parse error, etc.).
  */
+/** A real artifact, the "read_only" verdict (clean skip — the subagent
+ *  judged the action read-only), or null (no/failed backup). */
+export type SubagentOutcome = BackupArtifact | "read_only" | null;
+
 export function runSubagentBackup(
   ctx: HookContext,
   actionDir: string,
   config: SandboxConfig
-): BackupArtifact | null {
+): SubagentOutcome {
   if (!config.subagentEnabled) return null;
 
   // Always write diagnostic trace to a log file so users can debug
@@ -595,6 +621,20 @@ export function runSubagentBackup(
 
   const elapsedSec = ((Date.now() - startTime) / 1000).toFixed(1);
   logDebug(`parse success: ${parsed.description}`);
+
+  // READ-ONLY VERDICT: the subagent inspected the action and determined
+  // it mutates nothing outside the workspace. Honor it as a CLEAN SKIP —
+  // not a failed/unverified backup. This is the smart second-layer
+  // read-only check beyond the regex filter, for the ambiguous tail.
+  // Safe: tiers 0–2 already covered the workspace independently, so this
+  // only declines the generic tier-3 backup for something the subagent
+  // judged read-only. The caller treats "read_only" specially: no
+  // artifact, no "unprotected" warning, and the empty action dir is
+  // cleaned up.
+  if (parsed.no_backup_needed === true) {
+    logDebug(`subagent verdict: read-only, no backup needed (${parsed.description.slice(0, 80)})`);
+    return "read_only";
+  }
 
   // VERIFY the backup before trusting it. The subagent reports success
   // as free text; without a check, a hallucinated backup ("done!") is

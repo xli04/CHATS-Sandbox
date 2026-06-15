@@ -980,15 +980,25 @@ export function runBackup(
     //
     // Import lazily to avoid loading child_process for the common path.
     let subagentArtifact: BackupArtifact | null = null;
+    let readOnlyVerdict = false;   // subagent judged the action read-only
     if (config.subagentEnabled) {
       try {
         // Materialize the folder so the subagent has somewhere to write
         const dir = materializeActionDir(config);
         result.actionDir = dir;
-        subagentArtifact = runSubagentBackup(ctx, dir, config);
-        if (subagentArtifact) {
-          result.artifacts.push(subagentArtifact);
-          writeMetadata(dir, subagentArtifact);
+        const outcome = runSubagentBackup(ctx, dir, config);
+        if (outcome === "read_only") {
+          // Subagent inspected the action and found it changes nothing
+          // outside the workspace — a clean skip, NOT a failure. Drop
+          // the empty action dir and don't raise the "unprotected"
+          // warning. Tiers 0–2 already covered any workspace changes.
+          readOnlyVerdict = true;
+          removeDir(dir);
+          result.actionDir = undefined;
+        } else if (outcome) {
+          subagentArtifact = outcome;
+          result.artifacts.push(outcome);
+          writeMetadata(dir, outcome);
         }
       } catch (e) {
         if (config.verbose) {
@@ -999,9 +1009,10 @@ export function runBackup(
       }
     }
 
-    // If the subagent failed or is disabled, still signal the caller
-    // that out-of-workspace state is at risk.
-    if (!subagentArtifact) {
+    // If the subagent failed or is disabled — and it did NOT explicitly
+    // judge the action read-only — signal that out-of-workspace state is
+    // at risk. A read-only verdict is a legitimate "nothing to back up".
+    if (!subagentArtifact && !readOnlyVerdict) {
       result.needsSubagent = true;
       result.subagentReason =
         `Action "${ctx.tool_name}(${cmdStr.slice(0, 200)})" affects state outside the workspace (${process.cwd()}). ` +

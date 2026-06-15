@@ -17,6 +17,13 @@ import { runBackup, resetAction } from "../src/backup/strategies.js";
 import { restoreArtifact } from "../src/restore/restore.js";
 import { DEFAULT_CONFIG, type HookContext, type SandboxConfig, type BackupArtifact } from "../src/types.js";
 
+// runSubagentBackup now returns BackupArtifact | "read_only" | null.
+// These tests use mocks that always return a real artifact; narrow it.
+function art(o: ReturnType<typeof runSubagentBackup>): BackupArtifact {
+  assert.ok(o && o !== "read_only", `expected a BackupArtifact, got ${JSON.stringify(o)}`);
+  return o;
+}
+
 function makeCtx(toolName: string, toolInput: Record<string, unknown>): HookContext {
   return { hook_event: "PreToolUse", tool_name: toolName, tool_input: toolInput };
 }
@@ -116,8 +123,8 @@ describe("subagent: runSubagentBackup with mock claude CLI", () => {
       );
 
       assert.ok(artifact, `Expected artifact, got null`);
-      assert.ok(artifact!.description.includes("wrapper test"));
-      assert.deepEqual(artifact!.subagentCommands, ["echo rw"]);
+      assert.ok(art(artifact).description.includes("wrapper test"));
+      assert.deepEqual(art(artifact).subagentCommands, ["echo rw"]);
     } finally {
       teardown(workspace, originalCwd);
     }
@@ -143,12 +150,12 @@ describe("subagent: runSubagentBackup with mock claude CLI", () => {
       );
 
       assert.ok(artifact, "Expected artifact to be returned");
-      assert.equal(artifact!.strategy, "subagent");
-      assert.ok(artifact!.description.includes("captured API state"));
-      assert.deepEqual(artifact!.subagentCommands, ["echo restored"]);
-      assert.ok(artifact!.originalAction?.includes("curl"));
+      assert.equal(art(artifact).strategy, "subagent");
+      assert.ok(art(artifact).description.includes("captured API state"));
+      assert.deepEqual(art(artifact).subagentCommands, ["echo restored"]);
+      assert.ok(art(artifact).originalAction?.includes("curl"));
       // Artifact file should exist on disk
-      assert.ok(fs.existsSync(artifact!.artifactPath), "Artifact file not written");
+      assert.ok(fs.existsSync(art(artifact).artifactPath), "Artifact file not written");
     } finally {
       teardown(workspace, originalCwd);
     }
@@ -348,8 +355,59 @@ fi
         config
       );
       assert.ok(artifact);
-      assert.ok(artifact!.description.includes("guard ok"),
-        `Expected guard ok, got: ${artifact!.description}`);
+      assert.ok(art(artifact).description.includes("guard ok"),
+        `Expected guard ok, got: ${art(artifact).description}`);
+    } finally {
+      teardown(workspace, originalCwd);
+    }
+  });
+});
+
+describe("subagent: read-only verdict is a clean skip", () => {
+  it("no_backup_needed=true → no artifact, no needsSubagent warning, dir removed", () => {
+    // Mock claude returns the read-only verdict for an outside action.
+    const script = `#!/bin/sh
+cat > /dev/null
+echo '{"description":"Read-only git log query — no state affected","backup_commands":[],"recovery_commands":[],"no_backup_needed":true}'
+`;
+    fs.writeFileSync(MOCK_CLAUDE, script);
+    fs.chmodSync(MOCK_CLAUDE, 0o755);
+
+    const { workspace, config, originalCwd } = setup();
+    try {
+      // An MCP tool deterministically reaches tier-3 (non-read-only MCP
+      // → touchesOutsideWorkspace), so the subagent actually runs and its
+      // read-only verdict is what's under test — not the regex short-
+      // circuit (which now catches the cd&&cat&&git-log compound case).
+      const result = runBackup(makeCtx("mcp__db__run_query", { query: "SELECT * FROM t" }), {
+        ...config, subagentEnabled: true,
+      });
+      const strategies = result.artifacts.map((a) => a.strategy);
+      assert.ok(!strategies.includes("subagent"),
+        `read-only verdict must NOT record a subagent artifact; got [${strategies.join(", ")}]`);
+      // and it must NOT raise the "out-of-workspace unprotected" warning
+      assert.equal(result.needsSubagent, false,
+        "read-only verdict is a clean skip, not an unprotected warning");
+    } finally {
+      teardown(workspace, originalCwd);
+    }
+  });
+
+  it("no_backup_needed absent → genuine failure still warns", () => {
+    // Mock returns a backup with NO verifiable artifact and not read-only
+    const script = `#!/bin/sh
+cat > /dev/null
+echo '{"description":"backed up","backup_commands":["echo x"],"recovery_commands":["echo y"],"artifact_paths":["/nonexistent/ghost"]}'
+`;
+    fs.writeFileSync(MOCK_CLAUDE, script);
+    fs.chmodSync(MOCK_CLAUDE, 0o755);
+    const { workspace, config, originalCwd } = setup();
+    try {
+      const result = runBackup(makeCtx("Bash", { command: "cd /etc && rm /opt/realfile" }), {
+        ...config, subagentEnabled: true,
+      });
+      assert.equal(result.needsSubagent, true,
+        "an unverifiable backup (no read-only verdict) must still warn");
     } finally {
       teardown(workspace, originalCwd);
     }
