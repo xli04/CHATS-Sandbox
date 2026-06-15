@@ -800,17 +800,22 @@ const READ_ONLY_BASH_PATTERN = new RegExp(
     // from inside their quoted script — invisible to a top-level
     // redirect/operator check. Treat every sed/awk as back-up (the only
     // cost is an occasional unnecessary snapshot for a read-only one).
-    "pwd|id|whoami|groups|uname|hostname|date|echo|printf|true|false|" +  // environmental
+    "pwd|id|whoami|groups|uname|date|echo|printf|true|false|" +  // environmental (date mutating forms bailed below; hostname removed — `hostname NAME` sets it)
     "cd|pushd|popd|" +                                   // directory nav — changes cwd only, no file mutation
-    "env|printenv|locale|" +                             // env vars (read)
+    "printenv|locale|" +                                 // env vars (read). NB: `env` removed — `env <prog>` launches an arbitrary command (env rm -rf …) that the trailing-args group would swallow.
     "ps|top|df|du(?:\\s+-[a-zA-Z]+)*\\s*$|free|uptime|" + // sysinfo (du without target is no-op)
     "git\\s+(?:status|log|show|diff|branch\\s*$|remote\\s*$|config\\s+--get|rev-parse|ls-(?:files|tree|remote)|describe|blame|cat-file)|" +  // git read-only
     "pip(?:3)?\\s+(?:list|show|freeze|check)|" +         // pip introspection (list/show/freeze/check)
     "npm\\s+(?:list|ls|view|show|search|outdated|root|config\\s+get)|" +  // npm read-only
     "docker\\s+(?:ps|images|inspect|logs|version|info|stats|top|events|history|port)|" +  // docker read-only
-    "kubectl\\s+(?:get|describe|logs|version|config\\s+view|cluster-info|explain)|" +  // kubectl read-only
-    "python3?\\s+-c\\s+[\"']import\\s+[\\w_.]+[\"']\\s*$|" +  // python -c "import X" (import check only, no writes)
-    "node\\s+-e\\s+[\"'][^\"']*require\\([^)]*\\)[^\"']*[\"']\\s*$" +   // node -e "require(x)" (import check only)
+    "kubectl\\s+(?:get|describe|logs|version|config\\s+view|cluster-info|explain)" +  // kubectl read-only
+    // `python -c "import X"` and `node -e "require(x)"` were allowlisted
+    // as import-checks but both EXECUTE arbitrary code: `import
+    // sitecustomize` runs module top-level, `require('/repo/x')` runs that
+    // module, and the quoted body can construct a writer with no quote/
+    // operator the pre-checks see (require('fs').writeFileSync(
+    // String.fromCharCode(...))). Removed — interpreters always back up,
+    // like sed/awk/env.
   ")" +
   "(?:\\s+[^\\|;&>]*)?" +    // trailing args — but stop at | ; & > (those imply side effects)
   "\\s*$"
@@ -830,6 +835,14 @@ export function isReadOnlyBash(command: string): boolean {
   // swallowed as args (`env FOO=bar rm -rf /` matched `env` + args).
   // Bail on any assignment at command/segment start or after `env`.
   if (/(?:^|[;&|]|\benv\s)\s*\w+=/.test(command)) return false;
+  // Command-runner prefixes execute an arbitrary following command, so
+  // the read-only verb that would otherwise match is irrelevant — bail.
+  // (`env` is already removed from the allowlist, but `env rm`, `nice
+  // rm`, `sudo tee`, `xargs rm`, `timeout 5 rm`, `nohup rm` etc. must
+  // never be classified read-only.)
+  if (/(?:^|[;&|]\s*)(?:env|sudo|doas|nice|ionice|chrt|nohup|setsid|stdbuf|unbuffer|timeout|xargs|time|watch|exec|eval|command|builtin)\b/.test(command)) {
+    return false;
+  }
   // A compound command (`cd /repo && git log`, `grep x | head`) is
   // read-only IFF EVERY segment is. The old code bailed on the first
   // `&`/`;`/`|` it saw, so the extremely common `cd DIR && <read>` was
@@ -841,7 +854,18 @@ export function isReadOnlyBash(command: string): boolean {
   // never wrongly skipped, we only stop over-firing on benign reads).
   const segments = command.split(/&&|\|\||[;|]/).map((s) => s.trim()).filter(Boolean);
   if (segments.length === 0) return false;
-  return segments.every((seg) => READ_ONLY_BASH_PATTERN.test(seg));
+  return segments.every((seg) => {
+    if (!READ_ONLY_BASH_PATTERN.test(seg)) return false;
+    // Per-segment guards for allowlisted verbs that read in their bare
+    // form but MUTATE with a flag/arg — scoped to the segment so an
+    // unrelated read elsewhere (`ls -s && date`) isn't penalized:
+    //   `date … -s|--set … ` (anywhere in args) or `date <digits>` sets
+    //   the system clock; a `--output=FILE` / `-O FILE` write flag
+    //   (e.g. `git diff --output=x`) writes a file with no shell redirect.
+    if (/^\s*date\b/.test(seg) && /(?:\s-s\b|\s--set\b|^\s*date\s+[0-9])/.test(seg)) return false;
+    if (/(?:^|\s)(?:--output(?:[=\s]|$)|-O\b)/.test(seg)) return false;
+    return true;
+  });
 }
 
 export function runBackup(

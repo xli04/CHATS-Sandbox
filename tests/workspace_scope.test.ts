@@ -375,3 +375,50 @@ describe("read-only filter: adversarial mutations must NOT be read-only", () => 
       assert.equal(isReadOnlyBash(cmd), true, JSON.stringify(cmd)));
   }
 });
+
+// ── Read-only filter: round-2 adversarial classes (3× Opus fuzzing) ──
+// Allowlist entries that READ in their bare form but MUTATE/EXECUTE with
+// args: env launches any command; node -e / python -c run arbitrary
+// code; date -s / hostname set system state; git --output writes a file.
+// Each must back up. Confirmed mutating in real bash by the fuzzers.
+describe("read-only filter: launcher/interpreter/mutating-flag classes", () => {
+  const mutations = [
+    ["env rm -rf /repo/x", "env launches rm"],
+    ["env -i rm -rf x", "env -i launches rm"],
+    ['env bash -c "rm x"', "env launches bash"],
+    ["cd /tmp && env rm -rf x", "compound env launcher"],
+    ["sudo rm -rf x", "sudo launcher"],
+    ["nice rm x", "nice launcher"],
+    ["timeout 5 rm x", "timeout launcher"],
+    ["xargs rm", "xargs launcher"],
+    ["git diff --output=/repo/x", "git --output= writes file"],
+    ["git log --output /repo/x", "git --output space form"],
+    ["git show --output=/repo/x", "git show --output"],
+    ['node -e "require(String.fromCharCode(102,115))"', "node -e arbitrary code"],
+    ['python3 -c "import sitecustomize"', "python -c import side effects"],
+    ['date -s "2020-01-01"', "date -s sets clock"],
+    ["date --set now", "date --set"],
+    ["date 010100002020", "date bare-numeric set"],
+    ["date +%s -s now", "date -s after +format"],
+    ["hostname newname", "hostname sets name"],
+    ["cd /tmp && date -s now", "compound date -s"],
+  ] as const;
+  for (const [cmd, label] of mutations) {
+    it(`backs up: ${label}`, () => assert.equal(isReadOnlyBash(cmd), false, JSON.stringify(cmd)));
+  }
+
+  // Bare reads of the SAME verbs must still skip.
+  const reads = [
+    ["date", "bare date"],
+    ["date +%s", "date format"],
+    ["date -u", "date -u read"],
+    ["date -d @123", "date -d parse"],
+    ["ls -s && date", "read with -s elsewhere"],
+    ["printenv PATH", "printenv read"],
+    ["git diff", "git diff read"],
+    ["git log -p | head", "git log pipe read"],
+  ] as const;
+  for (const [cmd, label] of reads) {
+    it(`skips: ${label}`, () => assert.equal(isReadOnlyBash(cmd), true, JSON.stringify(cmd)));
+  }
+});
