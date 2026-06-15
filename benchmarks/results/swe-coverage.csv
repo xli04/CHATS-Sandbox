@@ -1,0 +1,13 @@
+instance,agent,cond,wall,backup_bytes,actions,backup_ms,tiers,cov_handled,cov_total,cov_pct,test_pass,notes
+psf__requests-1766,hermes,git-add,65,1353877,19,521,n/a,8,10,80,pass,ec=0
+psf__requests-1766,hermes,plugin,76,1338307,10,1070,T0+T1+T2,10,10,100,pass,ec=0
+psf__requests-1921,hermes,git-add,114,1398592,23,619,n/a,10,14,71,pass,ec=0
+psf__requests-1921,hermes,plugin,221,1464727,14,1718,T1+T2,13,13,100,pass,ec=0
+pallets__flask-5014,hermes,git-add,124,1693952,20,629,n/a,8,10,80,pass,ec=0
+pallets__flask-5014,hermes,plugin,36,1728027,10,1097,T0+T1+T2,10,10,100,pass,ec=0
+pytest-dev__pytest-6202,hermes,git-add,302,2376772,30,1020,n/a,8,17,47,pass,ec=0
+pytest-dev__pytest-6202,hermes,plugin,417,2477602,22,120657,T0+T1+T2+T3,30,30,100,pass,ec=0
+pydata__xarray-4094,hermes,git-add,370,3257310,32,928,n/a,17,23,74,pass,ec=0
+pydata__xarray-4094,hermes,plugin,298,3270253,19,87549,T0+T1+T2+T3,28,28,100,pass,ec=0
+sphinx-doc__sphinx-8459,hermes,git-add,228,6848470,29,3047,n/a,14,15,93,pass,ec=0
+sphinx-doc__sphinx-8459,hermes,plugin,245,6936205,17,52081,T0+T1+T2,20,20,100,pass,ec=0

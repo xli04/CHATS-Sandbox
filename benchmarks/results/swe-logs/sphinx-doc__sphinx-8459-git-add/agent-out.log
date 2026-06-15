@@ -1,0 +1,122 @@
+/opt/miniconda3/lib/python3.11/site-packages/firecrawl/v2/types.py:1052: UserWarning: Field name "json" in "MonitorPageDiff" shadows an attribute in parent "BaseModel"
+  class MonitorPageDiff(BaseModel):
+/opt/miniconda3/lib/python3.11/site-packages/firecrawl/v2/types.py:1067: UserWarning: Field name "json" in "MonitorPageSnapshot" shadows an attribute in parent "BaseModel"
+  class MonitorPageSnapshot(BaseModel):
+  ┊ 📋 preparing todo…
+  ┊ 📋 plan      3 task(s)  0.0s
+  ┊ 🔎 preparing search_files…
+  ┊ 🔎 preparing search_files…
+  ┊ 🔎 grep      autodoc_type_aliases  1.8s
+  ┊ 🔎 grep      autodoc_typehints  1.1s
+  ┊ 📖 preparing read_file…
+  ┊ 📖 read      /testbed/sphinx/ext/autodoc/typehints.py  1.2s
+  ┊ 🔎 preparing search_files…
+  ┊ 🔎 preparing search_files…
+  ┊ 🔎 grep      def stringify  0.5s
+  ┊ 🔎 grep      autodoc_type_aliases  0.5s
+  ┊ 📖 preparing read_file…
+  ┊ 📖 read      /testbed/sphinx/util/typing.py  0.9s
+  ┊ 🔎 preparing search_files…
+  ┊ 🔎 grep      def signature  0.5s
+  ┊ 📖 preparing read_file…
+  ┊ 📖 read      /testbed/sphinx/util/inspect.py  0.9s
+  ┊ 🔎 preparing search_files…
+  ┊ 🔎 grep      def get_type_hints  0.5s
+
+╭─ ⚕ Hermes ───────────────────────────────────────────────────────────────────╮
+Now I understand the issue. In `record_typehints()` (in `typehints.py`), when the function's type annotations are stringified, `inspect.signature(obj)` is called **without** the `type_aliases` parameter. This means the type aliases from `autodoc_type_aliases` are not applied, so `JSONObject` gets resolved to `Dict[str, Any]` instead of `types.JSONObject`.
+
+Compare with `format_signature()` in `__init__.py` (line 1252) which correctly passes `type_aliases=self.config.autodoc_type_aliases`.
+
+Let me fix this:
+
+╰──────────────────────────────────────────────────────────────────────────────╯
+  ┊ 🔧 preparing patch…
+  ┊ 🔧 patch     /testbed/sphinx/ext/autodoc/typehints.py  1.5s
+  ┊ review diff
+a//testbed/sphinx/ext/autodoc/typehints.py → b//testbed/sphinx/ext/autodoc/typehints.py
+@@ -27,7 +27,7 @@
+         if callable(obj):
+             annotations = app.env.temp_data.setdefault('annotations', {})
+             annotation = annotations.setdefault(name, OrderedDict())
+-            sig = inspect.signature(obj)
++            sig = inspect.signature(obj, type_aliases=app.config.autodoc_type_aliases)
+             for param in sig.parameters.values():
+                 if param.annotation is not param.empty:
+                     annotation[param.name] = typing.stringify(param.annotation)
+
+╭─ ⚕ Hermes ───────────────────────────────────────────────────────────────────╮
+Now let me run the existing tests to make sure nothing breaks:
+
+╰──────────────────────────────────────────────────────────────────────────────╯
+  ┊ 💻 preparing terminal…
+  ┊ 💻 $         cd /testbed && python -m pytest tests/test_ext_autodoc_configs.py -x -q --no-header 2>&1 | tail -20  1.9s
+  ┊ 🔎 preparing search_files…
+  ┊ 🔎 grep      autodoc_type_aliases  0.5s
+  ┊ 📖 preparing read_file…
+  ┊ 📖 read      /testbed/tests/test_ext_autodoc_configs.py  0.9s
+
+╭─ ⚕ Hermes ───────────────────────────────────────────────────────────────────╮
+Let me also look at the test for `autodoc_typehints_description` and the target annotations module
+╰──────────────────────────────────────────────────────────────────────────────╯
+  ┊ 🔎 preparing search_files…
+  ┊ 📖 preparing read_file…
+  ┊ 🔎 grep      def test_autodoc_typehints_description  0.5s
+  ┊ 📖 read      /testbed/tests/roots/test-ext-autodoc/target/annotations.py  0.9s
+  ┊ 📖 preparing read_file…
+  ┊ 📖 read      /testbed/tests/test_ext_autodoc_configs.py  0.9s
+  ┊ 📖 preparing read_file…
+  ┊ 📖 read      /testbed/tests/roots/test-ext-autodoc/target/typehints.py  0.9s
+
+╭─ ⚕ Hermes ───────────────────────────────────────────────────────────────────╮
+Let me run the full autodoc test suite to ensure nothing is broken
+╰──────────────────────────────────────────────────────────────────────────────╯
+  ┊ 💻 preparing terminal…
+  ┊ 💻 $         cd /testbed && python -m pytest tests/test_ext_autodoc.py -x -q --no-header 2>&1 | tail -10  3.5s
+  ┊ 💻 preparing terminal…
+  ┊ 💻 $         cd /testbed && python -m pytest tests/test_ext_autodoc.py::test_autodoc -x -q --no-header 2>&1 | head -60  1.1s
+  ┊ 💻 preparing terminal…
+  ┊ 💻 $         cd /testbed && git stash && python -m pytest tests/test_ext_autodoc.py::test_autodoc -x -q --no-header 2>&1 | tail -5  1.1s
+
+╭─ ⚕ Hermes ───────────────────────────────────────────────────────────────────╮
+The test failure is pre-existing and unrelated to my change. Let me restore my fix
+╰──────────────────────────────────────────────────────────────────────────────╯
+  ┊ 💻 preparing terminal…
+  ┊ 💻 $         cd /testbed && git stash pop  0.3s
+  ┊ 💻 preparing terminal…
+  ┊ 💻 $         cd /testbed && python -m pytest tests/test_ext_autodoc_configs.py -x -q --no-header -k "typehints or type_aliases" 2>&1 | tail -15  1.1s
+
+╭─ ⚕ Hermes ───────────────────────────────────────────────────────────────────╮
+All 6 relevant tests pass. Let me also run the full configs test suite:
+
+╰──────────────────────────────────────────────────────────────────────────────╯
+  ┊ 💻 preparing terminal…
+  ┊ 💻 $         cd /testbed && python -m pytest tests/test_ext_autodoc_configs.py -q --no-header 2>&1 | tail -5  1.3s
+  ┊ 💻 preparing terminal…
+  ┊ 💻 $         cd /testbed && python -m pytest tests/test_ext_autodoc_configs.py tests/test_ext_autodoc.py -q --no-header --ignore-glob="*test_autodoc*" -k "not test_autodoc" 2>&1 | tail -5  3.6s
+
+╭─ ⚕ Hermes ───────────────────────────────────────────────────────────────────╮
+Let me verify the final diff:
+
+╰──────────────────────────────────────────────────────────────────────────────╯
+  ┊ 💻 preparing terminal…
+  ┊ 💻 $         cd /testbed && git diff  0.3s
+  ┊ 📋 preparing todo…
+  ┊ 📋 plan      3 task(s)  0.0s
+
+╭─ ⚕ Hermes ───────────────────────────────────────────────────────────────────╮
+Here's a summary of the fix:
+
+**Root cause:** In `sphinx/ext/autodoc/typehints.py`, the `record_typehints()` function calls `inspect.signature(obj)` **without** passing the `type_aliases` parameter. This means when `autodoc_typehints = 'description'`, the type annotations are resolved using the raw function's namespace (resolving `JSONObject` → `Dict[str, Any]`) rather than applying the user-configured `autodoc_type_aliases` mapping (`{'JSONObject': 'types.JSONObject'}`).
+
+The analogous call in `format_signature()` (in `__init__.py`, line 1252) already correctly passes `type_aliases=self.config.autodoc_type_aliases` — but `record_typehints` was missing it.
+
+Here's a summary of the fix:
+
+**Root cause:** In `sphinx/ext/autodoc/typehints.py`, the `record_typehints()` function calls `inspect.signature(obj)` **without** passing the `type_aliases` parameter. This means when `autodoc_typehints = 'description'`, the type annotations are resolved using the raw function's namespace (resolving `JSONObject` → `Dict[str, Any]`) rather than applying the user-configured `autodoc_type_aliases` mapping (`{'JSONObject': 'types.JSONObject'}`).
+
+The analogous call in `format_signature()` (in `__init__.py`, line 1252) already correctly passes `type_aliases=self.config.autodoc_type_aliases` — but `record_typehints` was missing it.
+
+**Fix:** A one-line change in `record_typehints()` at `sphinx/ext/autodoc/typehints.py:30` — pass `type_aliases=app.config.autodoc_type_aliases` to `inspect.signature(obj)`. This ensures that when `typing.get_type_hints()` evaluates string annotations (e.g., from `from __future__ import annotations`), it uses the alias mapping to resolve `JSONObject` to `'types.JSONObject'` instead of resolving it to the underlying `Dict[str, Any]` type.
+
+session_id: 20260615_205847_52e43d

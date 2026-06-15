@@ -1,0 +1,487 @@
+/opt/miniconda3/lib/python3.11/site-packages/firecrawl/v2/types.py:1052: UserWarning: Field name "json" in "MonitorPageDiff" shadows an attribute in parent "BaseModel"
+  class MonitorPageDiff(BaseModel):
+/opt/miniconda3/lib/python3.11/site-packages/firecrawl/v2/types.py:1067: UserWarning: Field name "json" in "MonitorPageSnapshot" shadows an attribute in parent "BaseModel"
+  class MonitorPageSnapshot(BaseModel):
+  ┊ 🔎 preparing search_files…
+  ┊ 🔎 grep      to_unstacked_dataset  0.9s
+  ┊ 📖 preparing read_file…
+  ┊ 📖 read      /testbed/xarray/core/dataarray.py  0.9s
+  ┊ 💻 preparing terminal…
+  ┊ 💻 $         cd /testbed && /opt/miniconda3/envs/testbed/bin/python -c "
+import numpy as np
+import xarray as xr
+
+arr = xr.DataArray(
+     np.arange(3),
+     coords=[('x', [0, 1, 2])],
+ )
+data = xr.Dataset({'a': arr, 'b': arr})
+print('Original dataset:')
+print(data)
+print()
+
+stacked = data.to_stacked_array('y', sample_dims=['x'])
+print('Stacked:')
+print(stacked)
+print()
+print('Index:', stacked.indexes['y'])
+print()
+
+try:
+    unstacked = stacked.to_unstacked_dataset('y')
+    print('Unstacked:')
+    print(unstacked)
+except Exception as e:
+    print(f'Error: {type(e).__name__}: {e}')
+"  1.7s
+  ┊ 💻 preparing terminal…
+  ┊ 💻 $         cd /testbed && /opt/miniconda3/envs/testbed/bin/python -c "
+import numpy as np
+import xarray as xr
+
+arr = xr.DataArray(
+     np.arange(3),
+     coords=[('x', [0, 1, 2])],
+ )
+data = xr.Dataset({'a': arr, 'b': arr})
+stacked = data.to_stacked_array('y', sample_dims=['x'])
+
+# Step through what happens in to_unstacked_dataset
+idx = stacked.indexes['y']
+print('idx:', idx)
+print('levels:', idx.levels)
+print('names:', idx.names)
+
+level_number = idx._get_level_number(0)
+print('level_number:', level_number)
+variables = idx.levels[level_number]
+variable_dim = idx.names[level_number]
+print('variables:', variables)
+print('variable_dim:', variable_dim)
+
+# For each variable
+for k in variables:
+    sel = stacked.sel({variable_dim: k})
+    print(f'\\nAfter sel({k}):')
+    print(sel)
+    print('coords:', dict(sel.coords))
+    squeezed = sel.squeeze(drop=True)
+    print(f'After squeeze:')
+    print(squeezed)
+    print('coords:', dict(squeezed.coords))
+"  1.8s
+  ┊ 💻 preparing terminal…
+  ┊ 💻 $         cd /testbed && /opt/miniconda3/envs/testbed/bin/python -c "
+import numpy as np
+import xarray as xr
+
+arr = xr.DataArray(
+    np.arange(6).reshape(2, 3),
+    coords=[('x', ['a', 'b']), ('y', [0, 1, 2])],
+)
+data = xr.Dataset({'a': arr, 'b': arr.isel(y=0)})
+print('Original dataset:')
+print(data)
+print()
+
+stacked = data.to_stacked_array('z', ['y'])
+print('Stacked:')
+print(stacked)
+print()
+print('Index:', stacked.indexes['z'])
+print()
+
+# Step through what happens in to_unstacked_dataset
+idx = stacked.indexes['z']
+print('idx:', idx)
+print('levels:', idx.levels)
+print('names:', idx.names)
+
+level_number = idx._get_level_number(0)
+variables = idx.levels[level_number]
+variable_dim = idx.names[level_number]
+print('variables:', variables)
+print('variable_dim:', variable_dim)
+
+# For each variable
+for k in variables:
+    sel = stacked.sel({variable_dim: k})
+    print(f'\\nAfter sel({k}):')
+    print(sel)
+    squeezed = sel.squeeze(drop=True)
+    print(f'After squeeze:')
+    print(squeezed)
+    print('coords:', {k: str(v.values) for k, v in squeezed.coords.items()})
+"  1.3s [exit 1]
+  ┊ 📖 preparing read_file…
+  ┊ 📖 read      /testbed/xarray/tests/test_dataset.py  0.9s
+  ┊ 🔎 preparing search_files…
+  ┊ 🔎 grep      def create_test_stacked_array  0.5s
+  ┊ 📖 preparing read_file…
+  ┊ 📖 read      /testbed/xarray/tests/test_dataset.py  0.9s
+  ┊ 💻 preparing terminal…
+  ┊ 💻 $         cd /testbed && /opt/miniconda3/envs/testbed/bin/python -c "
+import numpy as np
+import xarray as xr
+
+# Test the working multi-dim case to see the intermediate state
+arr = xr.DataArray(
+    np.arange(6).reshape(2, 3),
+    coords=[('x', ['a', 'b']), ('y', [0, 1, 2])],
+)
+data = xr.Dataset({'a': arr, 'b': arr})
+stacked = data.to_stacked_array('z', ['y'])
+print('Stacked:')
+print(stacked)
+print()
+
+idx = stacked.indexes['z']
+level_number = idx._get_level_number(0)
+variables = idx.levels[level_number]
+variable_dim = idx.names[level_number]
+
+for k in variables:
+    sel = stacked.sel({variable_dim: k})
+    print(f'After sel({k}):')
+    print(sel)
+    print('dims:', sel.dims)
+    squeezed = sel.squeeze(drop=True)
+    print(f'After squeeze:')
+    print(squeezed)
+    print('dims:', squeezed.dims)
+    print('coords:', {k: str(v.values) for k, v in squeezed.coords.items()})
+    print()
+"  1.3s
+  ┊ 💻 preparing terminal…
+  ┊ 💻 $         cd /testbed && /opt/miniconda3/envs/testbed/bin/python -c "
+import numpy as np
+import xarray as xr
+
+# Single-dim case - check if 'y' coordinate is the problem
+arr = xr.DataArray(
+     np.arange(3),
+     coords=[('x', [0, 1, 2])],
+ )
+data = xr.Dataset({'a': arr, 'b': arr})
+stacked = data.to_stacked_array('y', sample_dims=['x'])
+
+idx = stacked.indexes['y']
+level_number = idx._get_level_number(0)
+variables = idx.levels[level_number]
+variable_dim = idx.names[level_number]
+
+data_dict = {}
+for k in variables:
+    data_dict[k] = stacked.sel({variable_dim: k}).squeeze(drop=True)
+
+print('data_dict[a]:')
+print(data_dict['a'])
+print('coords:', dict(data_dict['a'].coords))
+print()
+print('data_dict[b]:')
+print(data_dict['b'])
+print('coords:', dict(data_dict['b'].coords))
+print()
+
+# Try with drop
+data_dict2 = {}
+for k in variables:
+    data_dict2[k] = stacked.sel({variable_dim: k}).squeeze(drop=True).drop('y')
+    
+print('data_dict2[a]:')
+print(data_dict2['a'])
+print()
+
+import warnings
+with warnings.catch_warnings():
+    warnings.simplefilter('ignore')
+    try:
+        unstacked = xr.Dataset(data_dict2)
+        print('Success!')
+        print(unstacked)
+    except Exception as e:
+        print(f'Error: {type(e).__name__}: {e}')
+"  1.6s
+  ┊ 💻 preparing terminal…
+  ┊ 💻 $         cd /testbed && /opt/miniconda3/envs/testbed/bin/python -c "
+import numpy as np
+import xarray as xr
+from xarray import DataArray
+
+# Multi-dim case - test with the fix
+arr = xr.DataArray(
+    np.arange(6).reshape(2, 3),
+    coords=[('x', ['a', 'b']), ('y', [0, 1, 2])],
+)
+data = xr.Dataset({'a': arr, 'b': arr})
+stacked = data.to_stacked_array('z', ['y'])
+
+idx = stacked.indexes['z']
+level_number = idx._get_level_number(0)
+variables = idx.levels[level_number]
+variable_dim = idx.names[level_number]
+
+data_dict = {}
+for k in variables:
+    data_dict[k] = stacked.sel({variable_dim: k}).squeeze(drop=True).drop('z')
+    
+unstacked = xr.Dataset(data_dict)
+print('Multi-dim case:')
+print(unstacked)
+print()
+print('Roundtrip successful:', data.identical(unstacked))
+"  1.3s [exit 1]
+  ┊ 💻 preparing terminal…
+  ┊ 💻 $         cd /testbed && /opt/miniconda3/envs/testbed/bin/python -c "
+import numpy as np
+import xarray as xr
+from xarray import DataArray
+
+# Multi-dim case - check if 'z' coord exists after sel/squeeze
+arr = xr.DataArray(
+    np.arange(6).reshape(2, 3),
+    coords=[('x', ['a', 'b']), ('y', [0, 1, 2])],
+)
+data = xr.Dataset({'a': arr, 'b': arr})
+stacked = data.to_stacked_array('z', ['y'])
+
+idx = stacked.indexes['z']
+level_number = idx._get_level_number(0)
+variables = idx.levels[level_number]
+variable_dim = idx.names[level_number]
+
+for k in variables:
+    result = stacked.sel({variable_dim: k}).squeeze(drop=True)
+    print(f'After squeeze({k}):')
+    print('coords:', list(result.coords))
+    print('dim' in result.coords, 'z' in result.coords)
+    print()
+    
+    # Try dropping 'dim' only if it exists
+    if 'z' in result.coords:
+        result = result.drop('z')
+    print('After conditional drop:')
+    print('coords:', list(result.coords))
+    print()
+"  1.3s
+  ┊ 💻 preparing terminal…
+  ┊ 💻 $         cd /testbed && /opt/miniconda3/envs/testbed/bin/python -c "
+import numpy as np
+import xarray as xr
+
+# Test the actual fix in the method
+# The fix: drop the dim coordinate if it still exists after squeeze
+arr = xr.DataArray(
+     np.arange(3),
+     coords=[('x', [0, 1, 2])],
+ )
+data = xr.Dataset({'a': arr, 'b': arr})
+stacked = data.to_stacked_array('y', sample_dims=['x'])
+
+# Apply fix
+idx = stacked.indexes['y']
+level_number = idx._get_level_number(0)
+variables = idx.levels[level_number]
+variable_dim = idx.names[level_number]
+
+data_dict = {}
+for k in variables:
+    v = stacked.sel({variable_dim: k}).squeeze(drop=True)
+    if 'y' in v.coords and 'y' not in v.dims:
+        v = v.drop('y')
+    data_dict[k] = v
+
+unstacked = xr.Dataset(data_dict)
+print('Result:')
+print(unstacked)
+print()
+print('Roundtrip successful:', data.identical(unstacked))
+"  1.3s
+  ┊ 💻 preparing terminal…
+  ┊ 💻 $         cd /testbed && /opt/miniconda3/envs/testbed/bin/python -c "
+import numpy as np
+import xarray as xr
+from xarray import DataArray
+
+# Test 1: Same dimensions for all variables
+print('=== Test 1: Same dimensions ===')
+arr = xr.DataArray(
+    np.arange(6).reshape(2, 3),
+    coords=[('x', ['a', 'b']), ('y', [0, 1, 2])],
+)
+data = xr.Dataset({'a': arr, 'b': arr})
+stacked = data.to_stacked_array('z', ['y'])
+
+idx = stacked.indexes['z']
+level_number = idx._get_level_number(0)
+variables = idx.levels[level_number]
+variable_dim = idx.names[level_number]
+
+data_dict = {}
+for k in variables:
+    v = stacked.sel({variable_dim: k}).squeeze(drop=True)
+    if 'z' in v.coords:
+        v = v.drop('z')
+    data_dict[k] = v
+
+unstacked = xr.Dataset(data_dict)
+print('Result:', data.identical(unstacked))
+
+# Test 2: Different dimensions (as in test_to_stacked_array_to_unstacked_dataset_different_dimension)
+print()
+print('=== Test 2: Different dimensions ===')
+from xarray.tests.test_dataset import create_test_stacked_array
+a, b = create_test_stacked_array()
+D = xr.Dataset({'a': a, 'b': b.isel(y=0)})
+y = D.to_stacked_array('features', ['x'])
+
+idx = y.indexes['features']
+level_number = idx._get_level_number(0)
+variables = idx.levels[level_number]
+variable_dim = idx.names[level_number]
+
+data_dict = {}
+for k in variables:
+    v = y.sel({variable_dim: k}).squeeze(drop=True)
+    if 'features' in v.coords:
+        v = v.drop('features')
+    data_dict[k] = v
+
+x = xr.Dataset(data_dict)
+print('Result:', D.identical(x))
+
+# Test 3: Single-dim variables (the bug case)
+print()
+print('=== Test 3: Single-dim variables ===')
+arr = xr.DataArray(
+     np.arange(3),
+     coords=[('x', [0, 1, 2])],
+ )
+data = xr.Dataset({'a': arr, 'b': arr})
+stacked = data.to_stacked_array('y', sample_dims=['x'])
+
+idx = stacked.indexes['y']
+level_number = idx._get_level_number(0)
+variables = idx.levels[level_number]
+variable_dim = idx.names[level_number]
+
+data_dict = {}
+for k in variables:
+    v = stacked.sel({variable_dim: k}).squeeze(drop=True)
+    if 'y' in v.coords:
+        v = v.drop('y')
+    data_dict[k] = v
+
+unstacked = xr.Dataset(data_dict)
+print('Result:', data.identical(unstacked))
+"  2.5s
+  ┊ 💻 preparing terminal…
+  ┊ 💻 $         cd /testbed && /opt/miniconda3/envs/testbed/bin/python -c "
+import numpy as np
+import xarray as xr
+
+arr = xr.DataArray(
+    np.arange(6).reshape(2, 3),
+    coords=[('x', ['a', 'b']), ('y', [0, 1, 2])],
+)
+data = xr.Dataset({'a': arr, 'b': arr})
+print('Original:')
+print(data)
+print()
+
+stacked = data.to_stacked_array('z', ['y'])
+print('Stacked:')
+print(stacked)
+print()
+
+idx = stacked.indexes['z']
+level_number = idx._get_level_number(0)
+variables = idx.levels[level_number]
+variable_dim = idx.names[level_number]
+
+data_dict = {}
+for k in variables:
+    v = stacked.sel({variable_dim: k}).squeeze(drop=True)
+    if 'z' in v.coords:
+        v = v.drop('z')
+    data_dict[k] = v
+
+unstacked = xr.Dataset(data_dict)
+print('Unstacked:')
+print(unstacked)
+print()
+print('Are they identical?', data.identical(unstacked))
+print('Are they equal?', data.equals(unstacked))
+"  2.0s
+
+╭─ ⚕ Hermes ───────────────────────────────────────────────────────────────────╮
+Now I understand the issue. When all variables in the dataset share exactly the same single dimension, `to_stacked_array` creates a MultiIndex with only the 'variable' level (no other dimension levels). When `to_unstacked_dataset` then `sel`s by variable, the stacked dimension becomes a scalar coordinate that conflicts between variables. The fix is to drop that leftover coordinate.
+
+Let me implement the fix
+╰──────────────────────────────────────────────────────────────────────────────╯
+  ┊ 🔧 preparing patch…
+  ┊ 🔧 patch     /testbed/xarray/core/dataarray.py  1.4s
+  ┊ review diff
+a//testbed/xarray/core/dataarray.py → b//testbed/xarray/core/dataarray.py
+@@ -1962,6 +1962,13 @@
+         data_dict = {}
+         for k in variables:
+             data_dict[k] = self.sel({variable_dim: k}).squeeze(drop=True)
++
++        # If dim still exists as a non-dimension coordinate (e.g., when all
++        # variables share the same sample dimensions with no extra dims),
++        # drop it to avoid merge conflicts.
++        for k, v in data_dict.items():
++            if dim in v.coords and dim not in v.dims:
++                data_dict[k] = v.drop(dim)
+ 
+         # unstacked dataset
+         return Dataset(data_dict)
+
+╭─ ⚕ Hermes ───────────────────────────────────────────────────────────────────╮
+Now let's test the fix
+╰──────────────────────────────────────────────────────────────────────────────╯
+  ┊ 💻 preparing terminal…
+  ┊ 💻 $         cd /testbed && /opt/miniconda3/envs/testbed/bin/python -c "
+import numpy as np
+import xarray as xr
+
+# MCVE from the issue
+arr = xr.DataArray(
+     np.arange(3),
+     coords=[('x', [0, 1, 2])],
+ )
+data = xr.Dataset({'a': arr, 'b': arr})
+stacked = data.to_stacked_array('y', sample_dims=['x'])
+unstacked = stacked.to_unstacked_dataset('y')
+print('Issue MCVE result:')
+print(unstacked)
+print()
+print('Roundtrip successful:', data.identical(unstacked))
+"  1.3s
+
+╭─ ⚕ Hermes ───────────────────────────────────────────────────────────────────╮
+Now let's run the existing tests
+╰──────────────────────────────────────────────────────────────────────────────╯
+  ┊ 💻 preparing terminal…
+  ┊ 💻 $         cd /testbed && /opt/miniconda3/envs/testbed/bin/python -m pytest xarray/tests/test_dataset.py::TestDataset::test_to_stacked_array_to_unstacked_dataset xarray/tests/test_dataset.py::TestDataset::test_to_stacked_array_to_unstacked_dataset_different_dimension xarray/tests/test_dataarray.py::TestDataArray::test_to_unstacked_dataset_raises_value_error -v 2>&1  66.4s
+
+╭─ ⚕ Hermes ───────────────────────────────────────────────────────────────────╮
+All existing tests pass. Let me also run a few more edge case tests
+
+╰──────────────────────────────────────────────────────────────────────────────╯
+  ┊ 💻 preparing terminal…
+  ┊ 💻 $         cd /testbed && /opt/miniconda3/envs/testbed/bin/python -m pytest xarray/tests/test_units.py -k "test_to_unstacked_dataset" -v 2>&1 | tail -20  27.6s
+
+╭─ ⚕ Hermes ───────────────────────────────────────────────────────────────────╮
+All tests pass. The fix is a targeted 8-line addition at the end of the `to_unstacked_dataset` method. Here's what was happening:
+
+**Root cause**: When `Dataset.to_stacked_array()` is called on variables that only have the sample dimension (no extra dimensions), the resulting MultiIndex only has a `variable` level — there's no additional level for other dims. When `to_unstacked_dataset()` then does `self.sel({variable_dim: k})`, the stacked dimension `dim` (e.g., `'y'`) gets reduced from a dimension to a scalar coordinate (like `('a',)` or `('b',)`). Since each variable gets a different scalar value for this coordinate, constructing the `Dataset` from the dict fails with a `MergeError`.
+
+All tests pass. The fix is a targeted 8-line addition at the end of the `to_unstacked_dataset` method. Here's what was happening:
+
+**Root cause**: When `Dataset.to_stacked_array()` is called on variables that only have the sample dimension (no extra dimensions), the resulting MultiIndex only has a `variable` level — there's no additional level for other dims. When `to_unstacked_dataset()` then does `self.sel({variable_dim: k})`, the stacked dimension `dim` (e.g., `'y'`) gets reduced from a dimension to a scalar coordinate (like `('a',)` or `('b',)`). Since each variable gets a different scalar value for this coordinate, constructing the `Dataset` from the dict fails with a `MergeError`.
+
+**Fix**: After extracting each variable, check if `dim` still exists as a non-dimension coordinate and drop it if so. This leftover coordinate is not needed — it's an artifact of the selection process from the MultiIndex.
+
+session_id: 20260615_205222_f8ae4e

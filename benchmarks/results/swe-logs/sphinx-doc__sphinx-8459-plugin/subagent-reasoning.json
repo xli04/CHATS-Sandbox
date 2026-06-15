@@ -1,0 +1,14 @@
+[
+  {
+    "action": "action_016_20260615210856",
+    "description": "Pre-action backup for edit of /tmp/outside_drill.txt (Category A: local file write outside workspace). File does not currently exist \u2014 upcoming action will CREATE it (old_string='', new_string='drill'). No pre-existing state to snapshot.",
+    "backup_commands": [
+      "mkdir -p /testbed/.chats-sandbox/backups/action_016_20260615210856",
+      "ls -la /tmp/outside_drill.txt 2>&1 (confirmed: file does not exist)"
+    ],
+    "recovery_commands": [
+      "rm -f /tmp/outside_drill.txt"
+    ],
+    "live_restore": false
+  }
+]

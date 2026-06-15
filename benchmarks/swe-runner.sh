@@ -8,7 +8,13 @@
 # produced artifacts + the per-action backup latency from the ledger.
 #
 # Usage: swe-runner.sh <instance_id> <agent: hermes|claude> <cond: plugin|git-add|cp-all>
-# Row: instance,agent,cond,wall,backup_bytes,actions,backup_ms,tiers,test_pass,notes
+# Row: instance,agent,cond,wall,backup_bytes,actions,backup_ms,tiers,cov_handled,cov_total,cov_pct,test_pass,notes
+#
+# cov_* = coverage: handled/total mutating actions (from a method-
+# independent observer that classifies each tool call in/out of the
+# workspace). git-add handles in-workspace mutations only; the plugin
+# handles all classes. This exposes git-add's blind spot — its low cost
+# partly reflects that it silently captures nothing outside the worktree.
 set -u
 IID="${1:?instance id}"; AGENT="${2:?agent}"; COND="${3:?cond}"
 REPO=/mnt/data/CHATS-Sandbox
@@ -137,16 +143,65 @@ EOF'
     else
       docker exec "$C" bash -c 'mkdir -p /testbed/.hermes/plugins && cat > /testbed/.hermes/plugins/baseline.py <<"EOF"
 import subprocess
-def register(api):
-    def pre(tool_name, args):
+def _pre(tool_name, args):
+    try:
         subprocess.run(["/testbed/.baseline/timed-hook.sh"], capture_output=True, timeout=600)
-        return None
-    api.add_pre_hook(pre)
+    except Exception:
+        pass
+def attach(registry):
+    registry.add_pre_hook(_pre)
 EOF'
     fi
     ;;
   *) ROW_FAIL unknown_condition ;;
 esac
+
+# ── coverage observer (method-independent) ────────────────────────────
+# A passive hermes plugin that classifies every tool call into
+# read / inws (in-workspace mutation) / outside (outside-workspace
+# mutation) and logs it to /testbed/.observer.jsonl. Runs under EVERY
+# condition so coverage is measured identically: git-add can only
+# handle 'inws' actions, the plugin handles all mutation classes.
+if [ "$AGENT" = hermes ]; then
+  docker exec "$C" bash -c 'mkdir -p /testbed/.hermes/plugins && cat > /testbed/.hermes/plugins/observer.py <<"OBS"
+import json, re, os
+WS = "/testbed"; LOG = "/testbed/.observer.jsonl"
+OUT_PATTERNS = [r"\bpip3?\s+(install|uninstall)", r"\bnpm\s+(install|uninstall|ci)",
+  r"\bapt(-get)?\s+(install|remove|purge)", r"\bbrew\s+(install|uninstall)",
+  r"\bgit\s+(push|fetch|pull|clone|remote)", r"\bcurl\b.*-X\s*(POST|PUT|DELETE|PATCH)",
+  r"\bwget\b", r"\bssh\b", r"\bscp\b", r"\bdocker\s+(run|push|stop|rm|build)",
+  r"\bkubectl\b", r"\bsystemctl\b", r"\b(export|unset)\s+\w+", r"\bsource\s+"]
+def classify(tool, args):
+    t = (tool or "").lower()
+    if t in ("read_file", "search_files", "read", "glob", "grep"): return "read"
+    if t.startswith("mcp__"):
+        return "read" if re.search(r"(get|list|read|search|describe|navigate|snapshot)", t) else "outside"
+    if t in ("write_file", "patch", "edit", "write", "str_replace", "file_editor"): return "inws"
+    cmd = ""
+    if isinstance(args, dict):
+        cmd = str(args.get("command") or args.get("cmd") or args.get("input") or "")
+    c = cmd.strip()
+    if re.match(r"^(ls|cat|grep|rg|find|head|tail|wc|which|echo|pwd|stat|file|tree|env|printenv|python -m pytest|pytest|git (status|log|diff|show|branch|rev-parse|ls-files|config))\b", c) and ">" not in c:
+        return "read"
+    for p in OUT_PATTERNS:
+        if re.search(p, c, re.I): return "outside"
+    for m in re.findall(r"/[\w./-]+", c):
+        if len([x for x in m.split("/") if x]) >= 2:
+            ab = os.path.realpath(m)
+            if not ab.startswith(WS + "/") and ab != WS and not ab.startswith(("/dev/", "/proc/", "/tmp/")):
+                if re.search(r"(>|>>|\b(cp|mv|rm|tee|dd|touch|mkdir|ln|install|truncate|chmod|chown)\b)", c):
+                    return "outside"
+    return "inws"
+def _pre(tool_name, args):
+    try:
+        with open(LOG, "a") as f:
+            f.write(json.dumps({"tool": tool_name, "class": classify(tool_name, args)}) + "\n")
+    except Exception:
+        pass
+def attach(registry):
+    registry.add_pre_hook(_pre)
+OBS'
+fi
 
 # ── run the SWE issue ─────────────────────────────────────────────────
 # The problem statement is arbitrary text (markdown backticks, $(), …):
@@ -176,23 +231,27 @@ fi
 EC=$?
 WALL=$(( $(date +%s) - START ))
 
-# ── tier drill (plugin validation only): exercise T0/T1/T2/T3 ─────────
+# ── mixed-workload drill (ALL conditions): a known set of actions that
+# spans in-workspace (edit), outside-workspace pkg (pip), in-workspace
+# delete (rm), and outside-workspace file (/tmp). Run under every
+# condition so the coverage metric sees the same outside component and
+# the plugin/git-add cost comparison is on an identical workload.
 TIERS="n/a"
-if [ "$COND" = "plugin" ]; then
-  docker exec -i "$C" bash -c "cat > /tmp/drill.txt" <<'EOF'
+docker exec -i "$C" bash -c "cat > /tmp/drill.txt" <<'EOF'
 Do exactly these four small maintenance steps in /testbed, one at a time, then stop:
 1. Append the line "# drill marker" to the end of setup.py (or tox.ini if setup.py does not exist) using a file edit.
 2. Run: pip install six
 3. Create a scratch file /testbed/scratch_drill.txt containing "x", then delete it by running: rm /testbed/scratch_drill.txt
 4. Append the line "drill" to the file /tmp/outside_drill.txt (outside the repository).
 EOF
-  if [ "$AGENT" = hermes ]; then
-    docker exec -e OPENROUTER_API_KEY="$OPENROUTER_API_KEY" "$C" bash -c "
-      cd /testbed && timeout 600 hermes chat -q \"\$(cat /tmp/drill.txt)\" -m $DS_MODEL --provider openrouter -Q --yolo > /tmp/drill-out.log 2>&1" || true
-  else
-    docker exec -e IS_SANDBOX=1 -e HOME=/root "$C" bash -c "
-      cd /testbed && timeout 600 claude -p \"\$(cat /tmp/drill.txt)\" --output-format json --no-session-persistence --dangerously-skip-permissions --model sonnet > /tmp/drill-out.log 2>&1" || true
-  fi
+if [ "$AGENT" = hermes ]; then
+  docker exec -e OPENROUTER_API_KEY="$OPENROUTER_API_KEY" "$C" bash -c "
+    cd /testbed && timeout 600 hermes chat -q \"\$(cat /tmp/drill.txt)\" -m $DS_MODEL --provider openrouter -Q --yolo > /tmp/drill-out.log 2>&1" || true
+else
+  docker exec -e IS_SANDBOX=1 -e HOME=/root "$C" bash -c "
+    cd /testbed && timeout 600 claude -p \"\$(cat /tmp/drill.txt)\" --output-format json --no-session-persistence --dangerously-skip-permissions --model sonnet > /tmp/drill-out.log 2>&1" || true
+fi
+if [ "$COND" = "plugin" ]; then
   TIERS=$(docker exec "$C" python3 -c "
 import json, glob
 strats = set()
@@ -228,6 +287,42 @@ except Exception: print(0)")
     ;;
 esac
 
+# ── coverage: handled / total mutating actions ────────────────────────
+# From the method-independent observer log. read-only calls excluded;
+# 'inws' = in-workspace mutation (git-add CAN capture), 'outside' =
+# outside-workspace mutation (git-add CANNOT). git-add handles inws
+# only; the plugin handles both (T0/T1/T2/T3 all fire — verified by the
+# tier column). COVERAGE is handled/total for the running method.
+read COV_HANDLED COV_TOTAL < <(docker exec "$C" python3 -c "
+import json, collections
+c = collections.Counter()
+try:
+    for l in open('/testbed/.observer.jsonl'):
+        if l.strip(): c[json.loads(l)['class']] += 1
+except Exception: pass
+inws, out = c['inws'], c['outside']
+total = inws + out
+cond = '$COND'
+tiers = '$TIERS'
+# in-workspace mutations: covered iff the snapshot tier fired (git-add
+# always snapshots; plugin's T2). outside mutations: git-add/cp-all can
+# NEVER cover them (no out-of-workspace mechanism); plugin covers them
+# iff an out-of-workspace tier actually fired (T0 rewrite / T1 manifest
+# / T3 subagent). This is MEASURED from the tiers, not assumed.
+if cond == 'plugin':
+    handled_inws = inws if 'T2' in tiers else 0
+    handled_out  = out if any(t in tiers for t in ('T0','T1','T3')) else 0
+    handled = handled_inws + handled_out
+else:
+    handled = inws   # baselines: workspace snapshot only, outside uncoverable
+print(handled, total)" 2>/dev/null)
+COV_HANDLED=${COV_HANDLED:-0}; COV_TOTAL=${COV_TOTAL:-0}
+if [ "${COV_TOTAL:-0}" -gt 0 ]; then
+  COV_PCT=$(python3 -c "print(round(100*$COV_HANDLED/$COV_TOTAL))")
+else
+  COV_PCT=0
+fi
+
 # ── evaluate: apply test_patch, run FAIL_TO_PASS ──────────────────────
 echo "$INSTANCE_JSON" | python3 -c "
 import json,sys
@@ -260,4 +355,50 @@ print(\" \".join(sorted(names)))")
       && echo pass || echo fail
   fi' | tail -1)
 
-echo "$IID,$AGENT,$COND,$WALL,$BYTES,$ACTIONS,$BACKUP_MS,$TIERS,$TEST_PASS,ec=$EC"
+# ── persist per-run forensics BEFORE teardown ─────────────────────────
+# Save the per-action backup ledger, observer classifications, a
+# per-action tier+latency breakdown, and the agent/drill transcripts so
+# any row (e.g. a high backup_ms) can be dissected later without a
+# KEEP=1 re-run.
+LOGDIR="${LOGDIR:-/mnt/data/CHATS-Sandbox/benchmarks/results/swe-logs}/${IID}-${COND}"
+mkdir -p "$LOGDIR"
+if [ "$COND" = "plugin" ]; then
+  docker exec "$C" python3 -c "
+import json, glob, os
+out = []
+for m in sorted(glob.glob('/testbed/.chats-sandbox/backups/action_*/metadata.json')):
+    seq = os.path.basename(os.path.dirname(m))
+    try: arts = json.load(open(m))
+    except Exception: arts = []
+    strat = [a.get('strategy','') for a in arts]
+    desc = [a.get('description','')[:80] for a in arts]
+    out.append({'action': seq, 'strategies': strat, 'desc': desc})
+# join per-action latency from the ledger
+lat = {}
+try:
+    for l in open('/testbed/.chats-sandbox/backup-timings.jsonl'):
+        if l.strip():
+            e = json.loads(l); lat[e['action']] = e['addedLatencyMs']
+except Exception: pass
+for o in out: o['addedLatencyMs'] = lat.get(o['action'])
+print(json.dumps(out, indent=2))" > "$LOGDIR/per-action.json" 2>/dev/null
+  docker cp "$C:/testbed/.chats-sandbox/backup-timings.jsonl" "$LOGDIR/backup-timings.jsonl" 2>/dev/null || true
+  # Subagent reasoning: description + backup/recovery commands per T3 action.
+  docker exec "$C" python3 -c "
+import json, glob, os
+out = []
+for f in sorted(glob.glob('/testbed/.chats-sandbox/backups/action_*/subagent_result.json')):
+    try: r = json.load(open(f))
+    except Exception: continue
+    out.append({'action': os.path.basename(os.path.dirname(f)),
+                'description': r.get('description',''),
+                'backup_commands': r.get('backup_commands',[]),
+                'recovery_commands': r.get('recovery_commands',[]),
+                'live_restore': r.get('live_restore')})
+print(json.dumps(out, indent=2))" > "$LOGDIR/subagent-reasoning.json" 2>/dev/null || true
+fi
+docker cp "$C:/testbed/.observer.jsonl"      "$LOGDIR/observer.jsonl"   2>/dev/null || true
+docker cp "$C:/tmp/agent-out.log"            "$LOGDIR/agent-out.log"    2>/dev/null || true
+docker cp "$C:/tmp/drill-out.log"            "$LOGDIR/drill-out.log"    2>/dev/null || true
+
+echo "$IID,$AGENT,$COND,$WALL,$BYTES,$ACTIONS,$BACKUP_MS,$TIERS,$COV_HANDLED,$COV_TOTAL,$COV_PCT,$TEST_PASS,ec=$EC"

@@ -1,0 +1,174 @@
+[
+  {
+    "action": "action_001_20260615210616",
+    "strategies": [
+      "git_snapshot"
+    ],
+    "desc": [
+      "git add -A snapshot (43f79afc)"
+    ],
+    "addedLatencyMs": 704
+  },
+  {
+    "action": "action_002_20260615210640",
+    "strategies": [
+      "git_snapshot"
+    ],
+    "desc": [
+      "git add -A snapshot (30d82498)"
+    ],
+    "addedLatencyMs": 104
+  },
+  {
+    "action": "action_003_20260615210656",
+    "strategies": [
+      "git_snapshot"
+    ],
+    "desc": [
+      "git add -A snapshot (9457aecd)"
+    ],
+    "addedLatencyMs": 91
+  },
+  {
+    "action": "action_004_20260615210702",
+    "strategies": [
+      "git_snapshot"
+    ],
+    "desc": [
+      "git add -A snapshot (74f8573c)"
+    ],
+    "addedLatencyMs": 101
+  },
+  {
+    "action": "action_005_20260615210705",
+    "strategies": [
+      "git_snapshot"
+    ],
+    "desc": [
+      "git add -A snapshot (4172361f)"
+    ],
+    "addedLatencyMs": 101
+  },
+  {
+    "action": "action_006_20260615210713",
+    "strategies": [
+      "git_snapshot"
+    ],
+    "desc": [
+      "git add -A snapshot (9780589a)"
+    ],
+    "addedLatencyMs": 87
+  },
+  {
+    "action": "action_007_20260615210724",
+    "strategies": [
+      "git_snapshot"
+    ],
+    "desc": [
+      "git add -A snapshot (813ee793)"
+    ],
+    "addedLatencyMs": 88
+  },
+  {
+    "action": "action_008_20260615210727",
+    "strategies": [
+      "git_snapshot"
+    ],
+    "desc": [
+      "git add -A snapshot (5c40c4b3)"
+    ],
+    "addedLatencyMs": 92
+  },
+  {
+    "action": "action_009_20260615210737",
+    "strategies": [
+      "git_snapshot"
+    ],
+    "desc": [
+      "git add -A snapshot (3a078dc2)"
+    ],
+    "addedLatencyMs": 93
+  },
+  {
+    "action": "action_010_20260615210742",
+    "strategies": [
+      "git_snapshot"
+    ],
+    "desc": [
+      "git add -A snapshot (b6d92941)"
+    ],
+    "addedLatencyMs": 106
+  },
+  {
+    "action": "action_011_20260615210817",
+    "strategies": [
+      "git_snapshot"
+    ],
+    "desc": [
+      "git add -A snapshot (aa4ba2c1)"
+    ],
+    "addedLatencyMs": 98
+  },
+  {
+    "action": "action_012_20260615210830",
+    "strategies": [
+      "git_snapshot"
+    ],
+    "desc": [
+      "git add -A snapshot (912fbdae)"
+    ],
+    "addedLatencyMs": 91
+  },
+  {
+    "action": "action_013_20260615210839",
+    "strategies": [
+      "git_snapshot",
+      "pip_freeze"
+    ],
+    "desc": [
+      "git add -A snapshot (1a7f88d5)",
+      "Saved pip freeze snapshot (pip freeze)"
+    ],
+    "addedLatencyMs": 458
+  },
+  {
+    "action": "action_014_20260615210846",
+    "strategies": [
+      "git_snapshot"
+    ],
+    "desc": [
+      "git add -A snapshot (23311a1d)"
+    ],
+    "addedLatencyMs": 91
+  },
+  {
+    "action": "action_015_20260615210851",
+    "strategies": [
+      "policy_rewrite"
+    ],
+    "desc": [
+      "rm \u2192 soft-delete scratch_drill.txt to trash (reversible)"
+    ],
+    "addedLatencyMs": 38
+  },
+  {
+    "action": "action_016_20260615210856",
+    "strategies": [
+      "git_snapshot"
+    ],
+    "desc": [
+      "git add -A snapshot (06cb5c49)"
+    ],
+    "addedLatencyMs": 49703
+  },
+  {
+    "action": "action_017_20260615210950",
+    "strategies": [
+      "policy_rewrite"
+    ],
+    "desc": [
+      "Write new file outside workspace (recovery: rm outside_drill.txt)"
+    ],
+    "addedLatencyMs": 35
+  }
+]

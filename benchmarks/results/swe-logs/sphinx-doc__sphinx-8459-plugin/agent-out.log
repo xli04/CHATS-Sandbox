@@ -1,0 +1,180 @@
+/opt/miniconda3/lib/python3.11/site-packages/firecrawl/v2/types.py:1052: UserWarning: Field name "json" in "MonitorPageDiff" shadows an attribute in parent "BaseModel"
+  class MonitorPageDiff(BaseModel):
+/opt/miniconda3/lib/python3.11/site-packages/firecrawl/v2/types.py:1067: UserWarning: Field name "json" in "MonitorPageSnapshot" shadows an attribute in parent "BaseModel"
+  class MonitorPageSnapshot(BaseModel):
+
+╭─ ⚕ Hermes ───────────────────────────────────────────────────────────────────╮
+Looking at this issue, I need to trace how `autodoc_type_aliases` interacts with `autodoc_typehints='description'`. Let me explore the codebase.
+
+╰──────────────────────────────────────────────────────────────────────────────╯
+  ┊ 📋 preparing todo…
+  ┊ 🔎 preparing search_files…
+  ┊ 🔎 preparing search_files…
+  ┊ 🔎 preparing search_files…
+  ┊ 📖 preparing read_file…
+  ┊ 📋 preparing todo…
+  ┊ 🔎 preparing search_files…
+  ┊ 📖 preparing read_file…
+  ┊ 🔎 preparing search_files…
+
+╭─ ⚕ Hermes ───────────────────────────────────────────────────────────────────╮
+Now I understand the issue. In `record_typehints()` (line 30), `inspect.signature(obj)` is called without `type_aliases`, so the type aliases are never applied when recording type hints for the "description" mode. Let me fix this.
+
+
+╰──────────────────────────────────────────────────────────────────────────────╯
+  ┊ 📋 preparing todo…
+  ┊ 🔧 preparing patch…
+  ┊ review diff
+a//testbed/sphinx/ext/autodoc/typehints.py → b//testbed/sphinx/ext/autodoc/typehints.py
+@@ -27,7 +27,7 @@
+         if callable(obj):
+             annotations = app.env.temp_data.setdefault('annotations', {})
+             annotation = annotations.setdefault(name, OrderedDict())
+-            sig = inspect.signature(obj)
++            sig = inspect.signature(obj, type_aliases=app.config.autodoc_type_aliases)
+             for param in sig.parameters.values():
+                 if param.annotation is not param.empty:
+                     annotation[param.name] = typing.stringify(param.annotation)
+
+╭─ ⚕ Hermes ───────────────────────────────────────────────────────────────────╮
+Now let me verify the fix by looking at the existing tests and running them.
+
+
+╰──────────────────────────────────────────────────────────────────────────────╯
+  ┊ 📋 preparing todo…
+  ┊ 🔎 preparing search_files…
+  ┊ 📖 preparing read_file…
+  ┊ 📖 preparing read_file…
+
+╭─ ⚕ Hermes ───────────────────────────────────────────────────────────────────╮
+Let me run the existing test to make sure it still passes:
+
+
+╰──────────────────────────────────────────────────────────────────────────────╯
+  ┊ 💻 preparing terminal…
+
+╭─ ⚕ Hermes ───────────────────────────────────────────────────────────────────╮
+Now let me check if there are tests that combine `autodoc_typehints='description'` with `autodoc_type_aliases`:
+
+
+
+
+
+╰──────────────────────────────────────────────────────────────────────────────╯
+  ┊ 🔎 preparing search_files…
+  ┊ 🔎 preparing search_files…
+  ┊ 📖 preparing read_file…
+  ┊ 📖 preparing read_file…
+  ┊ 💻 preparing terminal…
+
+╭─ ⚕ Hermes ───────────────────────────────────────────────────────────────────╮
+Let me verify the fix looks correct:
+
+
+
+
+
+╰──────────────────────────────────────────────────────────────────────────────╯
+  ┊ 📖 preparing read_file…
+
+╭─ ⚕ Hermes ───────────────────────────────────────────────────────────────────╮
+Let me run the broader autodoc test suite to make sure nothing is broken:
+
+
+
+
+
+╰──────────────────────────────────────────────────────────────────────────────╯
+  ┊ 💻 preparing terminal…
+  ┊ 💻 preparing terminal…
+
+╭─ ⚕ Hermes ───────────────────────────────────────────────────────────────────╮
+All 17 tests pass. Let me also run the broader autodoc test suite:
+
+
+
+
+
+
+╰──────────────────────────────────────────────────────────────────────────────╯
+  ┊ 💻 preparing terminal…
+  ┊ 💻 preparing terminal…
+  ┊ 💻 preparing terminal…
+
+╭─ ⚕ Hermes ───────────────────────────────────────────────────────────────────╮
+That failure is pre-existing (unrelated warning about `sphinx.addnodes` node class 'meta'). Let me verify by checking if it fails without my change too:
+
+
+
+
+
+╰──────────────────────────────────────────────────────────────────────────────╯
+  ┊ 💻 preparing terminal…
+
+╭─ ⚕ Hermes ───────────────────────────────────────────────────────────────────╮
+Confirmed - that failure is pre-existing. Let me run the typehints-specific tests to validate my fix:
+
+
+
+
+
+
+
+
+
+╰──────────────────────────────────────────────────────────────────────────────╯
+  ┊ 💻 preparing terminal…
+
+╭─ ⚕ Hermes ───────────────────────────────────────────────────────────────────╮
+All 3 relevant tests pass. Let me verify the final state of the fix:
+
+
+
+
+
+
+
+
+
+╰──────────────────────────────────────────────────────────────────────────────╯
+  ┊ 📖 preparing read_file…
+  ┊ 📋 preparing todo…
+
+╭─ ⚕ Hermes ───────────────────────────────────────────────────────────────────╮
+## Summary
+
+The bug was in `/testbed/sphinx/ext/autodoc/typehints.py` in the `record_typehints()` function.
+
+**Root cause:** When `autodoc_typehints = 'description'`, the `record_typehints()` function records type annotations by calling `inspect.signature(obj)` **without** passing `type_aliases`. This means the `autodoc_type_aliases` config was never applied to the annotations recorded for the "description" mode.
+
+When `autodoc_typehints` is set to `'signature'` (the default), the type aliases are applied in `format_args()` via `inspect.signature(obj, type_aliases=self.config.autodoc_type_aliases)` — but the "description" mode uses a completely separate code path through `record_typehints()` → `merge_typehints()`.
+
+**Fix:** Added `type_aliases=app.config.autodoc_type_aliases` to the `inspect.signature()` call on line 30 of `typehints.py`. This ensures the type aliases are resolved when recording annotations, so they appear correctly in the parameter/return type fields when `autodoc_typehints = 'description'`.
+
+**Change:** One line modified in `sphinx/ext/autodoc/typehints.py`:
+```python
+# Before:
+sig = inspect.signature(obj)
+
+# After:
+sig = inspect.signature(obj, type_aliases=app.config.autodoc_type_aliases)
+## Summary
+
+The bug was in `/testbed/sphinx/ext/autodoc/typehints.py` in the `record_typehints()` function.
+
+**Root cause:** When `autodoc_typehints = 'description'`, the `record_typehints()` function records type annotations by calling `inspect.signature(obj)` **without** passing `type_aliases`. This means the `autodoc_type_aliases` config was never applied to the annotations recorded for the "description" mode.
+
+When `autodoc_typehints` is set to `'signature'` (the default), the type aliases are applied in `format_args()` via `inspect.signature(obj, type_aliases=self.config.autodoc_type_aliases)` — but the "description" mode uses a completely separate code path through `record_typehints()` → `merge_typehints()`.
+
+**Fix:** Added `type_aliases=app.config.autodoc_type_aliases` to the `inspect.signature()` call on line 30 of `typehints.py`. This ensures the type aliases are resolved when recording annotations, so they appear correctly in the parameter/return type fields when `autodoc_typehints = 'description'`.
+
+**Change:** One line modified in `sphinx/ext/autodoc/typehints.py`:
+```python
+# Before:
+sig = inspect.signature(obj)
+
+# After:
+sig = inspect.signature(obj, type_aliases=app.config.autodoc_type_aliases)
+```
+
+session_id: 20260615_210353_1bd1be

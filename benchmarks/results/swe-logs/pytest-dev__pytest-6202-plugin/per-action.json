@@ -1,0 +1,308 @@
+[
+  {
+    "action": "action_001_20260615205144",
+    "strategies": [
+      "git_snapshot",
+      "subagent"
+    ],
+    "desc": [
+      "git add -A snapshot (cc33ecb9)",
+      "Subagent backup: Read-only git log query (Category E) \u2014 no mutable state affecte"
+    ],
+    "addedLatencyMs": 39260
+  },
+  {
+    "action": "action_002_20260615205239",
+    "strategies": [
+      "git_snapshot"
+    ],
+    "desc": [
+      "git add -A snapshot (e69c902d)"
+    ],
+    "addedLatencyMs": 27224
+  },
+  {
+    "action": "action_003_20260615205313",
+    "strategies": [
+      "git_snapshot"
+    ],
+    "desc": [
+      "git add -A snapshot (ed0d6a94)"
+    ],
+    "addedLatencyMs": 82
+  },
+  {
+    "action": "action_004_20260615205326",
+    "strategies": [
+      "git_snapshot"
+    ],
+    "desc": [
+      "git add -A snapshot (0606bf8a)"
+    ],
+    "addedLatencyMs": 70
+  },
+  {
+    "action": "action_005_20260615205332",
+    "strategies": [
+      "git_snapshot"
+    ],
+    "desc": [
+      "git add -A snapshot (10bc0f57)"
+    ],
+    "addedLatencyMs": 79
+  },
+  {
+    "action": "action_006_20260615205424",
+    "strategies": [
+      "git_snapshot"
+    ],
+    "desc": [
+      "git add -A snapshot (8d7d13cf)"
+    ],
+    "addedLatencyMs": 73
+  },
+  {
+    "action": "action_007_20260615205433",
+    "strategies": [
+      "git_snapshot"
+    ],
+    "desc": [
+      "git add -A snapshot (e9d24ab5)"
+    ],
+    "addedLatencyMs": 81
+  },
+  {
+    "action": "action_008_20260615205647",
+    "strategies": [
+      "git_snapshot"
+    ],
+    "desc": [
+      "git add -A snapshot (25573aad)"
+    ],
+    "addedLatencyMs": 65
+  },
+  {
+    "action": "action_009_20260615205657",
+    "strategies": [
+      "git_snapshot"
+    ],
+    "desc": [
+      "git add -A snapshot (c1eb1ff1)"
+    ],
+    "addedLatencyMs": 76
+  },
+  {
+    "action": "action_010_20260615205704",
+    "strategies": [
+      "git_snapshot"
+    ],
+    "desc": [
+      "git add -A snapshot (cebb973a)"
+    ],
+    "addedLatencyMs": 71
+  },
+  {
+    "action": "action_011_20260615205715",
+    "strategies": [
+      "git_snapshot"
+    ],
+    "desc": [
+      "git add -A snapshot (8f7b3612)"
+    ],
+    "addedLatencyMs": 76
+  },
+  {
+    "action": "action_012_20260615205729",
+    "strategies": [
+      "git_snapshot"
+    ],
+    "desc": [
+      "git add -A snapshot (d1e938f0)"
+    ],
+    "addedLatencyMs": 70
+  },
+  {
+    "action": "action_013_20260615205737",
+    "strategies": [
+      "git_snapshot"
+    ],
+    "desc": [
+      "git add -A snapshot (6e3c5849)"
+    ],
+    "addedLatencyMs": 79
+  },
+  {
+    "action": "action_014_20260615205750",
+    "strategies": [
+      "git_snapshot"
+    ],
+    "desc": [
+      "git add -A snapshot (85150426)"
+    ],
+    "addedLatencyMs": 28677
+  },
+  {
+    "action": "action_015_20260615205832",
+    "strategies": [
+      "git_snapshot"
+    ],
+    "desc": [
+      "git add -A snapshot (708c7d69)"
+    ],
+    "addedLatencyMs": 122
+  },
+  {
+    "action": "action_016_20260615205846",
+    "strategies": [
+      "git_snapshot"
+    ],
+    "desc": [
+      "git add -A snapshot (c7a142a8)"
+    ],
+    "addedLatencyMs": 75
+  },
+  {
+    "action": "action_017_20260615205854",
+    "strategies": [
+      "git_snapshot"
+    ],
+    "desc": [
+      "git add -A snapshot (3f5a1c2c)"
+    ],
+    "addedLatencyMs": 77
+  },
+  {
+    "action": "action_018_20260615205903",
+    "strategies": [
+      "git_snapshot"
+    ],
+    "desc": [
+      "git add -A snapshot (d350d0a3)"
+    ],
+    "addedLatencyMs": 65
+  },
+  {
+    "action": "action_019_20260615205916",
+    "strategies": [
+      "git_snapshot"
+    ],
+    "desc": [
+      "git add -A snapshot (7c8d36ce)"
+    ],
+    "addedLatencyMs": 77
+  },
+  {
+    "action": "action_020_20260615205922",
+    "strategies": [
+      "git_snapshot"
+    ],
+    "desc": [
+      "git add -A snapshot (abe59e85)"
+    ],
+    "addedLatencyMs": 84
+  },
+  {
+    "action": "action_021_20260615205936",
+    "strategies": [
+      "git_snapshot"
+    ],
+    "desc": [
+      "git add -A snapshot (bf460e66)"
+    ],
+    "addedLatencyMs": 85
+  },
+  {
+    "action": "action_022_20260615205947",
+    "strategies": [
+      "git_snapshot"
+    ],
+    "desc": [
+      "git add -A snapshot (9a7dbadd)"
+    ],
+    "addedLatencyMs": 64
+  },
+  {
+    "action": "action_023_20260615205951",
+    "strategies": [
+      "git_snapshot"
+    ],
+    "desc": [
+      "git add -A snapshot (86c576f7)"
+    ],
+    "addedLatencyMs": 76
+  },
+  {
+    "action": "action_024_20260615205956",
+    "strategies": [
+      "git_snapshot"
+    ],
+    "desc": [
+      "git add -A snapshot (28bfb0a4)"
+    ],
+    "addedLatencyMs": 79
+  },
+  {
+    "action": "action_025_20260615210046",
+    "strategies": [
+      "git_snapshot"
+    ],
+    "desc": [
+      "git add -A snapshot (92041648)"
+    ],
+    "addedLatencyMs": 66
+  },
+  {
+    "action": "action_026_20260615210052",
+    "strategies": [
+      "git_snapshot",
+      "pip_freeze"
+    ],
+    "desc": [
+      "git add -A snapshot (fcbe5295)",
+      "Saved pip freeze snapshot (pip freeze)"
+    ],
+    "addedLatencyMs": 409
+  },
+  {
+    "action": "action_027_20260615210101",
+    "strategies": [
+      "git_snapshot"
+    ],
+    "desc": [
+      "git add -A snapshot (cc4e950d)"
+    ],
+    "addedLatencyMs": 201
+  },
+  {
+    "action": "action_028_20260615210107",
+    "strategies": [
+      "policy_rewrite"
+    ],
+    "desc": [
+      "rm \u2192 soft-delete scratch_drill.txt to trash (reversible)"
+    ],
+    "addedLatencyMs": 41
+  },
+  {
+    "action": "action_029_20260615210113",
+    "strategies": [
+      "git_snapshot",
+      "subagent"
+    ],
+    "desc": [
+      "git add -A snapshot (8d4855de)",
+      "Subagent backup: Backup before Edit tool modifies /tmp/outside_drill.txt (file d"
+    ],
+    "addedLatencyMs": 54049
+  },
+  {
+    "action": "action_030_20260615210213",
+    "strategies": [
+      "policy_rewrite"
+    ],
+    "desc": [
+      "Write new file outside workspace (recovery: rm outside_drill.txt)"
+    ],
+    "addedLatencyMs": 39
+  }
+]
