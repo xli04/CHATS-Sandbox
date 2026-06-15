@@ -328,3 +328,50 @@ describe("read-only filter: compound commands skip backup", () => {
     it(`backs up: ${label}`, () => assert.equal(backsUp(cmd), true, cmd));
   }
 });
+
+// ── Read-only filter: adversarial false-positive classes ─────────────
+// From Opus-4.8 fuzzing (179-case corpus). A FALSE POSITIVE here =
+// destructive command runs with NO backup = data loss. These 3 classes
+// each hid a mutation where the splitter / redirect-check couldn't see
+// it: newline separators, env-assignment prefixes, and sed/awk scripts
+// (interpreters that write files or shell out). All must back up.
+import { isReadOnlyBash } from "../src/backup/strategies.js";
+
+describe("read-only filter: adversarial mutations must NOT be read-only", () => {
+  const mutations = [
+    ["ls\nrm -rf /important", "newline → rm"],
+    ["cat a\ncp secret /tmp/exfil", "newline → cp exfil"],
+    ["git status\ngit reset --hard", "newline → hard reset"],
+    ["ls\r\nrm x", "CRLF → rm"],
+    ["env FOO=bar rm f", "env-prefix → rm"],
+    ["env A=1 B=2 rm -rf /", "env-prefix → rm -rf"],
+    ["env VAR=x cp a b", "env-prefix → cp"],
+    ["env DEBUG=1 git push", "env-prefix → git push"],
+    ["FOO=bar rm f", "leading assignment → rm"],
+    ['sed -n "w out.txt" file', "sed w writes file"],
+    ['sed -n "1w /etc/cron.d/x" file', "sed w writes cron"],
+    ['sed -n "W out" file', "sed W writes"],
+    ['sed -n "s/a/b/w f" file', "sed s///w writes"],
+    ['sed -n "e rm x" file', "sed e execs shell"],
+    ['awk "BEGIN{system(\\"rm x\\")}"', "awk system() execs"],
+    ['awk "{print > \\"f\\"}" a', "awk print > file"],
+    ["sed -i s/a/b/ f", "sed -i in-place write"],
+  ] as const;
+  for (const [cmd, label] of mutations) {
+    it(`backs up (not read-only): ${label}`, () =>
+      assert.equal(isReadOnlyBash(cmd), false, JSON.stringify(cmd)));
+  }
+
+  // The common compound reads must still be recognized as read-only.
+  const reads = [
+    ["cd /repo && git log -p -- a.py", "cd && git log"],
+    ["grep foo f | head", "read pipe"],
+    ["git log | grep x | head -30", "3-stage read pipe"],
+    ["git status", "git status"],
+    ["pip list", "pip list"],
+  ] as const;
+  for (const [cmd, label] of reads) {
+    it(`skips (read-only): ${label}`, () =>
+      assert.equal(isReadOnlyBash(cmd), true, JSON.stringify(cmd)));
+  }
+});

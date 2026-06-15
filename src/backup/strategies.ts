@@ -793,7 +793,13 @@ const READ_ONLY_BASH_PATTERN = new RegExp(
   "^\\s*(?:" +
     "which|command\\s+-v|type(?:\\s+-[aPpt]+)?|" +       // what-is
     "ls(?:\\s+-[a-zA-Z]*)?|stat|file|readlink|realpath|dirname|basename|" +  // fs introspection
-    "cat|head|tail|wc|grep|egrep|fgrep|zcat|zgrep|awk|sed\\s+-n|" +  // read contents
+    "cat|head|tail|wc|grep|egrep|fgrep|zcat|zgrep|" +  // read contents
+    // NB: sed and awk are deliberately NOT here. Both are general-purpose
+    // interpreters that can WRITE files (sed `w`/`W`/`s///w`, awk
+    // `print > f`) or EXECUTE shell (sed `e`/`s///e`, awk `system()`)
+    // from inside their quoted script — invisible to a top-level
+    // redirect/operator check. Treat every sed/awk as back-up (the only
+    // cost is an occasional unnecessary snapshot for a read-only one).
     "pwd|id|whoami|groups|uname|hostname|date|echo|printf|true|false|" +  // environmental
     "cd|pushd|popd|" +                                   // directory nav — changes cwd only, no file mutation
     "env|printenv|locale|" +                             // env vars (read)
@@ -810,12 +816,20 @@ const READ_ONLY_BASH_PATTERN = new RegExp(
   "\\s*$"
 );
 
-function isReadOnlyBash(command: string): boolean {
+export function isReadOnlyBash(command: string): boolean {
   if (!command) return false;
   // Redirections (`> f`, `>> f`), process/command substitution (`<(…)`,
   // `$(…)`) and backticks can WRITE files or hide a mutation inside an
   // expansion — never claim read-only when any are present.
   if (/>>?|<\(|\$\(|`/.test(command)) return false;
+  // Newline / carriage-return are command separators we do NOT split on
+  // below — a second line could be anything (`ls\nrm -rf /`). Bail.
+  if (/[\n\r]/.test(command)) return false;
+  // A leading env-assignment (`FOO=bar cmd`) or `env NAME=VAL cmd` runs
+  // an arbitrary following command while the allowlisted verb gets
+  // swallowed as args (`env FOO=bar rm -rf /` matched `env` + args).
+  // Bail on any assignment at command/segment start or after `env`.
+  if (/(?:^|[;&|]|\benv\s)\s*\w+=/.test(command)) return false;
   // A compound command (`cd /repo && git log`, `grep x | head`) is
   // read-only IFF EVERY segment is. The old code bailed on the first
   // `&`/`;`/`|` it saw, so the extremely common `cd DIR && <read>` was
