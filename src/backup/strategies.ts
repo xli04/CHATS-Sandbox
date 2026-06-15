@@ -795,6 +795,7 @@ const READ_ONLY_BASH_PATTERN = new RegExp(
     "ls(?:\\s+-[a-zA-Z]*)?|stat|file|readlink|realpath|dirname|basename|" +  // fs introspection
     "cat|head|tail|wc|grep|egrep|fgrep|zcat|zgrep|awk|sed\\s+-n|" +  // read contents
     "pwd|id|whoami|groups|uname|hostname|date|echo|printf|true|false|" +  // environmental
+    "cd|pushd|popd|" +                                   // directory nav — changes cwd only, no file mutation
     "env|printenv|locale|" +                             // env vars (read)
     "ps|top|df|du(?:\\s+-[a-zA-Z]+)*\\s*$|free|uptime|" + // sysinfo (du without target is no-op)
     "git\\s+(?:status|log|show|diff|branch\\s*$|remote\\s*$|config\\s+--get|rev-parse|ls-(?:files|tree|remote)|describe|blame|cat-file)|" +  // git read-only
@@ -811,9 +812,22 @@ const READ_ONLY_BASH_PATTERN = new RegExp(
 
 function isReadOnlyBash(command: string): boolean {
   if (!command) return false;
-  // Any side-effect operator rules it out as "obviously read-only."
-  if (/[|;&]|>>?|<\(|\$\(/.test(command)) return false;
-  return READ_ONLY_BASH_PATTERN.test(command);
+  // Redirections (`> f`, `>> f`), process/command substitution (`<(…)`,
+  // `$(…)`) and backticks can WRITE files or hide a mutation inside an
+  // expansion — never claim read-only when any are present.
+  if (/>>?|<\(|\$\(|`/.test(command)) return false;
+  // A compound command (`cd /repo && git log`, `grep x | head`) is
+  // read-only IFF EVERY segment is. The old code bailed on the first
+  // `&`/`;`/`|` it saw, so the extremely common `cd DIR && <read>` was
+  // treated as a possible mutation — over-firing tier-2 snapshots and,
+  // when it also tripped the outside-workspace heuristic, a ~30s tier-3
+  // subagent. We split on the shell operators and require each part to
+  // be a recognized read-only command. Unknown segment → not read-only
+  // → falls through to backup (the SAFE direction: a real mutation is
+  // never wrongly skipped, we only stop over-firing on benign reads).
+  const segments = command.split(/&&|\|\||[;|]/).map((s) => s.trim()).filter(Boolean);
+  if (segments.length === 0) return false;
+  return segments.every((seg) => READ_ONLY_BASH_PATTERN.test(seg));
 }
 
 export function runBackup(

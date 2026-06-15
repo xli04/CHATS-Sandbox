@@ -282,3 +282,49 @@ describe("workspace scope: interpreter vs write discrimination", () => {
     });
   }
 });
+
+// ── Read-only compound-command filter (cd && <read> over-fire) ───────
+// isReadOnlyBash must recognize that a compound command is read-only
+// iff EVERY segment is. The old code bailed on the first &&/;/| and so
+// treated `cd DIR && git log` as a possible mutation — over-firing a
+// tier-2 snapshot and (when it also tripped touchesOutsideWorkspace) a
+// ~30s tier-3 subagent. Direction must stay safe: any real mutation
+// still backs up.
+describe("read-only filter: compound commands skip backup", () => {
+  beforeEach(() => resetAction());
+
+  function backsUp(cmd: string): boolean {
+    const { workspace, config, originalCwd } = setup();
+    try {
+      fs.writeFileSync(path.join(workspace, "a.py"), "x\n");
+      const r = runBackup(makeCtx("Bash", { command: cmd }), config);
+      return r.artifacts.length > 0 || r.needsSubagent;
+    } finally {
+      teardown(workspace, originalCwd);
+    }
+  }
+
+  // Compound reads — must NOT back up.
+  for (const [cmd, label] of [
+    ["cd /repo && git log -p -- a.py", "cd && git log (the bug)"],
+    ["cd /repo && cat a.py", "cd && cat"],
+    ["cd /repo && ls -la", "cd && ls"],
+    ["grep foo a.py | head", "pipe of reads"],
+    ["git log | grep x | head -30", "3-stage read pipe"],
+    ["pushd /repo && git status", "pushd && git status"],
+  ] as const) {
+    it(`skips: ${label}`, () => assert.equal(backsUp(cmd), false, cmd));
+  }
+
+  // Compound or unknown commands containing a mutation — MUST back up.
+  for (const [cmd, label] of [
+    ["cd /repo && rm -rf a.py", "cd && rm"],
+    ["ls && pip install flask", "ls && pip install"],
+    ["cat a.py > b.py", "redirect write"],
+    ["echo $(rm a.py)", "command substitution"],
+    ["cd /repo && git commit -am x", "cd && git commit"],
+    ["grep x a.py | tee out.txt", "pipe into tee (writes)"],
+  ] as const) {
+    it(`backs up: ${label}`, () => assert.equal(backsUp(cmd), true, cmd));
+  }
+});
