@@ -862,7 +862,13 @@ export function isReadOnlyBash(command: string): boolean {
     //   `date … -s|--set … ` (anywhere in args) or `date <digits>` sets
     //   the system clock; a `--output=FILE` / `-O FILE` write flag
     //   (e.g. `git diff --output=x`) writes a file with no shell redirect.
-    if (/^\s*date\b/.test(seg) && /(?:\s-s\b|\s--set\b|^\s*date\s+[0-9])/.test(seg)) return false;
+    // date SET forms (set the system clock): `-s` alone or with a glued
+    // value (`-s now`, `-snow`, `-s2020`), optionally bundled after the
+    // no-arg short options -u/-R (`-us`, `-Rs`, `-usnow`); `--set[=]`;
+    // or a bare numeric first arg (`date 010100002020`). The `[uR]*`
+    // (not `[a-zA-Z]*`) keeps `-I`/`-Iseconds`/`-Is` ISO-output READS
+    // passing — `-I` absorbs its own arg and is never a set cluster.
+    if (/^\s*date\b/.test(seg) && /(?:\s-[uR]*s|\s--set\b|^\s*date\s+[0-9])/.test(seg)) return false;
     if (/(?:^|\s)(?:--output(?:[=\s]|$)|-O\b)/.test(seg)) return false;
     return true;
   });

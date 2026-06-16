@@ -400,6 +400,11 @@ describe("read-only filter: launcher/interpreter/mutating-flag classes", () => {
     ["date --set now", "date --set"],
     ["date 010100002020", "date bare-numeric set"],
     ["date +%s -s now", "date -s after +format"],
+    ["date -s2020", "date -s glued value"],
+    ["date -snow", "date -snow glued"],
+    ["date -usnow", "date -us bundled glued"],
+    ["date -us now", "date -us bundled"],
+    ["ls && date -s2020", "compound glued date-s"],
     ["hostname newname", "hostname sets name"],
     ["cd /tmp && date -s now", "compound date -s"],
   ] as const;
@@ -417,8 +422,23 @@ describe("read-only filter: launcher/interpreter/mutating-flag classes", () => {
     ["printenv PATH", "printenv read"],
     ["git diff", "git diff read"],
     ["git log -p | head", "git log pipe read"],
+    ["date -Iseconds", "ISO-8601 seconds read"],
+    ["date -Is", "ISO read short"],
+    ["git branch", "git branch list read"],
   ] as const;
   for (const [cmd, label] of reads) {
     it(`skips: ${label}`, () => assert.equal(isReadOnlyBash(cmd), true, JSON.stringify(cmd)));
+  }
+});
+
+// git create/mutate subcommands must back up (per-verb $-anchors hold —
+// the global trailing-args group does not defeat them). Fuzzer-verified.
+describe("read-only filter: git create/mutate subcommands back up", () => {
+  for (const cmd of [
+    "git branch newbranch", "git branch -D main", "git remote add origin url",
+    "git remote set-url origin url", "git config user.name evil", "git tag v1",
+    "git checkout main", "git stash", "git clean -fd",
+  ]) {
+    it(`backs up: ${cmd}`, () => assert.equal(isReadOnlyBash(cmd), false, cmd));
   }
 });
