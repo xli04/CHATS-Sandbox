@@ -136,7 +136,22 @@ def record_similarity(rows0: list, rows2: list, key_idx=(0,)) -> dict:
     return {"content": content, "identity": identity, "n0": len(rows0), "n2": len(rows2)}
 
 
-# ── convenience: one scalar per domain for the headline table ────────
+# ── the headline: ONE coverage rate in [0,1] ─────────────────────────
 
-def recovery_quality_files(before_root: str, restored_root: str, **kw) -> float:
+def coverage_rate_files(before_root: str, restored_root: str, **kw) -> float:
+    """Single recovery-coverage rate for a file tree, in [0,1]."""
     return file_similarity(scan_files(before_root), scan_files(restored_root), **kw)
+
+
+def coverage_rate_records(rows0: list, rows2: list, key_idx=(0,)) -> float:
+    """Single recovery-coverage rate for records, in [0,1].
+
+    Uses the STRICT axis (identity): a row counts as recovered only when
+    the same values come back under the same primary key. (`content`
+    alone would credit scrape-and-recreate, which loses identity.)
+    """
+    return record_similarity(rows0, rows2, key_idx)["identity"]
+
+
+# back-compat alias
+recovery_quality_files = coverage_rate_files
