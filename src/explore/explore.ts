@@ -17,6 +17,7 @@
 
 import * as fs from "node:fs";
 import * as path from "node:path";
+import * as os from "node:os";
 import type { SandboxConfig } from "../types.js";
 import {
   serverFromToolName,
@@ -113,6 +114,7 @@ function buildVerificationPrompt(
   server: string,
   candidates: RecoveryPattern[],
   target: string | null,
+  resultFile: string,
 ): string {
   const targetLine = target
     ? `TARGET (a disposable test system — safe to mutate): ${target}`
@@ -141,9 +143,15 @@ SAFETY (critical — the target is shared infrastructure):
 PROPOSED PATTERNS:
 ${list}
 
-After testing, output ONLY a JSON object (no fences, no commentary). Echo each pattern with a verified flag and a one-line note:
+After testing, **WRITE your result as a JSON object to this EXACT file path** (use the bash tool or a write-file tool):
 
-{"patterns":[{"action":"...","easy_win":"...","applies_to":"...","verified":true,"verify_note":"<what you observed>"}]}`;
+  ${resultFile}
+
+This file is how CHATS-Sandbox reads your result — stdout is NOT reliably parsed. The JSON shape (echo each pattern with a verified flag and a one-line note):
+
+{"patterns":[{"action":"...","easy_win":"...","applies_to":"...","verified":true,"verify_note":"<what you observed>"}]}
+
+Set verified=true ONLY if you actually performed the reversal and saw it work; verified=false if it failed or the affordance doesn't exist (say why in verify_note). The LAST thing you do is write that file.`;
 }
 
 function parsePatterns(raw: string): RecoveryPattern[] | null {
@@ -202,9 +210,17 @@ export function runExplore(
   nowIso: string,
   serverArg?: string,
   targetArg?: string,
+  genModel?: string,
+  verifyModel?: string,
 ): ExploreOutcome[] {
   // eslint-disable-next-line @typescript-eslint/no-require-imports
   const { runRunnerForText } = require("../backup/subagent.js");
+
+  // Per-stage model overrides (e.g. Opus to propose, Haiku to verify).
+  const withModel = (m?: string): SandboxConfig =>
+    m ? { ...config, subagentHermesModel: m } : config;
+  const genConfig = withModel(genModel);
+  const verifyConfig = withModel(verifyModel);
 
   const discovered = discoverServers(config);
   let servers: Array<[string, string[]]>;
@@ -220,7 +236,7 @@ export function runExplore(
     const target = targetArg ?? discoverTarget(config, server);
 
     // ── Stage 1: propose (reasoning) ──────────────────────────────
-    const proposalText = runRunnerForText(buildProposalPrompt(server, tools), config, 180);
+    const proposalText = runRunnerForText(buildProposalPrompt(server, tools), genConfig, 180);
     const candidates = proposalText ? parsePatterns(proposalText) : null;
     if (!candidates || !candidates.length) {
       outcomes.push({
@@ -230,17 +246,30 @@ export function runExplore(
       continue;
     }
 
-    // ── Stage 2: verify (execution) ───────────────────────────────
-    // Always attempt — the runner has the server's MCP tools, so the
-    // verifier can execute against either a URL target or the MCP's own
-    // backend (e.g. a database). Falls back to stage-1 proposals if
-    // stage-2 output doesn't parse.
-    let finalPatterns = candidates;
-    const verifyText = runRunnerForText(
-      buildVerificationPrompt(server, candidates, target), config, 600,
-    );
-    const verified = verifyText ? parsePatterns(verifyText) : null;
-    if (verified && verified.length) finalPatterns = verified;
+    // ── Stage 2: verify (execution), ONE PATTERN PER RUN ──────────
+    // Each pattern gets its own agent run + full budget to set up →
+    // destruct → reverse → confirm → emit. Batching all patterns into a
+    // single run never finished (the agent ran out of turns mid-marathon
+    // and emitted no verified flags). One-by-one fixes that.
+    const finalPatterns: RecoveryPattern[] = [];
+    let idx = 0;
+    for (const cand of candidates) {
+      // Each verify writes its verdict to a FILE — read from disk (immune
+      // to hermes' TUI-decorated stdout, which was dropping the `verified`
+      // flag). Fall back to stdout parsing if no file appears.
+      const resultFile = path.join(os.tmpdir(), `chats-verify-${process.pid}-${idx++}.json`);
+      try { fs.rmSync(resultFile, { force: true }); } catch { /* ignore */ }
+      const verifyText = runRunnerForText(
+        buildVerificationPrompt(server, [cand], target, resultFile), verifyConfig, 600,
+      );
+      let parsed: RecoveryPattern[] | null = null;
+      try {
+        if (fs.existsSync(resultFile)) parsed = parsePatterns(fs.readFileSync(resultFile, "utf-8"));
+      } catch { /* ignore */ }
+      if (!parsed) parsed = verifyText ? parsePatterns(verifyText) : null;
+      try { fs.rmSync(resultFile, { force: true }); } catch { /* ignore */ }
+      finalPatterns.push(parsed && parsed.length ? { ...cand, ...parsed[0] } : cand);
+    }
 
     const data: ServerExperiences = {
       server, generated: nowIso, observed_tools: tools, patterns: finalPatterns,

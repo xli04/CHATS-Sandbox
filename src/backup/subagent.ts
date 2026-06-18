@@ -68,6 +68,10 @@ function subagentEnv(): NodeJS.ProcessEnv {
     ...process.env,
     CHATS_SANDBOX_NO_HOOK: "1",
     ...(isRoot ? { IS_SANDBOX: "1" } : {}),
+    // Browser MCP servers (playwright via npx) cold-start slowly — give
+    // claude time to connect before the subagent's first tool call,
+    // otherwise it reports "MCP still connecting" and skips the reversal.
+    MCP_TIMEOUT: process.env.MCP_TIMEOUT || "60000",
   };
 }
 
@@ -90,6 +94,7 @@ function subagentEnv(): NodeJS.ProcessEnv {
 function buildSubagentInvocation(
   prompt: string,
   config: SandboxConfig,
+  opts?: { withMcp?: boolean },
 ): { bin: string; args: string[]; runner: "claude" | "hermes" | "openclaw" | "codex" } | null {
   const runner = config.subagentRunner ?? "claude";
 
@@ -157,6 +162,12 @@ function buildSubagentInvocation(
   if (config.subagentModel && config.subagentModel !== "inherit") {
     args.push("--model", config.subagentModel);
   }
+  // Live-restore only: hand the subagent the same MCP tools the agent used
+  // (e.g. a playwright browser) so it can reverse remote/UI state through
+  // the real interface — no privileged DB backdoor assumed.
+  if (opts?.withMcp && config.subagentMcpConfig) {
+    args.push("--mcp-config", config.subagentMcpConfig);
+  }
   return { bin: "claude", args, runner };
 }
 
@@ -201,14 +212,16 @@ function buildSubagentPrompt(
     try {
       const { serverFromToolName, loadExperiences, renderExperiencesForPrompt } =
         require("../explore/experiences.js");
-      const server = serverFromToolName(toolName);
-      if (server) {
-        experienceBlock = renderExperiencesForPrompt(loadExperiences(config, server));
-      }
+      // Load the experiences for this action's MCP server; for browser/UI
+      // actions (playwright) fall back to the "reddit" experience so the
+      // learned reversals are always available during the webarena run.
+      const server = serverFromToolName(toolName) || "reddit";
+      experienceBlock = renderExperiencesForPrompt(loadExperiences(config, server))
+        || renderExperiencesForPrompt(loadExperiences(config, "reddit"));
     } catch { /* experiences optional */ }
   }
 
-  return `You are a backup subagent for CHATS-Sandbox. A tool call is about to execute that affects state OUTSIDE the workspace. Your job: actually CREATE a minimal recovery artifact BEFORE the action runs, then report what you did.
+  return `You are a backup subagent for CHATS-Sandbox. A tool call is about to execute that affects state OUTSIDE the workspace. Your job: **actually CREATE a minimal recovery artifact BEFORE the action runs**, then report what you did as a single JSON object.
 
 UPCOMING ACTION:
   Tool: ${toolName}
@@ -292,6 +305,9 @@ recovery instructions:
      state, labels.
 
 3. Write the captured state as JSON to: ${actionDir}/remote-state.json
+   **This file is the BACKUP ARTIFACT (the captured data) — it is NOT your
+   result. You must STILL output the result JSON object at the very end
+   (see OUTPUT FORMAT). Do not treat remote-state.json as the deliverable.**
    Include enough fields that a future restore subagent could recreate
    the state (title, body, author, timestamps, IDs, parent IDs, etc.).
    THE DATA ITSELF, NOT A SUMMARY: for a SQL/database mutation
@@ -341,15 +357,16 @@ database mutation (e.g. \`git log\`, \`grep\`, \`cat\`, a SELECT query, a
 status/list/describe call) — then NO backup is needed. Return
 \`no_backup_needed: true\` with empty backup_commands/recovery_commands.
 Do NOT fabricate a backup for a read.
-BE CONSERVATIVE: only do this when you are CERTAIN the action mutates
-nothing. If there is ANY doubt — an unfamiliar tool, a flag you don't
-recognize, a command that *might* write — perform the backup instead.
+**BE CONSERVATIVE: only do this when you are CERTAIN the action mutates nothing.** If there is ANY doubt — an unfamiliar tool, a flag you don't
+recognize, a command that *might* write — **perform the backup instead.**
 A wrongly-skipped backup of a real mutation is unrecoverable; an extra
 backup of a read is harmless.
 
 ## OUTPUT FORMAT
 
-Your result is a single JSON object with this exact shape:
+**Any files you wrote (pip_freeze.txt, remote-state.json, dumps, copies) are BACKUP ARTIFACTS — they are NOT your result. Your RESULT is a SEPARATE single JSON object that you write to its own file, ${actionDir}/subagent_result.json (see below).**
+
+Your result is a **single JSON object with this exact shape**:
 
 {"description":"...","backup_commands":["cmd1","cmd2"],"recovery_commands":["cmd1","cmd2"],"artifact_paths":["path1"],"live_restore":false,"no_backup_needed":false}
 
@@ -362,20 +379,23 @@ Your result is a single JSON object with this exact shape:
 
 ## HOW THE RESULT IS COLLECTED — IMPORTANT
 
-As your VERY LAST step, WRITE that JSON object to this exact file path:
+As your VERY LAST step, **WRITE the result JSON object to this exact file path**:
 
   ${actionDir}/subagent_result.json
 
-This file is the authoritative way chats-sandbox reads your result —
-stdout is NOT reliably parsed (it may contain UI formatting). Write
-the file with the bash tool or a write-file tool. Also print the JSON
-to stdout as a fallback, but the file is what matters.
+This file is the authoritative way CHATS-Sandbox reads your result — write
+it with the bash tool or a write-file tool. **This is a SEPARATE file from
+any backup artifact (remote-state.json, dumps): the result file holds the
+exact shape above, and nothing else.** Also print the JSON to stdout as a
+fallback, but the file is what matters.
 
 CRITICAL:
-- DO NOT execute the upcoming action. You only create the backup.
-- Actually run your backup_commands with the bash tool. Don't just describe them.
-- The LAST thing you do is write ${actionDir}/subagent_result.json.
-- Keep the final JSON under 2KB.`;
+- **DO NOT execute the upcoming action.** You only create the backup.
+- **Actually RUN your backup_commands with the bash tool — don't just describe them.**
+- **The LAST thing you do is WRITE ${actionDir}/subagent_result.json** with the result object.
+- Keep the JSON under 2KB.
+- **NEVER ask for clarification, NEVER call a clarify/question/ask tool, NEVER present multiple-choice options. DECIDE YOURSELF and act.**
+- **Always choose the backup approach you judge OPTIMAL for time and disk** — the cheapest, fastest backup that still allows full recovery of the affected state.`;
 }
 
 /** Validate + normalize a candidate object into our SubagentResponse
@@ -410,8 +430,22 @@ function extractOurShape(candidate: unknown): SubagentResponse | null {
 function readSubagentResultFile(actionDir: string): SubagentResponse | null {
   try {
     const f = path.join(actionDir, "subagent_result.json");
-    if (!fs.existsSync(f)) return null;
-    return extractOurShape(JSON.parse(fs.readFileSync(f, "utf-8")));
+    if (fs.existsSync(f)) {
+      const shaped = extractOurShape(JSON.parse(fs.readFileSync(f, "utf-8")));
+      if (shaped) return shaped;
+    }
+    // Fallback: a weak subagent may write the result to the WRONG filename
+    // (e.g. backlog_manifest.json) instead of emitting it / using the
+    // canonical name. Scan the action dir for ANY JSON file whose content
+    // matches our shape (has backup_commands + recovery_commands).
+    for (const name of fs.readdirSync(actionDir)) {
+      if (!name.endsWith(".json") || name === "metadata.json") continue;
+      try {
+        const shaped = extractOurShape(JSON.parse(fs.readFileSync(path.join(actionDir, name), "utf-8")));
+        if (shaped) return shaped;
+      } catch { /* not our shape — keep scanning */ }
+    }
+    return null;
   } catch {
     return null;
   }
@@ -619,6 +653,17 @@ export function runSubagentBackup(
     return null;
   }
 
+  // The subagent now OUTPUTS the JSON (instead of writing the file itself —
+  // weak models reliably drop that last file-write step). Persist what we
+  // parsed from stdout to the canonical path so forensics and any
+  // file-based reader still find it.
+  if (!fileResult) {
+    try {
+      fs.writeFileSync(path.join(actionDir, "subagent_result.json"), JSON.stringify(parsed));
+      logDebug("saved parsed stdout JSON to subagent_result.json");
+    } catch { /* best-effort */ }
+  }
+
   const elapsedSec = ((Date.now() - startTime) / 1000).toFixed(1);
   logDebug(`parse success: ${parsed.description}`);
 
@@ -721,8 +766,10 @@ export function invokeRestoreSubagent(
 ): { success: boolean; detail: string } {
   const timeoutMs = Math.max(10_000, config.subagentTimeoutSeconds * 1000);
 
-  // Same runner branching as the backup path — claude -p or hermes chat.
-  const invocation = buildSubagentInvocation(prompt, config);
+  // Same runner branching as the backup path — claude -p or hermes chat —
+  // but this is the live-restore path, so request the MCP tools (browser)
+  // when configured so the subagent can execute the UI reversal.
+  const invocation = buildSubagentInvocation(prompt, config, { withMcp: true });
   if (!invocation) {
     const runner = config.subagentRunner ?? "claude";
     return { success: false, detail: `${runner} CLI not found in PATH` };

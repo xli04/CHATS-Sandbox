@@ -280,6 +280,11 @@ function buildSubagentRestorePrompt(artifact: BackupArtifact): string {
     `- Reverse the effects of the original action.\n` +
     `- If the backup includes files, restore them to their original locations.\n` +
     `- If the backup includes remote state (git tags, API snapshots), use them to revert.\n` +
+    `- If the original action was a web/UI action and you have browser tools\n` +
+    `  (mcp__playwright__*), reverse it through the SAME interface: the browser\n` +
+    `  session may already be authenticated; reload the relevant page, read the\n` +
+    `  current state, and perform the inverse interaction (e.g. retract a vote,\n` +
+    `  edit a body back, delete a created item, toggle a subscription back).\n` +
     `- Be minimal — only undo what the original action changed.\n` +
     `- Report what you restored and confirm the state is back to normal.`
   );
