@@ -173,23 +173,30 @@ function setConfigValue(
 
 function exploreCommand(projectRoot: string, ...rest: string[]): void {
   const config = loadConfig(projectRoot);
-  // Parse [server] and --target <url>.
+  // Parse [server], --target <url>, --gen-model <m>, --verify-model <m>.
   let serverArg: string | undefined;
   let targetArg: string | undefined;
+  let genModel: string | undefined;
+  let verifyModel: string | undefined;
   for (let i = 0; i < rest.length; i++) {
     if (rest[i] === "--target") { targetArg = rest[++i]; }
+    else if (rest[i] === "--gen-model") { genModel = rest[++i]; }
+    else if (rest[i] === "--verify-model") { verifyModel = rest[++i]; }
     else if (!rest[i].startsWith("--")) { serverArg = rest[i]; }
   }
   // eslint-disable-next-line @typescript-eslint/no-require-imports
   const { runExplore, discoverServers } = require("./explore/explore.js");
 
+  // A forced `<server> --target <url>` explores even if the server hasn't
+  // been seen in backup history yet (pre-learn a browser/MCP target).
+  const forced = Boolean(serverArg && targetArg);
   const discovered = discoverServers(config) as Map<string, Set<string>>;
-  if (discovered.size === 0) {
+  if (!forced && discovered.size === 0) {
     console.log("No MCP / remote tools found in backup history yet.");
-    console.log("Use an MCP-driven remote action first, then run `chats-sandbox explore`.");
+    console.log("Use an MCP-driven remote action first, or pass `<server> --target <url>`.");
     return;
   }
-  if (serverArg && !discovered.has(serverArg)) {
+  if (!forced && serverArg && !discovered.has(serverArg)) {
     console.log(`Server "${serverArg}" not seen in history. Known: ${[...discovered.keys()].join(", ")}`);
     return;
   }
@@ -202,7 +209,7 @@ function exploreCommand(projectRoot: string, ...rest: string[]): void {
   console.log("One-time cost per server (a few minutes each).\n");
 
   const nowIso = new Date().toISOString();
-  const outcomes = runExplore(config, nowIso, serverArg, targetArg) as Array<{
+  const outcomes = runExplore(config, nowIso, serverArg, targetArg, genModel, verifyModel) as Array<{
     server: string; tools: string[]; target: string | null; saved: boolean; path?: string; proposed: number; verified: number; error?: string;
   }>;
 

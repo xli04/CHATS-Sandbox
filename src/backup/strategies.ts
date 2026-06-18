@@ -655,7 +655,11 @@ function touchesOutsideWorkspace(ctx: HookContext): boolean {
       /\bwget\s/i,                              // network download
       /\bssh\s/i,                               // remote commands
       /\bscp\s/i,                               // remote file copy
-      /\bdocker\s+(run|stop|rm|build|push)/i,   // container state
+      /\bdocker\s+(run|stop|rm|build|push|cp|kill|restart|commit)/i, // container state
+      // DB-client MUTATION (direct or tunneled through `docker exec`/`ssh`):
+      // the remote DB is outside-workspace state git can't capture. Keyed on
+      // the mutating verb so read-only psql SELECT / \dt does NOT escalate.
+      /\b(psql|mysql|mariadb|mongo|mongosh|redis-cli|sqlite3)\b[\s\S]*\b(delete|update|drop|truncate|insert|alter|create\s+table|flushall|flushdb)\b/i,
       /\bkubectl\s+(apply|delete|create)/i,     // k8s state
       /\bsystemctl\s+(start|stop|restart|enable|disable)/i, // services
       /\bexport\s+\w+=/i,                       // env vars

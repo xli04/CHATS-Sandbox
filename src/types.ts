@@ -244,6 +244,12 @@ export interface SandboxConfig {
   /** For subagentRunner="codex": model id passed to `codex exec -m`
    *  (e.g. "gpt-5.5-codex"). Empty = codex's own default model. */
   subagentCodexModel: string;
+  /** Path to an MCP config JSON (claude `--mcp-config`) handed to the
+   *  LIVE-RESTORE subagent only, so it can reverse remote/UI state through
+   *  the same tools the agent used (e.g. a playwright browser). Not given
+   *  to backup-time subagents — they would collide with the agent's still
+   *  active browser. Empty/unset = no MCP servers for the subagent. */
+  subagentMcpConfig?: string;
 }
 
 export const DEFAULT_CONFIG: SandboxConfig = {
