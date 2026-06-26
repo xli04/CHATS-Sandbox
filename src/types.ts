@@ -250,6 +250,18 @@ export interface SandboxConfig {
    *  to backup-time subagents — they would collide with the agent's still
    *  active browser. Empty/unset = no MCP servers for the subagent. */
   subagentMcpConfig?: string;
+  /** Maps an MCP SERVER to the EXPERIENCE that covers it, for cases where
+   *  the experience name differs from the tool's server — e.g. a website
+   *  driven through the browser: `{ "playwright": "reddit" }`. At backup
+   *  time the subagent looks up the action's server here to inject the right
+   *  learned reversal patterns. Without an entry, the server name is used
+   *  as the experience name (dedicated MCPs like postgres → postgres). */
+  experienceForServer?: Record<string, string>;
+  /** Optional STRONGER model for the live-restore subagent only (backup stays
+   *  on subagentModel). Restore must perform precise multi-step UI actions a
+   *  cheap model can't. For the claude runner: haiku|sonnet|opus; for hermes a
+   *  full model id. Unset = use subagentModel for restore too. */
+  subagentRestoreModel?: string;
 }
 
 export const DEFAULT_CONFIG: SandboxConfig = {

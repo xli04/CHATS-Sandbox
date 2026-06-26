@@ -20,7 +20,17 @@
 
 import * as fs from "node:fs";
 import * as path from "node:path";
+import * as os from "node:os";
 import { execSync } from "node:child_process";
+
+/** Expand a leading `~`/`~/` to the home directory before resolving, so
+ *  a Write/Edit to `~/.bashrc` resolves to the real (outside-workspace)
+ *  path instead of `<cwd>/~/.bashrc` (which looked in-workspace). */
+function expandHome(p: string): string {
+  if (p === "~") return os.homedir();
+  if (p.startsWith("~/")) return path.join(os.homedir(), p.slice(2));
+  return p;
+}
 import type { BackupArtifact, HookContext, SandboxConfig } from "../types.js";
 import { describeToolAction } from "../types.js";
 import { runSubagentBackup } from "./subagent.js";
@@ -267,6 +277,15 @@ function ensureSharedShadowRepo(config: SandboxConfig): string {
         "node_modules/", ".git/", "dist/", "build/", "__pycache__/",
         "*.pyc", ".venv/", "venv/", ".cache/",
         ".chats-sandbox/",
+        // Agent/harness infra dirs — never part of the user's project, and
+        // (for the multi-method comparison harness) the OTHER methods' stores.
+        ".hermes/", ".baseline/", ".native/", ".cpall/",
+        // Playwright-MCP transient scratch (page-*.yml / console-*.log) — the
+        // browser tool writes these into cwd on almost EVERY browser action, so
+        // without this exclude tier-2 git-snapshot commits them on every step
+        // and manufactures a spurious "backup" per browser call (not the user's
+        // state, and not a logical backup).
+        ".playwright-mcp/", "page-*.yml", "console-*.log", "traces/",
         ".DS_Store", "Thumbs.db",  // macOS/Windows filesystem noise
       ].join("\n") + "\n",
       "utf-8"
@@ -499,6 +518,19 @@ function gitSnapshotBackup(
       hasChanges = status.trim().length > 0;
     }
 
+    // REMOTE actions (MCP / browser) never need a WORKSPACE snapshot — their
+    // effect lives in a remote system (captured by the subagent tier, or
+    // nothing for a read), and any workspace "drift" they leave is just the
+    // browser tool's transient scratch (.playwright-mcp/, console/page logs).
+    // Skip tier-2 ENTIRELY for them — regardless of drift — so we don't
+    // manufacture a git_snapshot folder per browser call (the dominant "storm"
+    // cause). If the action is backup-worthy the subagent materializes its own
+    // folder. (Previously this only fired when there was no drift, so scratch
+    // files slipped a spurious snapshot through on nearly every browser call.)
+    if (ctx.tool_name.startsWith("mcp__") || /(^|_)browser_[a-z]/.test(ctx.tool_name)) {
+      return null;
+    }
+
     if (!hasChanges) {
       // Workspace hasn't drifted since the last snapshot. But the
       // UPCOMING tool call may still be a write, so we need an artifact
@@ -583,23 +615,241 @@ function isBareBrowserTool(toolName: string): boolean {
   return /^browser_/.test(toolName);
 }
 
-function isReadOnlyMcpTool(toolName: string): boolean {
+/** True when a SQL statement only READS (no backup needed). Conservative:
+ *  must start with a read verb AND contain no mutating keyword anywhere
+ *  (so `WITH … INSERT`, `EXPLAIN ANALYZE DELETE`, `SELECT … FOR UPDATE`
+ *  all correctly fall through to "treat as mutating"). */
+export function isReadOnlySql(sql: string): boolean {
+  const s = sql.trim().replace(/^\(+\s*/, "").toLowerCase();
+  if (!/^(select|show|explain|with|values|describe|desc|pragma|\\d)\b/.test(s)) return false;
+  return !/\b(insert|update|delete|drop|truncate|alter|create|grant|revoke|merge|call|copy|replace|comment|reindex|vacuum|refresh|for\s+update|for\s+share|set\s)\b/.test(s);
+}
+
+// A mutating verb in an MCP tool's action segment → NOT read-only. Module-
+// scoped so the learned read-only-TOOL guard (matchesLearnedReadOnlyTool) can
+// reuse the exact same vocabulary as the hardcoded isReadOnlyMcpTool check.
+const MUTATING_VERB = /(^|_)(create|delete|update|remove|insert|drop|truncate|purge|ack|acknowledge|replace|write|set|post|put|send|publish|destroy|kill|cancel|revoke|grant|upsert|patch|rename|merge|install|uninstall|close|submit|clear|reset|flush|move|edit|modify)(_|$)/i;
+
+export function isReadOnlyMcpTool(toolName: string): boolean {
   // Accept both `mcp__*` tools and bare `browser_*` tools (OpenHands /
   // Hermes name Playwright-MCP browser tools without the prefix).
   if (!toolName.startsWith("mcp__") && !isBareBrowserTool(toolName)) return false;
 
-  // Read-style verbs anywhere in the tool name (handles both
-  // `mcp__server__get_foo` and `mcp__server_get` shapes).
-  const READ_VERB = /_(get|list|search|fetch|read|view|describe|inspect|show|status|count|find|query|history|info|head|peek)(_|$)/i;
-  if (READ_VERB.test(toolName)) return true;
+  // The verb lives in the FINAL `__` segment (`mcp__server__get_foo` →
+  // `get_foo`; bare `browser_click` → `browser_click`). Anchoring here
+  // stops a read word in the server name from masking a mutating action.
+  const action = toolName.split("__").pop() || toolName;
 
-  // Browser verbs that don't mutate page state. Covers Playwright-MCP
-  // tools and Hermes's built-in `browser` toolset (normalized to
-  // mcp__browser__* by the Hermes plugin).
-  const BROWSER_READ = /_(navigate|navigate_back|snapshot|screenshot|take_screenshot|console_messages|network_requests|wait_for|resize|close|tabs|install|scroll|hover)(_|$)/i;
-  if (BROWSER_READ.test(toolName)) return true;
+  // A mutating verb ANYWHERE in the action overrides a leading read verb.
+  // Without this, compound names like `get_and_delete`, `read_and_ack`,
+  // `list_and_purge`, `update_status`, `find_and_replace` were classified
+  // read-only and silently skipped backup (the unsafe failure direction).
+  // (MUTATING_VERB is module-scoped — see above.)
+  if (MUTATING_VERB.test(action)) return false;
+
+  // Read-style verbs in the action segment.
+  const READ_VERB = /(^|_)(get|list|search|fetch|read|view|describe|inspect|show|status|count|find|query|history|info|head|peek)(_|$)/i;
+  if (READ_VERB.test(action)) return true;
+
+  // Browser verbs that don't mutate page state (Playwright-MCP / Hermes's
+  // `browser` toolset). NOTE: `install` and `close` were removed — they
+  // mutate (install a browser / change tab state) and are now caught above.
+  // `fill`/`fill_form`/`type`/`select_option` ENTER data but don't COMMIT
+  // it — the commit is a later Submit/Save *click*. Treating form input as
+  // read-only stops every login/search box from firing a browser subagent;
+  // the mutating click that follows is what gets backed up (see
+  // isMutatingBrowserClick / touchesOutsideWorkspace).
+  const BROWSER_READ = /(^|_)(navigate|navigate_back|snapshot|screenshot|take_screenshot|console_messages|network_requests|wait_for|resize|tabs|scroll|hover|fill|fill_form|type|select_option|drag)(_|$)/i;
+  if (BROWSER_READ.test(action)) return true;
 
   return false;
+}
+
+/** Browser actuation tools whose mutating-ness depends on WHAT is clicked,
+ *  not the tool name (the same `browser_click` clicks a nav link or a
+ *  "Submit" button). */
+function isBrowserActuationTool(toolName: string): boolean {
+  const action = (toolName.split("__").pop() || toolName).toLowerCase();
+  return action === "browser_click" || action === "click";
+}
+
+// Affordances that COMMIT state — a click on one of these is worth a backup.
+const MUTATING_AFFORDANCE =
+  /\b(submit|create|post|publish|save|delete|remove|discard|subscribe|unsubscribe|join|leave|follow|unfollow|vote|upvote|downvote|reply|comment|edit|update|send|confirm|apply|add|upload|sticky|lock|ban|message|sign\s?up|register|checkout|buy|order|pay|reserve|accept|approve|reject|merge|deploy)\b/i;
+// IRREVERSIBLE verbs — the backup-worthy floor for REMOTE actions under the
+// principle "back up iff, without a backup, the action becomes irreversible".
+// Includes data destruction, state overwrite, and resource creation (you need
+// the new entity's identity to undo it) + irreversible commits. EXCLUDES
+// reversible toggles (vote/subscribe/follow/like/star/pin/save-bookmark/join/
+// close/enable…) — those have an always-available live inverse, so they cost
+// no backup (and, per the chosen policy, are simply not undone on restore).
+// NOTE: nouns that double as verbs ("comment", "message") are deliberately
+// EXCLUDED — they collide with reversible toggles on the same object ("like
+// comment", "flag message"). Comment/message CREATION is caught by the verbs
+// add/reply/post/submit/send instead.
+const IRREVERSIBLE_VERB =
+  /\b(delete|remove|destroy|drop|truncate|erase|wipe|purge|clear|edit|update|overwrite|replace|modify|rename|save|create|add|insert|post|submit|publish|upload|send|write|append|import|reply|buy|order|pay|checkout|purchase|charge|transfer|deploy|release|push)\b/i;
+// DESTRUCTIVE verbs — always back up, even rendered as a link (some apps
+// delete via an <a>). These override the link-is-navigation rule below.
+const STRONG_MUTATING =
+  /\b(delete|remove|destroy|ban|purge|drop|wipe|erase|deactivate|revoke)\b/i;
+// Affordances that only NAVIGATE / read — a click here changes nothing
+// persistent (login, links, pagination, sort/filter, expand/collapse,
+// dropdown options…).
+const READ_AFFORDANCE =
+  /\b(log\s?in|sign\s?in|log\s?out|sign\s?out|back|forward|next|prev|previous|home|page|pagination|tab|sort|filter|search|browse|view|expand|collapse|show\s?more|load\s?more|read\s?more|see\s?more|menu|breadcrumb|scroll|hover|open|close|dismiss|cancel|option|combobox|dropdown|listbox|checkbox|radio|spinbutton|slider)\b/i;
+
+/** Classify a browser CLICK by the affordance described in its args.
+ *  destructive → back up; a LINK navigates (skip); other mutating verb →
+ *  back up; navigation/login/read → skip; unknown → back up (safe). */
+export function isMutatingBrowserClick(input: Record<string, unknown>): boolean {
+  const desc = String(
+    input.element ?? input.text ?? input.selector ?? input.ref ?? input.name ?? ""
+  ).toLowerCase();
+  if (STRONG_MUTATING.test(desc)) return true;
+  // A LINK navigates — it does not commit state. Postmill's top-nav
+  // "Submit" is a <a> to the compose form, NOT the post commit (that's a
+  // "Create submission" <button>). So skip links unless destructive above.
+  if (/\blink\b/.test(desc)) return false;
+  if (MUTATING_AFFORDANCE.test(desc)) return true;
+  if (READ_AFFORDANCE.test(desc)) return false;
+  return true; // unknown affordance → escalate (don't silently skip a mutation)
+}
+
+/**
+ * Consult the LEARNED per-environment read-only list (from self-exploration)
+ * to clear a benign action the hardcoded heuristics didn't recognize. The
+ * stronger explorer agent identified which actions in THIS environment need
+ * no backup (login, pagination, opening an item, selecting a dropdown…) and
+ * wrote them to the experience file; here we match them in-process for free.
+ *
+ * SAFETY: a learned pattern can NEVER clear a destructive verb — STRONG_MUTATING
+ * always wins. Learned data is attacker-influenceable (it comes from a remote
+ * system the explorer browsed), so it may only EXTEND the benign skip-list,
+ * never authorize skipping a delete/remove/drop/ban.
+ */
+function matchesLearnedReadOnly(ctx: HookContext, config?: SandboxConfig): boolean {
+  if (!config) return false;
+  try {
+    const { aggregateReadOnlyRegex } = require("../explore/experiences.js");
+    // ONE unified read-only list (union across all environments) — no
+    // server keying, so a website's "reddit" experience still applies to its
+    // "playwright" browser tool.
+    const rx: RegExp | null = aggregateReadOnlyRegex(config);
+    if (!rx) return false;
+    const input = (ctx.tool_input ?? {}) as Record<string, unknown>;
+    const desc = [
+      ctx.tool_name, input.element, input.text, input.selector, input.name,
+      input.command, input.sql, input.query,
+    ].filter(Boolean).map(String).join(" ").toLowerCase();
+    if (STRONG_MUTATING.test(desc)) return false; // destructive always backs up
+    return rx.test(desc);
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Consult the LEARNED read-only TOOL list (readOnlyTools from self-exploration)
+ * — tools the explorer picked, from the actual provided tool list, as
+ * read/inspect-only. Skip backup for them by tool NAME (complements
+ * matchesLearnedReadOnly, which matches affordance KEYWORDS in the description).
+ *
+ * SAFETY: a learned tool can NEVER clear a mutating/destructive verb in its own
+ * name — MUTATING_VERB and STRONG_MUTATING both veto the match. Experience data
+ * is attacker-influenceable (scraped from a remote system), so a poisoned
+ * `readOnlyTools: ["delete_submission"]` is inert; learned data may only EXTEND
+ * the benign skip-list, never authorize skipping a mutation.
+ */
+function matchesLearnedReadOnlyTool(toolName: string, config?: SandboxConfig): boolean {
+  if (!config || !toolName) return false;
+  try {
+    const { aggregateReadOnlyToolSet } = require("../explore/experiences.js");
+    const set: Set<string> = aggregateReadOnlyToolSet(config);
+    if (!set || !set.size) return false;
+    const lc = toolName.toLowerCase();
+    const action = lc.split("__").pop() || lc;
+    if (MUTATING_VERB.test(action) || STRONG_MUTATING.test(action)) return false;
+    return set.has(lc) || set.has(action);
+  } catch {
+    return false;
+  }
+}
+
+/** Does this action match the LEARNED backup-worthy trigger list (the union
+ *  of recovery-pattern triggers across environments)? */
+function matchesBackupTrigger(ctx: HookContext, config?: SandboxConfig): boolean {
+  if (!config) return false;
+  try {
+    const { aggregateBackupTriggerRegex } = require("../explore/experiences.js");
+    const rx: RegExp | null = aggregateBackupTriggerRegex(config);
+    if (!rx) return false;
+    const input = (ctx.tool_input ?? {}) as Record<string, unknown>;
+    const desc = [
+      ctx.tool_name, input.element, input.text, input.selector, input.name,
+      input.command, input.sql, input.query,
+    ].filter(Boolean).map(String).join(" ").toLowerCase();
+    return rx.test(desc);
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * REMOTE actions (MCP + browser tools) use a backup-worthy ALLOWLIST: only
+ * actions that look consequential are backed up; navigation, reads, and
+ * unknown UI are ignored. This is the inverse of the local default (which
+ * stays "escalate unless known-safe"). Local actions never reach here.
+ *
+ * Order matters — most reliable signal first:
+ *   SQL arg          → read vs mutating decides (execute_sql etc.)
+ *   read-verb name   → MCP get/list/view → ignore
+ *   learned read-only→ ignore (env said so)
+ *   learned trigger  → back up (env said so)
+ *   destructive verb → back up (floor; beats the link rule)
+ *   a LINK           → ignore (navigation never commits)
+ *   mutating verb    → back up (generic create/submit/delete/vote/…)
+ *   otherwise        → ignore (allowlist default)
+ */
+function isBackupWorthyRemote(ctx: HookContext, config?: SandboxConfig): boolean {
+  const toolName = ctx.tool_name;
+  const input = (ctx.tool_input ?? {}) as Record<string, unknown>;
+
+  const sql = String(input.sql ?? input.query ?? input.statement ?? "");
+  if (sql) return !isReadOnlySql(sql);
+
+  // Arbitrary-code browser tools (browser_run_code_unsafe, browser_evaluate,
+  // *_evaluate) carry their real action in a `code`/`function` arg, NOT the
+  // tool name — and the name has no mutating verb, so the allowlist default
+  // below would wrongly IGNORE them and skip backup. Inspect the code: if it
+  // performs a mutating page action it's backup-worthy; if we can't see the
+  // code, ESCALATE (arbitrary JS can mutate anything — a missed mutation is
+  // unrecoverable, a wasted spawn on a pure read is cheap).
+  const _action = (toolName.split("__").pop() || toolName).toLowerCase();
+  if (/run_code|evaluate/.test(_action)) {
+    const code = String(input.code ?? input.function ?? input.expression ?? "");
+    if (!code) return true;
+    return /\.(fill|click|type|press|check|uncheck|select_?option|set_?input_?files|tap|drag_?to|set_?checked|clear)\s*\(|\.submit\s*\(|get_?by\w*\([^)]*\)\s*\.\s*(click|fill|check|press|type|select)/i.test(code);
+  }
+
+  // Tool-NAME read-only skip: the hardcoded verb heuristic OR a learned
+  // read-only tool (from self-exploration's readOnlyTools), both guarded so a
+  // mutating-named tool is never cleared.
+  if (toolName.startsWith("mcp__") && isReadOnlyMcpTool(toolName)) return false;
+  if (matchesLearnedReadOnlyTool(toolName, config)) return false;
+
+  // Normalize `_` → ` ` so verbs in tool names match word-boundary regexes
+  // (`create_page` → `create page`; `\bcreate\b` matches only after this).
+  const desc = [
+    toolName, input.element, input.text, input.selector, input.name,
+  ].filter(Boolean).map(String).join(" ").toLowerCase().replace(/_/g, " ");
+
+  if (matchesLearnedReadOnly(ctx, config)) return false;
+  if (matchesBackupTrigger(ctx, config)) return true;
+  if (STRONG_MUTATING.test(desc)) return true;
+  if (/\blink\b/.test(desc)) return false;
+  if (IRREVERSIBLE_VERB.test(desc)) return true;
+  return false; // reversible toggle / unknown / read → ignore (allowlist default)
 }
 
 /**
@@ -612,7 +862,7 @@ function isReadOnlyMcpTool(toolName: string): boolean {
  *     (pip install, apt install, npm -g, git push, export, etc.)
  *   - The tool is an MCP tool that isn't recognized as read-only
  */
-function touchesOutsideWorkspace(ctx: HookContext): boolean {
+export function touchesOutsideWorkspace(ctx: HookContext, config?: SandboxConfig): boolean {
   const workspace = path.resolve(process.cwd());
   const toolName = ctx.tool_name;
   const input = ctx.tool_input;
@@ -621,8 +871,15 @@ function touchesOutsideWorkspace(ctx: HookContext): boolean {
   // action mutates remote state we can't capture locally. This fires
   // the tier-3 subagent, which can use the same MCP to scrape the
   // pre-state and record recovery instructions.
-  if (toolName.startsWith("mcp__") && !isReadOnlyMcpTool(toolName)) {
-    return true;
+  // ── REMOTE actions (MCP + browser tools): backup-worthy ALLOWLIST ──
+  // Only consequential actions (learned triggers, or a generic mutating
+  // verb) are backed up; navigation, reads, and unknown UI are ignored —
+  // no wasted subagent spawn. The LOCAL out-of-workspace branches below
+  // (file paths, Bash) are UNCHANGED: they keep the "escalate unless
+  // known-safe" default. The allowlist is scoped to the MCP/browser surface
+  // the exploration actually learned.
+  if (isBrowserActuationTool(toolName) || toolName.startsWith("mcp__")) {
+    return isBackupWorthyRemote(ctx, config);
   }
 
   // Check explicit file paths in tool args
@@ -632,7 +889,7 @@ function touchesOutsideWorkspace(ctx: HookContext): boolean {
 
   for (const p of pathArgs) {
     try {
-      const resolved = path.resolve(p);
+      const resolved = path.resolve(expandHome(p));
       if (!resolved.startsWith(workspace + path.sep) && resolved !== workspace) {
         return true; // Path is outside workspace
       }
@@ -660,11 +917,30 @@ function touchesOutsideWorkspace(ctx: HookContext): boolean {
       // the remote DB is outside-workspace state git can't capture. Keyed on
       // the mutating verb so read-only psql SELECT / \dt does NOT escalate.
       /\b(psql|mysql|mariadb|mongo|mongosh|redis-cli|sqlite3)\b[\s\S]*\b(delete|update|drop|truncate|insert|alter|create\s+table|flushall|flushdb)\b/i,
-      /\bkubectl\s+(apply|delete|create)/i,     // k8s state
+      /\bkubectl\s+(apply|delete|create|patch|replace|scale|edit|drain|cordon|rollout|set|annotate|label|taint)\b/i, // k8s state
       /\bsystemctl\s+(start|stop|restart|enable|disable)/i, // services
       /\bexport\s+\w+=/i,                       // env vars
       /\bunset\s+\w+/i,                         // env vars
       /\bsource\s+/i,                           // shell config
+      // Cloud / IaC CLIs — remote infra state git cannot capture. These
+      // previously fell through the allowlist entirely (fail-open).
+      /\b(aws|gcloud|az|doctl|ibmcloud)\s/i,    // cloud provider CLIs
+      /\b(terraform|pulumi|terragrunt)\s+(apply|destroy|import|state|up)\b/i, // IaC
+      /\bhelm\s+(install|uninstall|upgrade|rollback|delete)\b/i, // k8s charts
+      /\bgh\s+(repo|release|secret|api|pr|issue|gist|workflow|run)\b/i, // GitHub API
+      /\bdocker\s+(exec|volume|network|system|compose)\b/i, // docker beyond the basic verbs
+      // Package managers beyond pip/npm-g/apt/brew — write outside the workspace.
+      /\b(cargo|go|gem|pipx|conda|mamba|poetry|pnpm|bundle)\s+(install|add|remove|uninstall|get)\b/i,
+      /\byarn\s+global\s+(add|remove)\b/i,
+      /\b(dnf|yum|apk|pacman|zypper|snap)\s+(install|remove|add|erase|delete)\b/i,
+      /\b(make|ninja)\s+install\b/i,
+      /\bpython3?\s+setup\.py\s+install\b/i,
+      // Identity / scheduling / system writes.
+      /\bcrontab\b/i,                           // scheduled jobs
+      /\b(chsh|usermod|useradd|userdel|groupadd|passwd)\b/i, // accounts
+      // Network mutation the curl `-X` pattern misses, plus other transports.
+      /\bcurl\s+[\s\S]*(--request\s+(POST|PUT|DELETE|PATCH)|--data\b|--data-raw\b|-d\s|-T\s|--upload-file\b)/i,
+      /\b(rsync|sftp|nc|ncat|telnet|ftp)\s/i,   // remote transports
     ];
 
     for (const pattern of outsidePatterns) {
@@ -878,10 +1154,113 @@ export function isReadOnlyBash(command: string): boolean {
   });
 }
 
+function recentInputPath(config: SandboxConfig): string {
+  return path.join(path.dirname(path.resolve(config.backupDir)), "recent-input.json");
+}
+
+/**
+ * Record the text the agent types into the browser (browser_type /
+ * fill_form / fill / select_option). These actions don't back up, but the
+ * VALUES they carry — a post title, a comment body — are exactly what a
+ * later create/submit needs to PIN its recovery. The hook sees them; we
+ * persist the last few so the backup subagent can read "what was just typed"
+ * instead of re-deriving it from a live browser snapshot. Best-effort.
+ */
+export function recordBrowserInput(ctx: HookContext, config: SandboxConfig): void {
+  try {
+    const action = (ctx.tool_name.split("__").pop() || ctx.tool_name).toLowerCase();
+    if (!/^browser_(type|fill_form|fill|select_option)$/.test(action)) return;
+    const input = (ctx.tool_input ?? {}) as Record<string, unknown>;
+    const vals: string[] = [];
+    const push = (v: unknown) => { if (typeof v === "string" && v.trim() && v.length < 2000) vals.push(v.trim()); };
+    push(input.text); push(input.value);
+    if (Array.isArray(input.fields)) for (const f of input.fields) push((f as { value?: unknown })?.value);
+    if (Array.isArray(input.values)) for (const v of input.values) push(v);
+    if (!vals.length) return;
+    const p = recentInputPath(config);
+    let arr: { t: string; values: string[] }[] = [];
+    try { arr = JSON.parse(fs.readFileSync(p, "utf-8")); } catch { /* fresh */ }
+    arr.push({ t: new Date().toISOString(), values: vals });
+    arr = arr.slice(-12);
+    fs.mkdirSync(path.dirname(p), { recursive: true });
+    fs.writeFileSync(p, JSON.stringify(arr));
+  } catch { /* best-effort — never block the action */ }
+}
+
+/** The recent typed values, newest last, deduped — for the subagent prompt. */
+export function loadRecentBrowserInput(config: SandboxConfig): string[] {
+  try {
+    const arr = JSON.parse(fs.readFileSync(recentInputPath(config), "utf-8")) as { values: string[] }[];
+    const out: string[] = [];
+    for (const e of arr.slice(-8)) for (const v of (e.values ?? [])) out.push(v);
+    return [...new Set(out)].slice(-10);
+  } catch { return []; }
+}
+
+function recentSnapshotPath(config: SandboxConfig): string {
+  return path.join(path.dirname(path.resolve(config.backupDir)), "recent-snapshot.json");
+}
+
+/**
+ * Cache the agent's most recent browser PAGE VIEW (browser_snapshot/navigate).
+ * Its tool_output IS the page as the agent saw it, which for an about-to-be
+ * edited/deleted entity holds the PRE-state (the current field value, the post
+ * body+comments). The backup subagent is then handed "WHERE THE CHANGE HAPPENS"
+ * — the URL + this page state — so it (a) can't misclassify the action and
+ * (b) has the original WITHOUT re-reading via its own lock-prone, costly
+ * browser. TOOL-AGNOSTIC: works whether the main agent mutates via click+fill
+ * or browser_run_code_unsafe — the source is the last page VIEW, not the typed
+ * args (which run_code hides). Caches ONLY read-style views, NOT fill/type/
+ * click (those reflect the page AFTER the edit → the new value, not the
+ * original). Called from the post-tool hook (it has the tool_output). */
+export function recordBrowserSnapshot(ctx: HookContext, config: SandboxConfig): void {
+  try {
+    const action = (ctx.tool_name.split("__").pop() || ctx.tool_name).toLowerCase();
+    if (!/^browser_(snapshot|navigate|navigate_back)$/.test(action)) return;
+    const out = ctx.tool_output;
+    let text = typeof out === "string" ? out : "";
+    if (!text && out && typeof out === "object") {
+      const o = out as Record<string, unknown>;
+      text = typeof o.result === "string" ? o.result
+        : typeof o.content === "string" ? o.content
+        : JSON.stringify(o);
+    }
+    if (!text || text.length < 20) return;
+    const m = text.match(/Page URL:\s*(\S+)/i) || text.match(/https?:\/\/\S+/);
+    const url = m ? (m[1] || m[0]) : "";
+    // No truncation (owner's call): capture the FULL page so a delete's whole
+    // entity (long body + comments) survives into PAGE_STATE. Prompt-token cost
+    // grows with page size — revisit if it becomes a problem.
+    const snippet = text;
+    const p = recentSnapshotPath(config);
+    fs.mkdirSync(path.dirname(p), { recursive: true });
+    fs.writeFileSync(p, JSON.stringify({ t: new Date().toISOString(), url, action, text: snippet }));
+  } catch { /* best-effort — never block the action */ }
+}
+
+/** The agent's last page view, if fresh — the subagent's PRE-state source.
+ *  Returns null when none/stale so the caller fails to UNVERIFIED, not to a
+ *  fabricated recovery. */
+export function loadRecentBrowserSnapshot(
+  config: SandboxConfig, maxAgeMs = 10 * 60_000,
+): { url: string; text: string; t: string } | null {
+  try {
+    const s = JSON.parse(fs.readFileSync(recentSnapshotPath(config), "utf-8")) as { t: string; url: string; text: string };
+    if (!s || !s.text) return null;
+    const age = Date.now() - new Date(s.t).getTime();
+    if (Number.isFinite(age) && age > maxAgeMs) return null;  // stale → not trustworthy pre-state
+    return s;
+  } catch { return null; }
+}
+
 export function runBackup(
   ctx: HookContext,
   config: SandboxConfig
 ): BackupResult {
+  // Capture any typed input BEFORE the read-only short-circuit below — those
+  // fill/type actions don't back up, but their values pin a later create.
+  recordBrowserInput(ctx, config);
+
   // Read-only tools (Read/Glob/Grep/etc.) can't mutate anything, so
   // there's nothing to back up. Short-circuit cleanly so they don't
   // pay the git-ls-tree cost and don't create folders when nothing
@@ -962,7 +1341,7 @@ export function runBackup(
     }
   }
 
-  const outsideWorkspace = touchesOutsideWorkspace(ctx);
+  const outsideWorkspace = touchesOutsideWorkspace(ctx, config);
 
   // ── 2nd level: git add -A (runs first because it's the cheap check) ──
   // If the workspace hasn't changed, this returns null and no folder is made.

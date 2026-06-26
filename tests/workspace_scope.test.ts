@@ -178,17 +178,32 @@ describe("workspace scope: explicit out-of-workspace paths in tool input", () =>
 describe("workspace scope: MCP tool detection", () => {
   beforeEach(() => resetAction());
 
+  // REMOTE backup-worthy allowlist: a mutating verb in the tool name fires.
   const writeTools = [
-    "mcp__playwright__browser_click",
-    "mcp__playwright__browser_type",
-    "mcp__playwright__browser_fill_form",
     "mcp__notion__create_page",
     "mcp__notion__update_database",
     "mcp__github__create_issue",
     "mcp__slack__send_message",
-    "mcp__custom__unknown_verb",          // unknown → assume write
     "mcp__some__delete_thing",
   ];
+  // Allowlist flip: remote actions with NO mutating verb / trigger are now
+  // ignored (a click with no affordance arg; a tool with an unknown verb).
+  const ignoredRemote = [
+    "mcp__playwright__browser_click",
+    "mcp__custom__unknown_verb",
+  ];
+  for (const t of ignoredRemote) {
+    it(`unknown remote verb → ignored (allowlist): ${t}`, () => {
+      const { workspace, config, originalCwd } = setup();
+      try {
+        fs.writeFileSync(path.join(workspace, "init.txt"), "x\n");
+        const result = runBackup(makeCtx(t, { foo: "bar" }), config);
+        assert.equal(result.needsSubagent, false, `${t} should be ignored by the allowlist`);
+      } finally {
+        teardown(workspace, originalCwd);
+      }
+    });
+  }
   for (const t of writeTools) {
     it(`MCP write tool triggers subagent: ${t}`, () => {
       const { workspace, config, originalCwd } = setup();
@@ -207,6 +222,12 @@ describe("workspace scope: MCP tool detection", () => {
     "mcp__playwright__browser_snapshot",
     "mcp__playwright__browser_take_screenshot",
     "mcp__playwright__browser_wait_for",
+    // Form input enters data but doesn't COMMIT it — the Submit/Save click
+    // does. Treating these as reads stops every login/search box from
+    // firing a browser subagent (see browser-affordance over-fire fix).
+    "mcp__playwright__browser_type",
+    "mcp__playwright__browser_fill_form",
+    "mcp__playwright__browser_select_option",
     "mcp__notion__get_page",
     "mcp__github__list_issues",
     "mcp__github__search_repos",

@@ -8,7 +8,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import * as os from "node:os";
 import { restoreArtifact } from "../src/restore/restore.js";
-import type { BackupArtifact } from "../src/types.js";
+import type { BackupArtifact, SandboxConfig, HookContext } from "../src/types.js";
 
 function makeArtifact(overrides: Partial<BackupArtifact>): BackupArtifact {
   return {
@@ -174,5 +174,49 @@ describe("restore - unknown strategy", () => {
     // Actually file_copy is still in the type union, it just has no restore handler
     // The switch falls to default
     assert.equal(r.success, false);
+  });
+});
+
+// Regression: rapid/concurrent backups group multiple git_snapshots into one
+// action. Restore must collapse them to the OLDEST (pre-group) snapshot, not
+// replay them newest-last (which would leave the agent's edits un-reverted).
+// See collapseGitSnapshots() in restore.ts.
+describe("restore - grouped git_snapshots (concurrent-backup regression)", () => {
+  it("reverts all edits when one action holds multiple snapshots", () => {
+    const cp = require("node:child_process") as typeof import("node:child_process");
+    const { runBackup } = require("../src/backup/strategies.js") as typeof import("../src/backup/strategies.js");
+    const { restoreActionLoop } = require("../src/restore/restore.js") as typeof import("../src/restore/restore.js");
+
+    const W = fs.mkdtempSync(path.join(os.tmpdir(), "grp-"));
+    const cwd0 = process.cwd();
+    try {
+      process.chdir(W);
+      cp.execSync("git init -q && git config user.email e@x && git config user.name e");
+      fs.writeFileSync("a.py", "A-orig\n");
+      fs.writeFileSync("tests.py", "TESTS-orig\n");
+      cp.execSync("git add -A && git commit -qm base");
+
+      const cfg = { backupDir: path.join(W, ".chats-sandbox", "backups"), subagentEnabled: false, maxActions: 50 } as unknown as SandboxConfig;
+      const ctx = (p: string): HookContext => ({ hook_event: "PreToolUse", tool_name: "patch", tool_input: { path: p } });
+      // 3 rapid backups (same pending action) with edits between them
+      runBackup(ctx("a.py"), cfg);
+      fs.writeFileSync("a.py", "A-edit1\n");
+      runBackup(ctx("tests.py"), cfg);
+      fs.writeFileSync("tests.py", "TESTS-EDITED\n");
+      runBackup(ctx("a.py"), cfg);
+      fs.writeFileSync("a.py", "A-edit2\n");
+
+      const acts = fs.readdirSync(cfg.backupDir).filter((d: string) => d.startsWith("action_")).sort();
+      const meta = JSON.parse(fs.readFileSync(path.join(cfg.backupDir, acts[0], "metadata.json"), "utf-8"));
+      const snaps = meta.filter((m: { strategy: string }) => m.strategy === "git_snapshot").length;
+      assert.ok(snaps >= 2, `expected grouped snapshots, got ${snaps}`);
+
+      restoreActionLoop(acts[0], cfg);
+      assert.equal(fs.readFileSync("tests.py", "utf-8").trim(), "TESTS-orig", "tests.py must revert");
+      assert.equal(fs.readFileSync("a.py", "utf-8").trim(), "A-orig", "a.py must revert");
+    } finally {
+      process.chdir(cwd0);
+      fs.rmSync(W, { recursive: true, force: true });
+    }
   });
 });

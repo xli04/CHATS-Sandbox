@@ -32,5 +32,9 @@
     "@typescript-eslint/parser": "^8.58.1",
     "eslint": "^10.2.0",
     "typescript": "^5.4.0"
+  },
+  "dependencies": {
+    "@types/js-yaml": "^4.0.9",
+    "js-yaml": "^5.0.0"
   }
 }

@@ -201,6 +201,50 @@ describe("subagent: runSubagentBackup with mock claude CLI", () => {
       teardown(workspace, originalCwd);
     }
   });
+
+  it("RESPECTS the subagent's self-decided live_restore (NOT forced for remote)", () => {
+    // qwen-style: model records SQL recovery + live_restore:false (a fixed,
+    // replayable statement). The subagent's own choice now stands — the
+    // restore runs the recorded SQL deterministically, no forced agent call.
+    installMockClaude(JSON.stringify({
+      description: "shadow-copied rows before DELETE",
+      backup_commands: ["INSERT INTO _chats_trash.orders SELECT ..."],
+      recovery_commands: ["INSERT INTO orders SELECT * FROM _chats_trash.orders WHERE ckpt='x'"],
+      live_restore: false,
+    }));
+    const { workspace, config, originalCwd } = setup();
+    try {
+      const dir = path.join(config.backupDir, "action_mcp");
+      fs.mkdirSync(dir, { recursive: true });
+      const a = art(runSubagentBackup(
+        makeCtx("mcp__postgres__execute_sql", { sql: "DELETE FROM orders WHERE id<=30" }), dir, config));
+      assert.equal(a.liveRestore, false, "subagent's own live_restore=false is respected (deterministic recovery)");
+    } finally {
+      teardown(workspace, originalCwd);
+    }
+  });
+
+  it("KEEPS the model's live_restore=false for local/deterministic actions", () => {
+    installMockClaude(JSON.stringify({
+      description: "saved file copy",
+      backup_commands: ["cp f /tmp/bk"],
+      recovery_commands: ["cp /tmp/bk f"],
+      live_restore: false,
+      artifact_paths: ["/tmp/bk"],
+    }));
+    const { workspace, config, originalCwd } = setup();
+    try {
+      const dir = path.join(config.backupDir, "action_local");
+      fs.mkdirSync(dir, { recursive: true });
+      fs.writeFileSync("/tmp/bk", "data");   // durable artifact so it verifies
+      const a = art(runSubagentBackup(
+        makeCtx("Bash", { command: "mv f g" }), dir, config));
+      assert.equal(a.liveRestore, false, "local recovery stays cheap canned replay");
+      fs.rmSync("/tmp/bk", { force: true });
+    } finally {
+      teardown(workspace, originalCwd);
+    }
+  });
 });
 
 // ── runBackup integration with subagent ──────────────────────────────

@@ -18,9 +18,24 @@
 
 import * as fs from "node:fs";
 import * as path from "node:path";
+import * as os from "node:os";
 import { execSync } from "node:child_process";
+// js-yaml is LAZY-loaded (see loadYaml) — it's an external dep that may be
+// absent in trimmed deployments (e.g. a benchmark container that ships only
+// dist/). It's used solely by filteredHermesHome (hermes MCP filtering); the
+// common backup path must never crash on a missing module at import time.
+function loadYaml(): { load: (s: string) => unknown; dump: (o: unknown) => string } | null {
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    return require("js-yaml");
+  } catch {
+    return null;
+  }
+}
 import type { BackupArtifact, HookContext, SandboxConfig } from "../types.js";
 import { describeToolAction } from "../types.js";
+import { extractJsonObject } from "../util/extract_json.js";
+import { serverFromToolName } from "../explore/experiences.js";
 
 /** Shape of the JSON the subagent is instructed to return */
 interface SubagentResponse {
@@ -91,11 +106,11 @@ function subagentEnv(): NodeJS.ProcessEnv {
  * caller degrades gracefully (skip backup / report restore failure)
  * exactly as it did for the missing-claude case.
  */
-function buildSubagentInvocation(
+export function buildSubagentInvocation(
   prompt: string,
   config: SandboxConfig,
-  opts?: { withMcp?: boolean },
-): { bin: string; args: string[]; runner: "claude" | "hermes" | "openclaw" | "codex" } | null {
+  opts?: { withMcp?: boolean; isolateBrowserProfile?: boolean; neededServer?: string | null; maxTurns?: number; toolAllow?: string[] },
+): { bin: string; args: string[]; runner: "claude" | "hermes" | "openclaw" | "codex"; env?: Record<string, string> } | null {
   const runner = config.subagentRunner ?? "claude";
 
   if (runner === "codex") {
@@ -136,12 +151,35 @@ function buildSubagentInvocation(
     if (!isCommandAvailable("hermes")) return null;
     const model = config.subagentHermesModel || "anthropic/claude-haiku-4.5";
     const provider = config.subagentHermesProvider || "openrouter";
+    // Dynamic MCP loading: for an MCP/browser action, hand hermes a HOME
+    // whose config loads ONLY that action's server (skip booting chromium
+    // for a DB action, etc.). null/undefined server → keep the global config.
+    let env: Record<string, string> | undefined;
+    if (opts?.neededServer) {
+      const home = filteredHermesHome(opts.neededServer, opts.isolateBrowserProfile, opts.toolAllow);
+      // Point hermes at the filtered home via BOTH HOME and HERMES_HOME. hermes
+      // resolves its config dir as getenv("HERMES_HOME", ~/.hermes) — it checks
+      // HERMES_HOME FIRST, so relying on HOME alone is unreliable (an inherited
+      // HERMES_HOME, or a hermes launcher that resets HOME, sends it back to the
+      // GLOBAL config — which still pins the agent's live /tmp browser profile,
+      // causing the subagent's playwright to collide on the locked profile).
+      if (home) env = { HOME: home, HERMES_HOME: path.join(home, ".hermes") };
+    }
+    // Lean toolset: a backup subagent only needs to run shell/file commands
+    // (and the action's MCP for remote backups). Restricting to these strips
+    // the skills catalog + persistent-memory boilerplate from hermes's system
+    // prompt — ~2.3k tokens of dead weight per call. The main agent already
+    // does this; the subagent now matches.
+    const toolsets = "terminal,file" + (opts?.neededServer ? `,mcp-${opts.neededServer}` : "");
     return {
       bin: "hermes",
       runner,
+      env,
       // -Q quiet (programmatic), --yolo skip approval prompts so the
-      // headless subagent can run git/bash without blocking.
-      args: ["chat", "-q", prompt, "-m", model, "--provider", provider, "-Q", "--yolo"],
+      // headless subagent can run git/bash without blocking. --max-turns
+      // hard-bounds the loop (strict pass passes a tight 6; the default 90
+      // let qwen burn ~80s "still thinking").
+      args: ["chat", "--toolsets", toolsets, "-q", prompt, "-m", model, "--provider", provider, "-Q", "--yolo", "--max-turns", String(opts?.maxTurns ?? 15)],
     };
   }
 
@@ -162,13 +200,207 @@ function buildSubagentInvocation(
   if (config.subagentModel && config.subagentModel !== "inherit") {
     args.push("--model", config.subagentModel);
   }
-  // Live-restore only: hand the subagent the same MCP tools the agent used
-  // (e.g. a playwright browser) so it can reverse remote/UI state through
-  // the real interface — no privileged DB backdoor assumed.
+  // Hand the subagent the same MCP tools the agent used (e.g. a postgres
+  // server, or a playwright browser) so it can READ pre-state at backup
+  // time and REVERSE state at restore time through the real interface —
+  // no privileged DB backdoor assumed. At BACKUP time the agent's browser
+  // is still live, so a shared browser profile would collide on the
+  // single-instance lock; isolateBrowserProfile gives the subagent its own
+  // (auth-seeded) copy. Non-browser MCP servers have no such collision.
   if (opts?.withMcp && config.subagentMcpConfig) {
-    args.push("--mcp-config", config.subagentMcpConfig);
+    if (opts.neededServer) {
+      // Dynamic MCP loading: only this action's server, and ignore every
+      // other MCP source (--strict-mcp-config).
+      args.push("--mcp-config",
+        filteredClaudeMcpConfig(config.subagentMcpConfig, opts.neededServer, !!opts.isolateBrowserProfile));
+      args.push("--strict-mcp-config");
+    } else {
+      args.push("--mcp-config",
+        opts.isolateBrowserProfile ? isolatedMcpConfig(config.subagentMcpConfig) : config.subagentMcpConfig);
+    }
   }
   return { bin: "claude", args, runner };
+}
+
+/**
+ * Produce a temp MCP-config whose browser server (if any) uses its OWN
+ * `--user-data-dir` — a copy of the agent's profile, so it inherits the
+ * logged-in session but holds a SEPARATE lock. This lets the backup
+ * subagent open a browser to read pre-action state while the agent's
+ * browser is still live. Non-browser servers pass through unchanged.
+ * Best-effort: on any failure, returns the original config path.
+ */
+export function isolatedMcpConfig(mcpPath: string): string {
+  try {
+    const raw = JSON.parse(fs.readFileSync(mcpPath, "utf-8")) as {
+      mcpServers?: Record<string, { args?: unknown[] }>;
+    };
+    const servers = raw.mcpServers ?? {};
+    let rewrote = false;
+    for (const name of Object.keys(servers)) {
+      const args = servers[name].args;
+      if (!Array.isArray(args)) continue;
+      const i = args.indexOf("--user-data-dir");
+      if (i >= 0 && typeof args[i + 1] === "string") {
+        const orig = String(args[i + 1]);
+        const copy = path.join(os.tmpdir(), `chats-sub-profile-${process.pid}-${name}`);
+        try { fs.rmSync(copy, { recursive: true, force: true }); } catch { /* ignore */ }
+        // Copy the LIVE profile. This frequently throws partway because the
+        // agent's browser is mutating files under it — that's fine, the login
+        // cookies land early; we just must not let the throw skip the lock
+        // strip below (the bug that left SingletonLock in the copy and made
+        // the subagent's browser report "locked by parent").
+        // Copy the profile with a FAULT-TOLERANT shell `cp`, not fs.cpSync:
+        // the agent's browser is actively writing the LIVE profile, and
+        // cpSync THROWS on the first busy/locked file, leaving NO copy at all
+        // (the bug: subagent then gets a broken profile → "locked by parent").
+        // `cp` logs per-file errors but keeps going, so the auth files
+        // (Cookies, Local Storage) still land. Errors are swallowed (|| true).
+        try {
+          if (fs.existsSync(orig)) {
+            const { execSync } = require("node:child_process");
+            fs.mkdirSync(copy, { recursive: true });
+            execSync(`cp -a -- '${orig.replace(/'/g, "'\\''")}/.' '${copy.replace(/'/g, "'\\''")}/' 2>/dev/null || true`,
+              { timeout: 60_000 });
+          }
+        } catch { /* partial copy is acceptable — login cookies land early */ }
+        // Belt-and-suspenders strip of any Singleton* that slipped through.
+        // MUST use unlinkSync, NOT rmSync: rmSync follows the symlink to its
+        // (dangling, hostname-pid) target and no-ops, leaving the link behind.
+        try {
+          for (const f of (fs.existsSync(copy) ? fs.readdirSync(copy) : [])) {
+            if (f.startsWith("Singleton")) {
+              try { fs.unlinkSync(path.join(copy, f)); } catch { /* ignore */ }
+            }
+          }
+        } catch { /* ignore */ }
+        args[i + 1] = copy;
+        rewrote = true;
+      }
+    }
+    if (!rewrote) return mcpPath;
+    const out = path.join(os.tmpdir(), `chats-sub-mcp-${process.pid}.json`);
+    fs.writeFileSync(out, JSON.stringify(raw));
+    return out;
+  } catch {
+    return mcpPath;
+  }
+}
+
+/**
+ * Dynamic MCP loading (claude runner): write a `--mcp-config` containing
+ * ONLY the server this action uses, so a postgres action doesn't boot the
+ * browser MCP (and vice-versa). Combine with `isolatedMcpConfig` when the
+ * kept server is a browser. Returns the temp config path (falls back to the
+ * original on any error).
+ */
+function filteredClaudeMcpConfig(mcpPath: string, neededServer: string, isolateBrowser: boolean): string {
+  try {
+    const raw = JSON.parse(fs.readFileSync(mcpPath, "utf-8")) as { mcpServers?: Record<string, unknown> };
+    const all = raw.mcpServers ?? {};
+    const kept: Record<string, unknown> = {};
+    if (all[neededServer]) kept[neededServer] = all[neededServer];
+    const outPath = path.join(os.tmpdir(), `chats-sub-filtered-${process.pid}.json`);
+    fs.writeFileSync(outPath, JSON.stringify({ mcpServers: kept }));
+    return isolateBrowser ? isolatedMcpConfig(outPath) : outPath;
+  } catch {
+    return mcpPath;
+  }
+}
+
+/**
+ * Per-server MCP tool ALLOWLISTS for the backup subagent (robustness-reviewed
+ * superset). A backup READS current state + RECORDS the reversal, so it needs
+ * the capture/read tools, not the full mutation toolset — trimming the schema
+ * (~6.7k tok/call for 33 playwright tools) is the subagent's biggest cost win.
+ * NOT a minimal set: an under-trimmed allowlist makes the subagent emit
+ * confident-but-empty backups, so we ship the reviewer-approved superset.
+ *   - postgres.execute_sql is MANDATORY — the capture IS a mutating
+ *     `INSERT … SELECT` into a shadow table, not a read.
+ *   - browser keeps interaction/wait tools because capture often must
+ *     navigate/select/await before snapshotting (SPAs, multi-tab, async).
+ * A server NOT in this map is left UNFILTERED (all tools) — safety default.
+ */
+const SUBAGENT_TOOL_ALLOWLIST: Record<string, string[]> = {
+  playwright: [
+    "browser_navigate", "browser_navigate_back", "browser_snapshot",
+    "browser_take_screenshot", "browser_wait_for", "browser_tabs",
+    "browser_click", "browser_type", "browser_select_option",
+    "browser_hover", "browser_evaluate",
+    // handle_dialog is REQUIRED: deleting a post/comment (the reversal of a
+    // Create) triggers a browser confirm() dialog — without this the restore
+    // subagent can click Delete but can't accept the dialog, so the reversal
+    // hangs/fails. press_key covers Enter-to-submit / Escape on forms.
+    "browser_handle_dialog", "browser_press_key",
+  ],
+  postgres: ["execute_sql", "list_objects", "get_object_details", "list_schemas"],
+  filesystem: ["read_file", "write_file", "move_file", "get_file_info"],
+  fs: ["read_file", "write_file", "move_file", "get_file_info"],
+};
+
+/**
+ * Dynamic MCP loading (hermes runner): hermes always reads
+ * `$HOME/.hermes/config.yaml` and has no per-call MCP flag, so give the
+ * subagent its OWN HOME — a copy of the user's `.hermes` (auth/sessions
+ * preserved) whose `mcp_servers` is filtered to ONLY the needed server.
+ * Returns the temp HOME dir, or null to keep the global config.
+ */
+function filteredHermesHome(neededServer: string, isolateBrowserProfile?: boolean, toolAllow?: string[]): string | null {
+  try {
+    const srcHomeDir = path.join(os.homedir(), ".hermes");
+    const srcCfg = path.join(srcHomeDir, "config.yaml");
+    if (!fs.existsSync(srcCfg)) return null;
+    // The home name keys on process.pid and is pre-wiped below. Each tool-call
+    // hook is a fresh short-lived process, so on a multi-backup run the OS can
+    // reuse a pid and this pre-wipe would delete a PRIOR backup's home (its
+    // session log + request dumps) before anything reads it. For benchmark
+    // forensics (CHATS_KEEP_SUBAGENT_HOME=1) give every call a UNIQUE home and
+    // never pre-wipe, so prior backups' artifacts survive for capture. Default
+    // behavior is unchanged (pid-named + pre-wiped).
+    const _keepHome = process.env.CHATS_KEEP_SUBAGENT_HOME === "1";
+    const _suffix = _keepHome
+      ? `${process.pid}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`
+      : String(process.pid);
+    const tmpHome = path.join(os.tmpdir(), `chats-sub-home-${_suffix}`);
+    if (!_keepHome) fs.rmSync(tmpHome, { recursive: true, force: true });
+    fs.cpSync(srcHomeDir, path.join(tmpHome, ".hermes"), { recursive: true });
+    const yaml = loadYaml();
+    if (!yaml) return null; // no js-yaml → skip MCP filtering, use global config
+    const cfg = (yaml.load(fs.readFileSync(srcCfg, "utf-8")) ?? {}) as { mcp_servers?: Record<string, unknown> };
+    const all = cfg.mcp_servers ?? {};
+    cfg.mcp_servers = all[neededServer] ? { [neededServer]: all[neededServer] } : {};
+
+    // Action-aware tool allowlist: register ONLY the capture/read tools this
+    // server's backups need (via hermes' `mcp_servers.<name>.tools.include`),
+    // cutting the per-call tool-schema cost without losing coverage. Unknown
+    // servers are left unfiltered. Uses raw (unprefixed) MCP tool names.
+    // Per-spawn override (BACKUP narrows; RESTORE passes nothing → full default).
+    const allow = toolAllow !== undefined ? toolAllow : SUBAGENT_TOOL_ALLOWLIST[neededServer];
+    const kept0 = cfg.mcp_servers[neededServer];
+    if (allow && kept0 && typeof kept0 === "object" && !Array.isArray(kept0)) {
+      const srv = kept0 as Record<string, unknown>;
+      const existing = (srv.tools && typeof srv.tools === "object") ? srv.tools as Record<string, unknown> : {};
+      srv.tools = { ...existing, include: allow };
+    }
+
+    // Shared-live-browser design (replaces the old profile-copy isolation):
+    // the playwright server now runs in HTTP mode and the kept config carries
+    // a `url:` entry, NOT a stdio `command`/`--user-data-dir`. The subagent
+    // connects to the SAME shared browser the main agent uses, so there is no
+    // profile to copy and no single-instance lock to strip — it reads the TRUE
+    // live pre-state (the main is paused on the exact pre-mutation page) and
+    // works in its OWN tab. `isolateBrowserProfile` is therefore a no-op for a
+    // url server; we keep the parameter only for the (legacy) stdio path and
+    // the Claude-runner equivalent. If a kept server still has a stdio
+    // `--user-data-dir` (no url), we deliberately do NOT copy it: with the
+    // shared server the copy was the source of lock/symlink/stale-snapshot
+    // bugs the new design eliminates.
+    void isolateBrowserProfile;
+    fs.writeFileSync(path.join(tmpHome, ".hermes", "config.yaml"), yaml.dump(cfg));
+    return tmpHome;
+  } catch {
+    return null;
+  }
 }
 
 /**
@@ -195,51 +427,158 @@ function tellUser(message: string): void {
   }
 }
 
+/** The tier-3 subagent prompt = the "subagent"-mode shared backup guidance. */
 function buildSubagentPrompt(
   ctx: HookContext,
   actionDir: string,
   config?: SandboxConfig,
 ): string {
-  const toolName = ctx.tool_name;
-  const command = String(ctx.tool_input.command ?? "");
-  const args = JSON.stringify(ctx.tool_input, null, 2);
-  const cwd = process.cwd();
+  return buildBackupGuidance({
+    mode: "subagent",
+    toolName: ctx.tool_name,
+    command: String(ctx.tool_input.command ?? ""),
+    args: JSON.stringify(ctx.tool_input, null, 2),
+    cwd: process.cwd(),
+    actionDir,
+    config,
+  });
+}
+
+/** Options for {@link buildBackupGuidance}. */
+export interface BackupGuidanceOpts {
+  mode: "subagent" | "inline";
+  toolName?: string;
+  command?: string;
+  args?: string;
+  cwd?: string;
+  actionDir?: string;
+  config?: SandboxConfig;
+  /** Override the resolved MCP server (e.g. "playwright" for the inline reddit lane). */
+  server?: string | null;
+  /** Explicit experience to inject (else derived from the server). */
+  experienceName?: string;
+}
+
+/** SHARED backup knowledge for BOTH the tier-3 subagent and the inline-backup
+ *  baseline, so the two can never drift. `mode` only changes the wrapper — the
+ *  header, the "you're blocking / HARD LIMIT" line, and the result handoff. The
+ *  PIN rule, browser directive, experiences, and category strategies are
+ *  identical across modes. */
+export function buildBackupGuidance(opts: BackupGuidanceOpts): string {
+  const { mode, config } = opts;
+  const toolName = opts.toolName ?? "";
+  const command = opts.command ?? "";
+  const args = opts.args ?? "";
+  const cwd = opts.cwd ?? process.cwd();
+  const actionDir = opts.actionDir ?? "<backup-storage-dir>";
+
+  // Resolve the action's MCP server via the listed tool registry (membership
+  // — robust to bare names), falling back to name-parsing. Used both to pick
+  // the experience and to give browser actions a content-pinning directive.
+  let server: string | null = opts.server ?? null;
+  if (!server && toolName) {
+    try {
+      const { serverFromToolName } = require("../explore/experiences.js");
+      const { loadToolRegistry, serverForTool } = require("../explore/tool_registry.js");
+      server = serverForTool(toolName, loadToolRegistry(config ?? ({} as SandboxConfig)))
+        || serverFromToolName(toolName);
+    } catch { /* ignore */ }
+  }
+  const isBrowser = server === "playwright";
 
   // Inject any learned easy-win reversal patterns for this MCP server
   // (from `chats-sandbox explore`). Prefer-cheap-reversal guidance.
   let experienceBlock = "";
   if (config) {
     try {
-      const { serverFromToolName, loadExperiences, renderExperiencesForPrompt } =
+      const { loadExperiences, renderExperiencesForPrompt, serverToExperienceMap } =
         require("../explore/experiences.js");
-      // Load the experiences for this action's MCP server; for browser/UI
-      // actions (playwright) fall back to the "reddit" experience so the
-      // learned reversals are always available during the webarena run.
-      const server = serverFromToolName(toolName) || "reddit";
-      experienceBlock = renderExperiencesForPrompt(loadExperiences(config, server))
-        || renderExperiencesForPrompt(loadExperiences(config, "reddit"));
+      // server → experience. Dedicated MCPs match by name (postgres →
+      // postgres); a browser-driven site differs, bridged by the experience's
+      // appliesTo (reddit.appliesTo=["playwright"]) or experienceForServer.
+      const map = serverToExperienceMap(config);
+      const expName = opts.experienceName || (server && (config.experienceForServer?.[server] || map[server])) || server;
+      if (expName) {
+        experienceBlock = renderExperiencesForPrompt(loadExperiences(config, expName));
+      }
     } catch { /* experiences optional */ }
   }
 
-  return `You are a backup subagent for CHATS-Sandbox. A tool call is about to execute that affects state OUTSIDE the workspace. Your job: **actually CREATE a minimal recovery artifact BEFORE the action runs**, then report what you did as a single JSON object.
+  // Browser (playwright) actions create entities with NO id at backup time,
+  // so the recovery must PIN BY CONTENT. Read the form/page and capture the
+  // identifying text verbatim — the exact TITLE for a post/submission, the
+  // FULL text for a comment — so restore targets that one entity, not "the
+  // most recent". This is the targeted version of the generic PIN-THE-TARGET
+  // rule, and the fix for create-via-browser deleting the wrong post.
+  // The values the agent just typed (title/body) — captured by the hook from
+  // the earlier fill/type actions, so the subagent doesn't have to re-derive
+  // the title from a live browser snapshot.
+  let recentInputBlock = "";
+  if (isBrowser && config) {
+    try {
+      const { loadRecentBrowserInput } = require("./strategies.js");
+      const recent: string[] = loadRecentBrowserInput(config);
+      if (recent.length) {
+        recentInputBlock = `\n  ⭐ VALUES THE AGENT JUST TYPED (use these as the EXACT title/body — do NOT re-derive or guess): ${recent.map((v) => JSON.stringify(v)).join(" , ")}`;
+      }
+    } catch { /* optional */ }
+  }
+  // PRE-STATE (subagent only): the agent's last page VIEW (snapshot/navigate)
+  // = WHERE the change happens + the ORIGINAL values. Sourced from the PAGE, so
+  // it works even when the mutation was a browser_run_code_unsafe (which hides
+  // its action in a `code` arg, blind to recentInputBlock). GATE: if no fresh
+  // view, say so and FORBID fabrication — fail to UNVERIFIED, not a wrong recovery.
+  let preStateBlock = "";
+  if (config && (isBrowser || toolName.startsWith("mcp__"))) {
+    try {
+      const { loadRecentBrowserSnapshot } = require("./strategies.js");
+      const snap = loadRecentBrowserSnapshot(config);
+      if (snap && snap.text) {
+        preStateBlock = `
+📍 THE ORIGINAL PRE-STATE is in PAGE_STATE below — the agent's last page view BEFORE this action (URL: ${snap.url || "unknown"}).
+🚫 You have NO browser. Write the recovery DIRECTLY from PAGE_STATE — do not browse, do not navigate, do not guess.
+<<<PAGE_STATE
+${snap.text}
+PAGE_STATE>>>
+  • EDIT   → recovery = restore the field to the ORIGINAL value shown in PAGE_STATE. Put that original VERBATIM in recovery_commands; NEVER the just-typed new value.
+  • DELETE → capture the entity's CURRENT content from PAGE_STATE into remote-state.json.
+  • CREATE → the new entity isn't in the page yet; pin it by the typed values above.
+  ⚠️ IF the value/field you need is NOT present in PAGE_STATE (e.g. it lives in an input's value attribute that the snapshot did not capture): DO NOT fabricate (no assumed-empty, no turning an edit into "delete the post"). Instead set live_restore=true and begin the description with EXACTLY "UNVERIFIED: pre-state value not in snapshot" so a restore step re-derives instead of replaying a wrong command.`;
+      } else {
+        preStateBlock = `
+⚠️ NO PRE-STATE PAGE VIEW AVAILABLE — you were NOT handed the page the agent is on, so the ORIGINAL value is unknown to you. If you can read the current state with your tools, do so. If you CANNOT, do NOT fabricate (do NOT assume the original was empty; do NOT turn an edit into "delete the post"): set live_restore=true and put "UNVERIFIED: pre-state not captured" in the description so a restore agent re-derives instead of replaying a wrong command.`;
+      }
+    } catch { /* optional */ }
+  }
+  const browserPinDirective = isBrowser ? `
+🌐 BROWSER ACTION — PIN THE NEW ENTITY BY CONTENT (it has no id yet):${recentInputBlock}
+  The exact text being committed is in the typed values above (preferred) or one snapshot of the form; put it VERBATIM in recovery_commands:
+  - creating a POST/submission → capture the exact TITLE (e.g. recovery: "delete the submission whose title == '<exact title>'").
+  - creating a COMMENT/reply  → capture the FULL comment text (it has no title; the body IS the identifier).
+  - editing → capture the entity's id/title AND the original text to restore.
+  NEVER target by position/recency ("the most recent", "the first") — that deletes the WRONG entity.
+` : "";
 
-UPCOMING ACTION:
-  Tool: ${toolName}
-  Args: ${args}
-  Command: ${command}
+  // Guidance (GENERAL — "capture / confirm / write", not tied to any one
+  // MCP server) to keep the backup fast. This is a PROMPT instruction, not
+  // a hard cap — the watcher wrapper still ends the run once the result is
+  // written, so an over-eager model can't drag the tail out either way.
+  const directive = mode === "inline" ? `For EACH step that creates / edits / deletes state OUTSIDE your workspace (a file outside the project, a package install, an env change, a remote / MCP / browser / database mutation) and would be hard to undo: CAPTURE what you need to reverse it, perform the step, then RECORD the reversal (see RECOVERY NOTE FORMAT). Take the target + method from the KNOWN EASY-WIN PATTERNS and the matching strategy below.
+🎯 PIN THE TARGET: if the action creates / edits / deletes an identifiable entity (a record, post, comment, row, file, ticket, document…), your recovery MUST identify that EXACT entity by a captured STABLE IDENTIFIER — its id, or a unique attribute (exact title/key) when the id does not exist yet (a fresh create). Capture that identifier NOW. NEVER target by position or recency ("the most recent", "the first", "the latest") — that reverses the WRONG entity. For a create, the reversal is "delete the entity whose <id/title> == <captured value>"; for an edit, "restore <id>'s field to <captured original>".` : `⏱️ BE FAST — you are blocking the agent. Do the backup in essentially TWO steps and NO MORE:
+  STEP 1 — CAPTURE: preserve the state the upcoming action is about to change, in as FEW tool calls as possible (ideally one — combine statements if your tool allows it, e.g. create-shadow + copy-rows in a single call). Take the target + method DIRECTLY from the UPCOMING ACTION and the KNOWN EASY-WIN PATTERNS below; if a pattern matches, apply it as-is.
+  STEP 2 — WRITE the result JSON (see OUTPUT FORMAT).
+⛔ HARD LIMIT: ~3 tool calls. A 4th ENDS your session and FAILS the backup — so do NOT waste calls exploring/confirming; spend them on the capture then the result.
+🎯 PIN THE TARGET: if the action creates / edits / deletes an identifiable entity (a record, post, comment, row, file, ticket, document…), your recovery_commands MUST identify that EXACT entity by a captured STABLE IDENTIFIER — its id, or a unique attribute (exact title/key) when the id does not exist yet (a fresh create). Capture that identifier NOW. NEVER target by position or recency ("the most recent", "the first", "the latest") — that reverses the WRONG entity. For a create, the reversal is "delete the entity whose <id/title> == <captured value>"; for an edit, "restore <id>'s field to <captured original>".
+After STEP 2 you are DONE — STOP immediately. Do NOT confirm/verify the backup, do not re-query, do not re-read, do not reflect, do not summarise (a later restore step handles correctness).
+Do NOT spend steps listing / describing / enumerating / inspecting the system "to understand it" or "to be safe" — the action and the patterns already tell you what to capture. (Only if you genuinely cannot capture the state from the action + patterns may you look further — but never just to double-check.)`;
 
-WORKSPACE (files inside this directory are already captured by tier-2 git snapshot):
-  ${cwd}
-
-BACKUP STORAGE DIRECTORY (write any artifact files you create here):
-  ${actionDir}
-${experienceBlock}
-
-## CLASSIFY THE ACTION FIRST
-
-Pick ONE of these categories:
-
-### Category A: Local file write outside the current workspace
+  // ── Action-category dispatch ──────────────────────────────────────────
+  // The plugin already knows the action type, so send ONLY the relevant
+  // backup STRATEGY rather than the whole A–R catalog (~2.1k tokens of which
+  // only one block ever applies on any given call). Categories E (anything-
+  // else) + R (read-only) compress into a two-sentence fallback appended to
+  // every dispatch. Category text is kept verbatim from the prior catalog.
+  const CAT_A = `### Category A: Local file write outside the current workspace
 Example: Write tool with path /Users/foo/other_project/src/file.ts
 
 STRATEGY — shadow git repo scoped to the AFFECTED FILES ONLY:
@@ -263,24 +602,24 @@ STRATEGY — shadow git repo scoped to the AFFECTED FILES ONLY:
    If the upcoming action CREATES a file that does not exist yet, the
    recovery for that file is an explicit \`rm '<absolute path>'\` instead.
    NEVER include \`git clean -fd\` in recovery_commands: on a shared
-   work-tree it deletes every unrelated untracked file under the root.
+   work-tree it deletes every unrelated untracked file under the root.`;
 
-### Category B: Remote state (git push, curl POST/PUT/DELETE, API calls)
+  const CAT_B = `### Category B: Remote state (git push, curl POST/PUT/DELETE, API calls)
 STRATEGY — document recovery for out-of-band state:
 - For git push: create a local git tag at the current HEAD (backup_commands), and provide recovery_commands that would force-push the tag back if needed.
-- For remote API calls: you likely can't back up the remote state. Document what would be needed for manual recovery in description.
+- For remote API calls: you likely can't back up the remote state. Document what would be needed for manual recovery in description.`;
 
-### Category C: System package install/uninstall (pip, npm, apt, brew)
+  const CAT_C = `### Category C: System package install/uninstall (pip, npm, apt, brew)
 STRATEGY — save a manifest:
 - pip install → pip freeze > ${actionDir}/pip_freeze.txt, recovery = pip install -r that file
 - npm install -g → npm list -g --json > ${actionDir}/npm_list.json
 - apt install → dpkg --get-selections > ${actionDir}/apt_list.txt
-- brew install → brew list > ${actionDir}/brew_list.txt
+- brew install → brew list > ${actionDir}/brew_list.txt`;
 
-### Category D: Environment variable mutation (export, unset, source)
-STRATEGY — snapshot env vars: env > ${actionDir}/env.txt
+  const CAT_D = `### Category D: Environment variable mutation (export, unset, source)
+STRATEGY — snapshot env vars: env > ${actionDir}/env.txt`;
 
-### Category F: Remote state accessed via an MCP tool (mcp__*)
+  const CAT_F = `### Category F: Remote state accessed via an MCP tool (mcp__*)
 The upcoming action is an MCP tool call (tool name starts with mcp__).
 Examples: mcp__playwright__browser_click, mcp__notion__create_page,
 mcp__github__create_issue, mcp__slack__send_message.
@@ -344,23 +683,70 @@ recovery instructions:
 If the MCP doesn't expose a clean read-side counterpart, do your best:
 take a screenshot, save the DOM, save the URL. Always emit a JSON
 file even if it only contains the URL and a "manual recovery needed"
-note — having SOMETHING beats having nothing.
+note — having SOMETHING beats having nothing.`;
 
-### Category E: Anything else
-Do your best to capture some recoverable state in ${actionDir}, or document clearly what cannot be recovered.
+  // Classify from what the plugin already knows; pick ONE strategy block.
+  const pickCategory = (): string => {
+    if (isBrowser || toolName.startsWith("mcp__")) return CAT_F;
+    if (/\b(pip3?|npm|yarn|pnpm|apt|apt-get|brew|conda|gem|cargo)\b[^\n]*\binstall\b/.test(command)) return CAT_C;
+    if (/\bgit\s+push\b/.test(command) ||
+        (/\bcurl\b/.test(command) && (/-X\s*(POST|PUT|DELETE|PATCH)/i.test(command) || /(--data|\s-d\s|\s-F\s)/.test(command)))) return CAT_B;
+    if (/(^|\s)(export|unset|source)\s/.test(command)) return CAT_D;
+    if (/^(Write|Edit|MultiEdit|patch|str_replace)$/i.test(toolName) ||
+        /(>|>>|\btee\b|\bcp\b|\bmv\b|\bdd\b|\btruncate\b|install\s+-)/.test(command)) return CAT_A;
+    return "";
+  };
+  const picked = pickCategory();
+  const categoryGuidance = mode === "inline" ? `## HOW TO BACK UP EACH ACTION
+Apply the strategy that matches each action. The common case in this task is a remote / MCP / browser mutation:
+${CAT_F}
+For other action types — a local file write outside the project, a package install (pip/npm/apt/brew), or an env change — apply the analogous "capture the prior state, then record the exact inverse" strategy. If an action only READS (mutates nothing outside the workspace), it needs no backup.` : `## HOW TO BACK UP THIS ACTION
+${picked ? `\n${picked}\n` : ""}
+If the action is READ-ONLY (only reads/inspects, mutates nothing outside the workspace) return no_backup_needed:true with empty backup_commands/recovery_commands — be conservative, only when CERTAIN it mutates nothing. If nothing above fits, capture whatever recoverable state you can into ${actionDir} or clearly document what cannot be recovered.`;
 
-### Category R: The action is READ-ONLY (no backup needed)
-If, after inspecting the upcoming action, you determine it only READS or
-inspects state and changes NOTHING outside the workspace — no file
-writes/deletes/moves, no package installs, no environment/remote/system/
-database mutation (e.g. \`git log\`, \`grep\`, \`cat\`, a SELECT query, a
-status/list/describe call) — then NO backup is needed. Return
-\`no_backup_needed: true\` with empty backup_commands/recovery_commands.
-Do NOT fabricate a backup for a read.
-**BE CONSERVATIVE: only do this when you are CERTAIN the action mutates nothing.** If there is ANY doubt — an unfamiliar tool, a flag you don't
-recognize, a command that *might* write — **perform the backup instead.**
-A wrongly-skipped backup of a real mutation is unrecoverable; an extra
-backup of a read is harmless.
+  if (mode === "inline") {
+    const persistDir = `${cwd}/.chats-sandbox/inline-backups`;
+    return `You are completing a normal task. In ADDITION to doing it, you must record how to reverse every action that changes state OUTSIDE your workspace, so it can be undone later.
+
+${directive}
+${browserPinDirective}${experienceBlock}
+
+${categoryGuidance}
+
+## RECOVERY NOTE FORMAT — RECORD **AND PERSIST TO DISK** (a recovery is only usable if it survives)
+After performing each out-of-workspace action, do ALL of the following:
+
+1. CAPTURE pre-state when the action DELETES or EDITS existing state: first use the SAME MCP/tools to read that state and WRITE it (the actual data, verbatim — not a summary) to a file under ${persistDir}/ (e.g. remote-state.json) with your write-file tool, so a future restore can re-create it. (A fresh CREATE has no prior state — pin its identifier instead, per above.)
+
+2. PERSIST the recovery: with your write-file tool, write a JSON object to ${persistDir}/recovery_<short-unique-id>.json with EXACTLY this shape:
+     {"description":"...","recovery_commands":["..."],"artifact_paths":["..."],"live_restore":false,"no_backup_needed":false}
+   - recovery_commands: the exact inverse (e.g. "delete the submission whose title == '<exact title>'", "pip install -r <freeze>", or a file restore). For a create → delete-by-pinned-identifier; for an edit → restore the original from the captured file.
+   - live_restore: false when the recovery is a fixed, replayable command; true when reversing needs LIVE state at restore (a web/UI reversal — element refs/layout move).
+   - This written file is the AUTHORITATIVE backup artifact.
+
+3. ALSO emit the same recovery note inline, wrapped in [BACKUP] and [/BACKUP], mirroring the persisted file, so it is visible in your transcript.
+
+You DO perform the actions — you are not only backing up.`;
+  }
+
+  return `You are a backup subagent for CHATS-Sandbox. A tool call is about to execute that affects state OUTSIDE the workspace. Your job: **actually CREATE a minimal recovery artifact BEFORE the action runs**, then report what you did as a single JSON object.
+
+${directive}
+${browserPinDirective}
+TRIGGERING ACTION (what is about to change state):
+  Tool: ${toolName}
+  Args: ${args}
+  Command: ${command}
+${preStateBlock}
+
+WORKSPACE (files inside this directory are already captured by tier-2 git snapshot):
+  ${cwd}
+
+BACKUP STORAGE DIRECTORY (write any artifact files you create here):
+  ${actionDir}
+${experienceBlock}
+
+${categoryGuidance}
 
 ## OUTPUT FORMAT
 
@@ -374,7 +760,10 @@ Your result is a **single JSON object with this exact shape**:
 - backup_commands: the commands you ACTUALLY RAN to create the backup
 - recovery_commands: commands that would reverse the upcoming action (these will be executed verbatim by chats-sandbox restore)
 - artifact_paths: files you created inside the backup storage directory
-- live_restore: true ONLY when the recovery_commands can't be trusted later because the target state is remote or dynamic — e.g. the upcoming action does a git push (remote history moves), a curl POST/PUT/DELETE to an external API, a docker push to a registry, a kubectl apply to a cluster, a production DB write, etc. In those cases chats-sandbox will spawn a fresh restore subagent instead of replaying your commands blindly. For local file writes (Category A), pip/npm installs (Category C), env mutations (Category D), set live_restore=false.
+- live_restore: YOU decide, based on whether the reversal can be written down NOW as a fixed, runnable recovery, or genuinely needs an agent to look at LIVE state at restore time.
+    • live_restore=false (PREFERRED — fast, no agent at restore): your recovery_commands are a complete, self-contained statement/command that will still work when replayed verbatim — e.g. a SQL statement that re-inserts from your shadow table, a file restore, a git checkout, an API call with a fixed id. Most backups are this. Write the EXACT recovery_commands.
+    • live_restore=true (only when needed): reversing genuinely requires reading the CURRENT state at restore time because positions/handles/contents move — e.g. a web/UI reversal (element refs and page layout change between now and restore), or remote state that may have shifted. Then chats-sandbox spawns a fresh agent to re-derive instead of replaying blindly.
+  When in doubt and your recovery is a concrete command/statement, choose false.
 - no_backup_needed: true ONLY when the action is READ-ONLY (Category R) — it changes nothing outside the workspace. When true, leave backup_commands and recovery_commands empty. Default false. Be conservative: when in doubt, perform the backup and leave this false.
 
 ## HOW THE RESULT IS COLLECTED — IMPORTANT
@@ -467,16 +856,12 @@ function parseSubagentOutput(raw: string): SubagentResponse | null {
     if (wrapper && typeof wrapper === "object") {
       const result = (wrapper as Record<string, unknown>).result;
       if (typeof result === "string") {
-        // Extract JSON block from the result text
-        const innerMatch = result.match(/\{[\s\S]*\}/);
-        if (innerMatch) {
-          try {
-            const inner = JSON.parse(innerMatch[0]);
-            const shaped = extractOurShape(inner);
-            if (shaped) return shaped;
-          } catch {
-            // fall through
-          }
+        // Pick the balanced {...} block that has our shape (not a greedy
+        // first-to-last span that merges narration + JSON and fails).
+        const inner = extractJsonObject(result, (o) => !!extractOurShape(o));
+        if (inner) {
+          const shaped = extractOurShape(inner);
+          if (shaped) return shaped;
         }
       }
       // openclaw agent --json wrapper: { payloads: [{ text }], meta }.
@@ -486,14 +871,10 @@ function parseSubagentOutput(raw: string): SubagentResponse | null {
         const text = payloads
           .map((p) => (p && typeof p === "object" ? String((p as Record<string, unknown>).text ?? "") : ""))
           .join("\n");
-        const m = text.match(/\{[\s\S]*\}/);
-        if (m) {
-          try {
-            const shaped = extractOurShape(JSON.parse(m[0]));
-            if (shaped) return shaped;
-          } catch {
-            // fall through
-          }
+        const found = extractJsonObject(text, (o) => !!extractOurShape(o));
+        if (found) {
+          const shaped = extractOurShape(found);
+          if (shaped) return shaped;
         }
       }
       // Maybe the wrapper itself has our shape (if claude passed through)
@@ -504,16 +885,11 @@ function parseSubagentOutput(raw: string): SubagentResponse | null {
     // Not valid JSON at top level, fall through
   }
 
-  // Try 2: find any {...} block in the raw text
-  const match = raw.match(/\{[\s\S]*\}/);
-  if (match) {
-    try {
-      const parsed = JSON.parse(match[0]);
-      const shaped = extractOurShape(parsed);
-      if (shaped) return shaped;
-    } catch {
-      // give up
-    }
+  // Try 2: find any balanced {...} block in the raw text that has our shape
+  const found = extractJsonObject(raw, (o) => !!extractOurShape(o));
+  if (found) {
+    const shaped = extractOurShape(found);
+    if (shaped) return shaped;
   }
 
   return null;
@@ -534,7 +910,7 @@ export type SubagentOutcome = BackupArtifact | "read_only" | null;
 export function runSubagentBackup(
   ctx: HookContext,
   actionDir: string,
-  config: SandboxConfig
+  config: SandboxConfig,
 ): SubagentOutcome {
   if (!config.subagentEnabled) return null;
 
@@ -556,7 +932,33 @@ export function runSubagentBackup(
   // Build the runner invocation — claude -p or hermes chat — see
   // buildSubagentInvocation. Returns null when the runner's CLI is
   // missing, in which case we skip the backup (graceful degradation).
-  const invocation = buildSubagentInvocation(prompt, config);
+  // BACKUP needs the remote tools too: to recover a delete/edit we must
+  // READ the pre-state BEFORE the agent's action runs. Give the subagent
+  // the same MCP, with an isolated browser profile so it doesn't collide
+  // with the agent's live browser lock.
+  const _server = serverFromToolName(ctx.tool_name);
+  // SIMPLEST backup design: a BROWSER action's backup subagent gets NO browser.
+  // The main agent already took a browser_snapshot before its mutation; the hook
+  // cached it (recordBrowserSnapshot) and it's injected into the prompt as
+  // PAGE_STATE. The subagent writes the recovery straight from that snapshot —
+  // it physically cannot browse (so it can't fabricate via a live read or
+  // collide with the agent's browser). If the value it needs isn't in PAGE_STATE
+  // it must mark the backup UNVERIFIED (see the prompt's preStateBlock gate).
+  // Non-browser servers (e.g. postgres) keep their MCP — capture there IS a
+  // remote read/insert, not a snapshot replay.
+  const _isBrowser = _server === "playwright";
+  const invocation = buildSubagentInvocation(prompt, config, {
+    withMcp: !_isBrowser,
+    isolateBrowserProfile: true,
+    // Dynamic MCP loading: only boot the server THIS action uses. For a browser
+    // action, boot NOTHING — the subagent runs with only terminal,file toolsets.
+    neededServer: _isBrowser ? null : _server,
+    // HARD turn cap: with no browser, a browser-action backup is ~2 calls
+    // (read PAGE_STATE from the prompt → write result). A DB/command backup is
+    // ~3 (create shadow + insert + write result). A call past the cap ends the
+    // session (enforced, not just prompt guidance).
+    maxTurns: 4,
+  });
   if (!invocation) {
     const runner = config.subagentRunner ?? "claude";
     logDebug(`skipped: ${runner} CLI not found in PATH`);
@@ -589,18 +991,27 @@ export function runSubagentBackup(
   let stdout = "";
   let stderr = "";
   try {
-    // Use execFileSync — avoids shell parsing of the prompt argument
+    // Run the subagent THROUGH the watcher wrapper: it kills the subagent
+    // the instant it writes a valid subagent_result.json, skipping the
+    // model's post-backup "still thinking" tail. The wrapper enforces the
+    // timeout itself, so give execFileSync a small margin on top.
     const { execFileSync } = require("node:child_process");
-    stdout = execFileSync(bin, args, {
-      encoding: "utf-8",
-      timeout: timeoutMs,
-      env: subagentEnv(),
-      // Close stdin immediately — codex exec (and possibly others)
-      // block forever reading an open stdin pipe.
-      input: "",
-      stdio: ["pipe", "pipe", "pipe"],
-      maxBuffer: 4 * 1024 * 1024, // 4 MB cap
-    });
+    const watcher = path.join(__dirname, "subagent_watch.js");
+    const resultFile = path.join(actionDir, "subagent_result.json");
+    stdout = execFileSync(
+      process.execPath,
+      [watcher, resultFile, String(timeoutMs), bin, ...args],
+      {
+        encoding: "utf-8",
+        timeout: timeoutMs + 10_000,
+        env: { ...subagentEnv(), ...(invocation.env ?? {}) },
+        // Close stdin immediately — codex exec (and possibly others)
+        // block forever reading an open stdin pipe.
+        input: "",
+        stdio: ["pipe", "pipe", "pipe"],
+        maxBuffer: 4 * 1024 * 1024, // 4 MB cap
+      },
+    );
     logDebug(`stdout (${stdout.length} chars): ${stdout.slice(0, 500)}`);
   } catch (e: unknown) {
     const msg = e instanceof Error ? e.message : String(e);
@@ -613,18 +1024,32 @@ export function runSubagentBackup(
 
     const elapsedSec = ((Date.now() - startTime) / 1000).toFixed(1);
 
-    // Detect common auth failure and log a clear message
-    if (stdout.includes("Not logged in") || stderr.includes("Not logged in")) {
-      logDebug("DIAGNOSIS: claude CLI is not logged in. Run `claude` interactively once to authenticate.");
-      tellUser(
-        "[CHATS-Sandbox] Subagent skipped: claude CLI not logged in. " +
-        "Run `claude` interactively once to authenticate, or disable the subagent with " +
-        "`chats-sandbox config set subagentEnabled false`."
-      );
+    // The watcher KILLS the subagent the instant it writes a valid result
+    // file — that kill surfaces HERE as a non-zero exit / thrown
+    // execFileSync. So a throw is NOT necessarily a failure: if the
+    // subagent already wrote its result, the backup SUCCEEDED and we must
+    // proceed to promote it (otherwise live_restore recovery is silently
+    // discarded — exactly the browser case, whose long "thinking tail"
+    // means the watcher always has to kill it). Only bail when there is no
+    // usable result file.
+    const killedButHasResult = readSubagentResultFile(actionDir);
+    if (killedButHasResult) {
+      logDebug("subagent killed by watcher AFTER writing its result — proceeding to promote it");
+      stdout = ""; // result file is authoritative; ignore partial stdout
     } else {
-      tellUser(`[CHATS-Sandbox] Subagent failed after ${elapsedSec}s: ${msg.slice(0, 120)}`);
+      // Detect common auth failure and log a clear message
+      if (stdout.includes("Not logged in") || stderr.includes("Not logged in")) {
+        logDebug("DIAGNOSIS: claude CLI is not logged in. Run `claude` interactively once to authenticate.");
+        tellUser(
+          "[CHATS-Sandbox] Subagent skipped: claude CLI not logged in. " +
+          "Run `claude` interactively once to authenticate, or disable the subagent with " +
+          "`chats-sandbox config set subagentEnabled false`."
+        );
+      } else {
+        tellUser(`[CHATS-Sandbox] Subagent failed after ${elapsedSec}s: ${msg.slice(0, 120)}`);
+      }
+      return null;
     }
-    return null;
   }
 
   // Prefer the canonical result file the subagent was told to write —
@@ -667,6 +1092,18 @@ export function runSubagentBackup(
   const elapsedSec = ((Date.now() - startTime) / 1000).toFixed(1);
   logDebug(`parse success: ${parsed.description}`);
 
+  // LOUD UNVERIFIED flag: the simplest backup design hands the subagent the
+  // cached PAGE_STATE and NO browser. If the original value it needed wasn't in
+  // that snapshot (e.g. hidden in an input's value attribute), the subagent
+  // marks the result UNVERIFIED rather than fabricating. Surface that here so
+  // it's visible in forensics (subagent.log) and on the user's terminal — this
+  // is the ONE case we want flagged for a possible future live-read.
+  const _descUpper = (parsed.description || "").trimStart().toUpperCase();
+  if (_descUpper.startsWith("UNVERIFIED") || (parsed.recovery_commands ?? []).length === 0) {
+    logDebug(`[CHATS-Sandbox] BACKUP UNVERIFIED: pre-state value not captured for ${ctx.tool_name} — ${(parsed.description || "").slice(0, 120)}`);
+    tellUser(`[CHATS-Sandbox] BACKUP UNVERIFIED: pre-state value not captured for ${ctx.tool_name}`);
+  }
+
   // READ-ONLY VERDICT: the subagent inspected the action and determined
   // it mutates nothing outside the workspace. Honor it as a CLEAN SKIP —
   // not a failed/unverified backup. This is the smart second-layer
@@ -700,12 +1137,28 @@ export function runSubagentBackup(
   // (remote, daemon, cluster), not in a local file — so recovery is
   // inherently re-derived from that system and there is no local
   // artifact to verify. recovery_commands is the backup for these.
+  const cmdStr = String((ctx.tool_input as { command?: unknown }).command ?? "");
   const isRemote = ctx.tool_name.startsWith("mcp__") ||
-    /\b(git\s+push|curl|wget|ssh|scp|docker|kubectl|systemctl)\b/.test(
-      String((ctx.tool_input as { command?: unknown }).command ?? ""));
-  const liveRestore = parsed.live_restore ?? false;
+    /^browser_/.test(ctx.tool_name) ||                       // bare playwright/browser tools
+    /\b(git\s+push|curl|wget|ssh|scp|rsync|docker|kubectl|helm|terraform|aws|gcloud|az|systemctl)\b/.test(cmdStr) ||
+    /\b(psql|mysql|mariadb|mongo|mongosh|redis-cli)\b/.test(cmdStr); // DB clients
+  const modelLiveRestore = parsed.live_restore ?? false;
   const hasRecovery = (parsed.recovery_commands ?? []).length > 0;
-  const verified = durableArtifact || liveRestore || (isRemote && hasRecovery);
+  // NOTE: a tighter gate ("remote backup must have a captured artifact") was
+  // considered to stop confident-empty backups, but it regresses legitimate
+  // CREATE actions (docker run, pip install, create-post) whose reversal is a
+  // known command with nothing to capture. Distinguishing destructive-vs-create
+  // here is non-trivial; deferred. The action-aware tool allowlist (superset)
+  // already gives the subagent the tools to actually capture, which is the real
+  // mitigation for confident-empty backups.
+  const verified = durableArtifact || modelLiveRestore || (isRemote && hasRecovery);
+  // Recovery MECHANISM is the subagent's OWN call (it knows whether its
+  // recovery needs live re-derivation). live_restore=false → run the
+  // recorded recovery_commands directly at restore (deterministic, no agent
+  // — the fast path for simple cases like a SQL reversal). live_restore=true
+  // → spawn a fresh agent that re-reads live state (the dynamic cases like a
+  // browser/UI reversal where the page has changed).
+  const liveRestore = modelLiveRestore;
 
   if (!verified) {
     logDebug(
@@ -763,13 +1216,26 @@ export function runSubagentBackup(
 export function invokeRestoreSubagent(
   prompt: string,
   config: SandboxConfig,
+  neededServer?: string | null,
 ): { success: boolean; detail: string } {
+  // Restore is where the model must perform precise multi-step UI actions
+  // (find the pinned entity → delete → confirm). The cheap backup model
+  // (e.g. haiku) often can't, so allow a STRONGER model just for restore via
+  // subagentRestoreModel — backup stays cheap, restore gets capability.
+  if (config.subagentRestoreModel) {
+    config = {
+      ...config,
+      subagentModel: config.subagentRestoreModel as typeof config.subagentModel,
+      subagentHermesModel: config.subagentRestoreModel,
+    };
+  }
   const timeoutMs = Math.max(10_000, config.subagentTimeoutSeconds * 1000);
 
   // Same runner branching as the backup path — claude -p or hermes chat —
   // but this is the live-restore path, so request the MCP tools (browser)
-  // when configured so the subagent can execute the UI reversal.
-  const invocation = buildSubagentInvocation(prompt, config, { withMcp: true });
+  // when configured so the subagent can execute the UI reversal. Dynamic
+  // MCP loading: only the action's own server is booted.
+  const invocation = buildSubagentInvocation(prompt, config, { withMcp: true, neededServer });
   if (!invocation) {
     const runner = config.subagentRunner ?? "claude";
     return { success: false, detail: `${runner} CLI not found in PATH` };
@@ -792,7 +1258,7 @@ export function invokeRestoreSubagent(
     const stdout: string = execFileSync(bin, args, {
       encoding: "utf-8",
       timeout: timeoutMs,
-      env: subagentEnv(),
+      env: { ...subagentEnv(), ...(invocation.env ?? {}) },
       // Close stdin immediately — codex exec (and possibly others)
       // block forever reading an open stdin pipe.
       input: "",
@@ -837,7 +1303,7 @@ export function runRunnerForText(
     const stdout: string = execFileSync(bin, args, {
       encoding: "utf-8",
       timeout: Math.max(10_000, timeoutSeconds * 1000),
-      env: subagentEnv(),
+      env: { ...subagentEnv(), ...(invocation.env ?? {}) },
       // Close stdin immediately — codex exec (and possibly others)
       // block forever reading an open stdin pipe.
       input: "",

@@ -13,6 +13,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { loadConfig, saveConfig, getConfigDir } from "./config/load.js";
+import { buildBackupGuidance } from "./backup/subagent.js";
 import { loadManifest } from "./backup/manifest.js";
 import { DEFAULT_CONFIG } from "./types.js";
 import { ALL_ADAPTERS, findAdapter, detectAdapters } from "./agents/index.js";
@@ -82,6 +83,22 @@ function install(projectRoot: string, agentName: string | undefined): void {
 
   const result = adapter.install(projectRoot, pkgRoot);
   for (const line of result.log) console.log(line);
+  // Universal across ALL agents: keep the local backup dir out of the user's
+  // git (and out of any agent's own git operations).
+  ensureGitignored(projectRoot);
+}
+
+/** Ensure `.chats-sandbox/` is in the project's .gitignore (idempotent). */
+function ensureGitignored(projectRoot: string): void {
+  try {
+    const gi = path.join(projectRoot, ".gitignore");
+    let content = "";
+    try { content = fs.readFileSync(gi, "utf-8"); } catch { /* no .gitignore yet */ }
+    if (/^\s*\.chats-sandbox\/?\s*$/m.test(content)) return; // already ignored
+    const prefix = content && !content.endsWith("\n") ? "\n" : "";
+    fs.appendFileSync(gi, `${prefix}\n# CHATS-Sandbox local backups (never commit)\n.chats-sandbox/\n`);
+    console.log("  [OK] Added .chats-sandbox/ to .gitignore");
+  } catch { /* best-effort — never fail install over this */ }
 }
 
 // ── Uninstall ────────────────────────────────────────────────────────
@@ -161,6 +178,17 @@ function setConfigValue(
       process.exit(1);
     }
     (config as unknown as Record<string, unknown>)[k] = value;
+  } else if (k === "subagentRestoreModel") {
+    (config as unknown as Record<string, unknown>)[k] = value;
+  } else if (k === "experienceForServer") {
+    try {
+      const obj = JSON.parse(value);
+      if (!obj || typeof obj !== "object" || Array.isArray(obj)) throw new Error("not an object");
+      (config as unknown as Record<string, unknown>)[k] = obj;
+    } catch {
+      console.error(`Invalid experienceForServer: must be a JSON object, e.g. '{"playwright":"reddit"}'`);
+      process.exit(1);
+    }
   } else {
     (config as unknown as Record<string, unknown>)[k] = value;
   }
@@ -684,6 +712,23 @@ function clearCommand(projectRoot: string, _args: string[]): void {
 
 // ── Dashboard ────────────────────────────────────────────────────────
 
+async function buildRegistryCommand(projectRoot: string, args: string[]): Promise<void> {
+  const rcfg = loadConfig(projectRoot);
+  const mi = args.indexOf("--mcp-config");
+  const mcpPath = (mi !== -1 ? args[mi + 1] : undefined) ?? rcfg.subagentMcpConfig;
+  if (!mcpPath || !fs.existsSync(mcpPath)) {
+    console.error("No MCP config — pass --mcp-config <path> or set subagentMcpConfig.");
+    process.exit(1);
+  }
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const { buildToolRegistry, saveToolRegistry } = require("./explore/tool_registry.js");
+  console.log(`Listing MCP tools from ${mcpPath} …`);
+  const registry = await buildToolRegistry(mcpPath);
+  const p = saveToolRegistry(rcfg, registry);
+  for (const [s, tools] of Object.entries(registry)) console.log(`  ${s}: ${(tools as string[]).length} tools`);
+  console.log(`Saved registry → ${p}`);
+}
+
 async function dashboardCommand(projectRoot: string, args: string[]): Promise<void> {
   // Parse --port N (default 7321)
   let port: number | undefined;
@@ -723,6 +768,21 @@ async function dashboardCommand(projectRoot: string, args: string[]): Promise<vo
 
 // ── Main ─────────────────────────────────────────────────────────────
 
+/** Emit the shared backup guidance (subagent or inline framing) to stdout.
+ *  Used by the benchmark inline-backup condition so the main agent gets the
+ *  SAME backup knowledge the tier-3 subagent does. */
+function backupGuidanceCommand(root: string, a: string[]): void {
+  const get = (flag: string): string | undefined => {
+    const i = a.indexOf(flag);
+    return i !== -1 ? a[i + 1] : undefined;
+  };
+  const mode = (get("--mode") === "subagent" ? "subagent" : "inline") as "subagent" | "inline";
+  const experienceName = get("--experience");
+  const server = get("--server") ?? (mode === "inline" ? "playwright" : null);
+  const cwd = get("--cwd") || root;
+  process.stdout.write(buildBackupGuidance({ mode, experienceName, server, config: loadConfig(cwd), cwd }) + "\n");
+}
+
 const args = process.argv.slice(2);
 const command = args[0] ?? "status";
 const projectRoot = process.cwd();
@@ -750,6 +810,10 @@ switch (command) {
   case "explore":
     exploreCommand(projectRoot, ...args.slice(1));
     break;
+  case "build-registry":
+    buildRegistryCommand(projectRoot, args).then(() => process.exit(0))
+      .catch((e: unknown) => { console.error(e instanceof Error ? e.message : String(e)); process.exit(1); });
+    break;
   case "restore": {
     const fileIdx = args.indexOf("--file");
     const fileArg = fileIdx !== -1 ? args[fileIdx + 1] : undefined;
@@ -770,6 +834,9 @@ switch (command) {
     break;
   case "dashboard":
     dashboardCommand(projectRoot, args.slice(1));
+    break;
+  case "backup-guidance":
+    backupGuidanceCommand(projectRoot, args.slice(1));
     break;
   default:
     console.log("CHATS-Sandbox — General-purpose sandbox for coding agents\n");

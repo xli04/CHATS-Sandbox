@@ -6,6 +6,7 @@
  */
 
 import * as fs from "node:fs";
+import * as path from "node:path";
 import { loadConfig } from "../config/load.js";
 import { captureEffect, logEffect } from "../engine/effects.js";
 import { type HookContext, normalizeHookContext } from "../types.js";
@@ -32,6 +33,40 @@ async function main(): Promise<void> {
   }
 
   const config = loadConfig();
+
+  // Cache the last browser page view (snapshot/navigate) as PRE-state for the
+  // backup subagent — it holds the original field value / entity content the
+  // subagent needs to reverse an edit/delete. Independent of effect-manifest
+  // logging below, so it runs whenever the plugin is enabled.
+  if (config.enabled) {
+    try {
+      const { recordBrowserSnapshot } = require("../backup/strategies.js");
+      recordBrowserSnapshot(ctx, config);
+    } catch { /* best-effort — never block */ }
+
+    // Post-tool cleanup: if the action FAILED, the backup the pre-tool hook
+    // made is for a no-op (a fumbled/retried call mutated nothing). Flag its
+    // action dir so cost aggregation + restore skip it. MUST be before the
+    // effect-manifest gate below so it runs even when effect logging is off.
+    // No-op when the agent succeeds (the common case).
+    try {
+      const actionDir = loadTimingFile(ctx)?.actionDir;
+      const success = ctx.hook_event === "PostToolUse";
+      if (actionDir && actionFailed(ctx, success) && fs.existsSync(actionDir)) {
+        fs.writeFileSync(
+          path.join(actionDir, "action-failed.flag"),
+          JSON.stringify({
+            tool: ctx.tool_name,
+            reason: success ? "tool returned error" : "PostToolUseFailure",
+            at: new Date().toISOString(),
+          }),
+        );
+        process.stderr.write(
+          `[CHATS-Sandbox] backup flagged action-failed for ${ctx.tool_name} (excluded from cost/restore)\n`,
+        );
+      }
+    } catch { /* non-fatal */ }
+  }
 
   if (!config.enabled || !config.effectManifest) {
     process.exit(0);
@@ -103,6 +138,28 @@ function buildEffectSummary(effect: {
 interface TimingData {
   startTime: number;
   backupId: string | null;
+  actionDir?: string | null;
+}
+
+/** Did the just-finished tool call FAIL / change nothing? PostToolUseFailure,
+ *  a non-zero exit_code, or an MCP {"error":…} wrapper (NOT page "console
+ *  errors", which live inside a `result`). A failed action mutated nothing, so
+ *  its pre-tool backup is noise → flag it (excluded from cost/restore). */
+function actionFailed(ctx: HookContext, success: boolean): boolean {
+  if (!success) return true;
+  // hermes sends tool_output as a JSON STRING (its bridge json.dumps the result
+  // and never sets PostToolUseFailure); Claude sends an object. Parse a string
+  // first so the error/exit_code checks below see the actual shape.
+  let out: unknown = ctx.tool_output;
+  if (typeof out === "string") {
+    try { out = JSON.parse(out); } catch { return false; }
+  }
+  if (out && typeof out === "object") {
+    const o = out as Record<string, unknown>;
+    if (typeof o.exit_code === "number" && o.exit_code !== 0) return true;
+    if (o.error != null && o.error !== "" && o.result == null) return true;
+  }
+  return false;
 }
 
 let _cachedTiming: TimingData | null = null;

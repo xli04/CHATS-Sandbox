@@ -147,6 +147,15 @@ async function main(): Promise<void> {
       );
     }
 
+    // Continue-note: a tier-3 subagent recorded a reversal for this action
+    // without touching the agent's session (the backup is written from the
+    // cached pre-state). Reassure the main agent it can proceed normally.
+    if (backupResult.artifacts.some((a) => a.strategy === "subagent")) {
+      contextParts.push(
+        "CHATS-Sandbox backed up this action (reversal recorded); continue."
+      );
+    }
+
     // If subagent is needed, add instructions for Claude to see
     if (backupResult.needsSubagent) {
       contextParts.push(
@@ -204,6 +213,9 @@ async function main(): Promise<void> {
         backupId: backupResult.artifacts[0]?.id ?? null,
         backupIds: backupResult.artifacts.map((a) => a.id),
         needsSubagent: backupResult.needsSubagent,
+        // so post-tool can flag this backup if the action then FAILS (a failed
+        // action mutated nothing — its backup is noise, excluded from cost).
+        actionDir: backupResult.actionDir ?? null,
       }));
     } catch {
       // non-fatal
