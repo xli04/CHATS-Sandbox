@@ -1238,6 +1238,194 @@ export function recordBrowserSnapshot(ctx: HookContext, config: SandboxConfig): 
   } catch { /* best-effort — never block the action */ }
 }
 
+/**
+ * PRE-STATE pre-capture for opaque-code browser mutations
+ * (browser_run_code_unsafe / browser_evaluate).
+ *
+ * The agent's JS may navigate to a value-bearing page that is loaded ONLY
+ * inside the code (e.g. `await page.goto('.../account/edit_biography')`),
+ * mutate it, and save. The cached snapshot is then of the page the agent was
+ * ON before (e.g. /account) — which does NOT contain the about-to-change
+ * value — so the backup subagent can only emit "UNVERIFIED".
+ *
+ * This function runs in the PRE-tool path: it parses literal URLs/paths out of
+ * the code arg, fetches each page's HTML AUTHENTICATED (curl + the seeded
+ * cookie jar persisted by seed_login.sh), and merges that text into the
+ * recent-snapshot cache so the existing loadRecentBrowserSnapshot → PAGE_STATE
+ * path surfaces the concrete original value (e.g.
+ * `<textarea name="biography">t2_5adwlxvn</textarea>`).
+ *
+ * Best-effort: any failure (no code, no parseable URL, no cookie jar, fetch
+ * error) leaves the cache untouched so the existing UNVERIFIED fallback stays
+ * intact — no regression.
+ */
+/** Proposal B: extract a compact digest of editable form controls from fetched
+ *  HTML so the subagent gets the ORIGINAL values without the multi-KB page.
+ *  Node has no built-in HTML parser → robust best-effort regex extraction.
+ *  Returns a compact JSON array string, or "" if no editable controls found
+ *  (caller then falls back to the raw-HTML slice). */
+function digestFormControls(html: string): string {
+  try {
+    const attr = (tagHtml: string, name: string): string | undefined => {
+      const m = tagHtml.match(
+        new RegExp(`\\b${name}\\s*=\\s*(?:"([^"]*)"|'([^']*)'|([^\\s>]+))`, "i"),
+      );
+      if (!m) return undefined;
+      return m[1] ?? m[2] ?? m[3];
+    };
+    const decode = (s: string): string =>
+      s.replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&quot;/g, '"')
+        .replace(/&#0?39;/g, "'").replace(/&apos;/g, "'").replace(/&amp;/g, "&");
+    const skip = (key: string | undefined): boolean => {
+      if (!key) return false;
+      const k = key.toLowerCase();
+      // DROP: CSRF/_token fields, search box.
+      return k.includes("csrf") || k.startsWith("_") || k === "q";
+    };
+
+    const controls: Array<Record<string, string>> = [];
+    const push = (tag: string, key: string | undefined, type: string | undefined, value: string) => {
+      const rec: Record<string, string> = { tag };
+      if (key !== undefined) rec.name = key;
+      if (type !== undefined) rec.type = type;
+      rec.value = value.length > 300 ? value.slice(0, 300) : value;
+      controls.push(rec);
+    };
+
+    // <textarea ...>inner text</textarea>
+    for (const m of html.matchAll(/<textarea\b([^>]*)>([\s\S]*?)<\/textarea>/gi)) {
+      const tagAttrs = m[1];
+      const key = attr(tagAttrs, "name") ?? attr(tagAttrs, "id");
+      if (skip(attr(tagAttrs, "name")) || skip(attr(tagAttrs, "id"))) continue;
+      push("textarea", key, undefined, decode(m[2]).trim());
+    }
+    // <input ...>
+    for (const m of html.matchAll(/<input\b([^>]*)>/gi)) {
+      const tagAttrs = m[1];
+      const type = (attr(tagAttrs, "type") ?? "text").toLowerCase();
+      // DROP: hidden inputs, submit/button.
+      if (type === "hidden" || type === "submit" || type === "button") continue;
+      const key = attr(tagAttrs, "name") ?? attr(tagAttrs, "id");
+      if (skip(attr(tagAttrs, "name")) || skip(attr(tagAttrs, "id"))) continue;
+      push("input", key, type, decode(attr(tagAttrs, "value") ?? ""));
+    }
+    // <select ...>...</select> → value = the selected option (or first).
+    for (const m of html.matchAll(/<select\b([^>]*)>([\s\S]*?)<\/select>/gi)) {
+      const tagAttrs = m[1];
+      const key = attr(tagAttrs, "name") ?? attr(tagAttrs, "id");
+      if (skip(attr(tagAttrs, "name")) || skip(attr(tagAttrs, "id"))) continue;
+      const body = m[2];
+      let sel = body.match(/<option\b[^>]*\bselected\b[^>]*>([\s\S]*?)<\/option>/i);
+      const selTag = body.match(/<option\b[^>]*\bselected\b[^>]*>/i);
+      let value = "";
+      if (selTag) value = attr(selTag[0], "value") ?? (sel ? decode(sel[1]).trim() : "");
+      push("select", key, undefined, value);
+    }
+
+    if (controls.length === 0) return "";
+    return JSON.stringify(controls);
+  } catch { return ""; }
+}
+
+export function presnapshotCodeUrls(ctx: HookContext, config: SandboxConfig): void {
+  try {
+    const action = (ctx.tool_name.split("__").pop() || ctx.tool_name).toLowerCase();
+    if (!/run_code|evaluate/.test(action)) return;
+    const input = (ctx.tool_input ?? {}) as Record<string, unknown>;
+    const code = String(input.code ?? input.function ?? input.expression ?? "");
+    if (!code) return;
+
+    // Parse candidate URLs/paths from the code.
+    const urls = new Set<string>();
+    // page.goto('...') / page.navigate('...') first arg
+    for (const m of code.matchAll(/\.(?:goto|navigate)\s*\(\s*['"`]([^'"`]+)['"`]/g)) {
+      urls.add(m[1]);
+    }
+    // bare absolute URLs
+    for (const m of code.matchAll(/https?:\/\/[^\s'"`)]+/g)) urls.add(m[0]);
+    // string-literal absolute paths (/user/.../account, /edit_biography, ...)
+    for (const m of code.matchAll(/['"`](\/[A-Za-z0-9][^'"`\s]*)['"`]/g)) urls.add(m[1]);
+    if (urls.size === 0) return;
+
+    // Determine the base origin: prefer the first absolute URL seen, else the
+    // origin of the currently cached snapshot's URL.
+    let base = "";
+    for (const u of urls) {
+      const mm = u.match(/^(https?:\/\/[^/]+)/);
+      if (mm) { base = mm[1]; break; }
+    }
+    if (!base) {
+      const snap = loadRecentBrowserSnapshot(config, 30 * 60_000);
+      const mm = snap?.url?.match(/^(https?:\/\/[^/]+)/);
+      if (mm) base = mm[1];
+    }
+
+    // Resolve to absolute URLs (dedup), keep only http(s).
+    const abs: string[] = [];
+    for (const u of urls) {
+      let full = u;
+      if (!/^https?:\/\//.test(u)) {
+        if (!base) continue;            // can't resolve a relative path
+        full = base + (u.startsWith("/") ? u : "/" + u);
+      }
+      if (!abs.includes(full)) abs.push(full);
+    }
+    if (abs.length === 0) return;
+
+    // Authenticated cookie jar persisted by seed_login.sh.
+    const jar = process.env.SEED_COOKIE_JAR || "/tmp/wa-pw-profile/seed-cookies.txt";
+    if (!fs.existsSync(jar)) return;    // no creds available → leave UNVERIFIED intact
+
+    // Fetch each page (bounded count + size) and build a tagged blob.
+    const parts: string[] = [];
+    const MAX_URLS = 6;
+    const MAX_BYTES = 200_000;          // per page cap to keep prompt bounded
+    let captured = false;
+    for (const url of abs.slice(0, MAX_URLS)) {
+      try {
+        const out = execSync(
+          `curl -sS -L --max-time 15 -b ${JSON.stringify(jar)} ${JSON.stringify(url)}`,
+          { encoding: "utf-8", maxBuffer: 8 * 1024 * 1024, timeout: 20_000 },
+        );
+        if (out && out.length > 20) {
+          const digest = digestFormControls(out);
+          if (digest && digest.length > 2) {
+            // Proposal B: compact editable-form-control digest (old values),
+            // bounded ≤~1.5 KB, instead of the raw HTML.
+            const blob = digest.length > 1500 ? digest.slice(0, 1500) : digest;
+            parts.push(`\nPRE-CAPTURED FORM CONTROLS (authenticated GET) ${url} = ${blob}`);
+            captured = true;
+          } else {
+            // FALLBACK: no editable controls (e.g. a delete-confirm page) →
+            // keep today's length-capped raw-HTML slice so non-form pages still
+            // get a usable pre-state.
+            const body = out.length > MAX_BYTES ? out.slice(0, MAX_BYTES) : out;
+            parts.push(`\n===== PRE-CAPTURED PAGE (authenticated GET) ${url} =====\n${body}`);
+            captured = true;
+          }
+        }
+      } catch { /* skip this URL */ }
+    }
+    if (!captured) return;
+
+    // Merge into the recent-snapshot cache that feeds PAGE_STATE. Augment the
+    // existing snapshot's text (keep what the agent saw) and tag the action so
+    // the subagent treats this as a real pre-state page view.
+    const p = recentSnapshotPath(config);
+    let prev: { url?: string; text?: string } = {};
+    try { prev = JSON.parse(fs.readFileSync(p, "utf-8")); } catch { /* fresh */ }
+    const merged = (prev.text ? prev.text + "\n" : "") + parts.join("\n");
+    const urlField = prev.url || abs[0];
+    fs.mkdirSync(path.dirname(p), { recursive: true });
+    fs.writeFileSync(p, JSON.stringify({
+      t: new Date().toISOString(),
+      url: urlField,
+      action: "presnapshot_code",
+      text: merged,
+    }));
+  } catch { /* best-effort — never block the action */ }
+}
+
 /** The agent's last page view, if fresh — the subagent's PRE-state source.
  *  Returns null when none/stale so the caller fails to UNVERIFIED, not to a
  *  fabricated recovery. */
@@ -1260,6 +1448,17 @@ export function runBackup(
   // Capture any typed input BEFORE the read-only short-circuit below — those
   // fill/type actions don't back up, but their values pin a later create.
   recordBrowserInput(ctx, config);
+
+  // PRE-STATE pre-capture for opaque-code browser mutations: if this is a
+  // browser_run_code_unsafe / browser_evaluate call, parse the URLs out of
+  // the code and authenticated-GET each value-bearing page NOW (pre-mutation),
+  // merging the result into the snapshot cache that feeds PAGE_STATE. Without
+  // this the only cached view is the page the agent was ON before, which does
+  // not hold the value the in-code navigation is about to change. Best-effort.
+  try {
+    const _act = (ctx.tool_name.split("__").pop() || ctx.tool_name).toLowerCase();
+    if (/run_code|evaluate/.test(_act)) presnapshotCodeUrls(ctx, config);
+  } catch { /* never block the action */ }
 
   // Read-only tools (Read/Glob/Grep/etc.) can't mutate anything, so
   // there's nothing to back up. Short-circuit cleanly so they don't

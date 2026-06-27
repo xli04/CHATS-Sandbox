@@ -280,8 +280,9 @@ export function renderExperiencesForPrompt(exp: ServerExperiences | null): strin
   // inside an explicit data fence so the backup subagent treats them as
   // reference material, never as instructions to follow.
   const sanitize = (s: string) => String(s).replace(/```/g, "ʼʼʼ").slice(0, 600);
-  const lines = usable.map((p, i) =>
-    `  ${i + 1}. [verified] ${sanitize(p.action)}\n     → EASY-WIN: ${sanitize(p.easy_win)}`);
+  const lines = usable.map((p, i) => {
+    return `  ${i + 1}. [verified] ${sanitize(p.action)}\n     → EASY-WIN: ${sanitize(p.easy_win)}`;
+  });
   return `
 ## KNOWN EASY-WIN REVERSAL PATTERNS for the "${exp.server}" server
 

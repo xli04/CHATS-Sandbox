@@ -213,25 +213,26 @@ function exploreCommand(projectRoot: string, ...rest: string[]): void {
     else if (!rest[i].startsWith("--")) { serverArg = rest[i]; }
   }
   // eslint-disable-next-line @typescript-eslint/no-require-imports
-  const { runExplore, discoverServers } = require("./explore/explore.js");
+  const { runExplore, readMcpServers } = require("./explore/explore.js");
 
-  // A forced `<server> --target <url>` explores even if the server hasn't
-  // been seen in backup history yet (pre-learn a browser/MCP target).
-  const forced = Boolean(serverArg && targetArg);
-  const discovered = discoverServers(config) as Map<string, Set<string>>;
-  if (!forced && discovered.size === 0) {
-    console.log("No MCP / remote tools found in backup history yet.");
-    console.log("Use an MCP-driven remote action first, or pass `<server> --target <url>`.");
+  // Tool acquisition is LIVE off the runner's MCP config (initialize →
+  // tools/list), not backup history. Enumerate / validate against
+  // `mcp_servers` in that config.
+  const mcpServers = readMcpServers() as Record<string, { enabled?: boolean }>;
+  const known = Object.keys(mcpServers).filter((n) => mcpServers[n]?.enabled !== false);
+  if (known.length === 0) {
+    console.log("No MCP servers found in the runner's MCP config (mcp_servers).");
+    console.log("Add a server to ~/.hermes/config.yaml first.");
     return;
   }
-  if (!forced && serverArg && !discovered.has(serverArg)) {
-    console.log(`Server "${serverArg}" not seen in history. Known: ${[...discovered.keys()].join(", ")}`);
+  if (serverArg && !known.includes(serverArg)) {
+    console.log(`Server "${serverArg}" not in MCP config. Known: ${known.join(", ")}`);
     return;
   }
 
   console.log(serverArg
     ? `Exploring easy-win reversal patterns for "${serverArg}"…`
-    : `Exploring ${discovered.size} server(s): ${[...discovered.keys()].join(", ")}…`);
+    : `Exploring ${known.length} server(s): ${known.join(", ")}…`);
   console.log("Two stages per server: (1) a model PROPOSES candidate reversals,");
   console.log("(2) a live agent EXECUTES each against the real target to verify.");
   console.log("One-time cost per server (a few minutes each).\n");

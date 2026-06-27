@@ -45,24 +45,38 @@ async function main(): Promise<void> {
     } catch { /* best-effort — never block */ }
 
     // Post-tool cleanup: if the action FAILED, the backup the pre-tool hook
-    // made is for a no-op (a fumbled/retried call mutated nothing). Flag its
-    // action dir so cost aggregation + restore skip it. MUST be before the
-    // effect-manifest gate below so it runs even when effect logging is off.
-    // No-op when the agent succeeds (the common case).
+    // made is for a no-op (a fumbled/retried call mutated nothing). It's an
+    // artifact of the agent fumbling, NOT a real cost of the backup method, so
+    // we REMOVE the whole backup folder (disk → 0) AND drop its matching
+    // backup-timings.jsonl entry (time → 0). MUST be before the effect-manifest
+    // gate below so it runs even when effect logging is off. No-op when the
+    // agent succeeds (the common case). Best-effort: never throw from the hook.
     try {
       const actionDir = loadTimingFile(ctx)?.actionDir;
       const success = ctx.hook_event === "PostToolUse";
       if (actionDir && actionFailed(ctx, success) && fs.existsSync(actionDir)) {
-        fs.writeFileSync(
-          path.join(actionDir, "action-failed.flag"),
-          JSON.stringify({
-            tool: ctx.tool_name,
-            reason: success ? "tool returned error" : "PostToolUseFailure",
-            at: new Date().toISOString(),
-          }),
-        );
+        const actionName = path.basename(actionDir);
+        // 1) Disk: remove the whole failed-action backup folder.
+        try { fs.rmSync(actionDir, { recursive: true, force: true }); } catch { /* ignore */ }
+        // 2) Time: drop this action's entry from the central timing ledger.
+        //    The ledger lives one level up from the backups dir (sandbox root)
+        //    and each record carries `action` === the action folder basename
+        //    (written by pre-tool.ts), so it is joinable by name.
+        try {
+          const ledger = path.join(path.dirname(path.dirname(actionDir)), "backup-timings.jsonl");
+          if (fs.existsSync(ledger)) {
+            const kept = fs.readFileSync(ledger, "utf-8")
+              .split("\n")
+              .filter((line) => {
+                if (!line.trim()) return false;
+                try { return (JSON.parse(line) as { action?: string }).action !== actionName; }
+                catch { return true; } // keep unparseable lines untouched
+              });
+            fs.writeFileSync(ledger, kept.length ? kept.join("\n") + "\n" : "");
+          }
+        } catch { /* ignore */ }
         process.stderr.write(
-          `[CHATS-Sandbox] backup flagged action-failed for ${ctx.tool_name} (excluded from cost/restore)\n`,
+          `[CHATS-Sandbox] removed failed-action backup folder ${actionName} for ${ctx.tool_name} (excluded from cost/restore)\n`,
         );
       }
     } catch { /* non-fatal */ }

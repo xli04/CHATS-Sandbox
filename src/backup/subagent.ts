@@ -543,7 +543,8 @@ PAGE_STATE>>>
   • EDIT   → recovery = restore the field to the ORIGINAL value shown in PAGE_STATE. Put that original VERBATIM in recovery_commands; NEVER the just-typed new value.
   • DELETE → capture the entity's CURRENT content from PAGE_STATE into remote-state.json.
   • CREATE → the new entity isn't in the page yet; pin it by the typed values above.
-  ⚠️ IF the value/field you need is NOT present in PAGE_STATE (e.g. it lives in an input's value attribute that the snapshot did not capture): DO NOT fabricate (no assumed-empty, no turning an edit into "delete the post"). Instead set live_restore=true and begin the description with EXACTLY "UNVERIFIED: pre-state value not in snapshot" so a restore step re-derives instead of replaying a wrong command.`;
+  📋 PAGE_STATE may include a "PRE-CAPTURED FORM CONTROLS ... = [...]" digest: a JSON list of the page's editable fields with their ORIGINAL values. A field PRESENT in that list IS the captured pre-state — if its "value" is "" that means the field was genuinely EMPTY (restore it to empty), NOT "not captured". Use the field's listed value VERBATIM as the original.
+  ⚠️ ONLY IF the field you need is ENTIRELY ABSENT from PAGE_STATE (not listed in the digest AND not in the page text): DO NOT fabricate (no assumed-empty, no turning an edit into "delete the post"). Instead set live_restore=true and begin the description with EXACTLY "UNVERIFIED: pre-state value not in snapshot" so a restore step re-derives instead of replaying a wrong command.`;
       } else {
         preStateBlock = `
 ⚠️ NO PRE-STATE PAGE VIEW AVAILABLE — you were NOT handed the page the agent is on, so the ORIGINAL value is unknown to you. If you can read the current state with your tools, do so. If you CANNOT, do NOT fabricate (do NOT assume the original was empty; do NOT turn an edit into "delete the post"): set live_restore=true and put "UNVERIFIED: pre-state not captured" in the description so a restore agent re-derives instead of replaying a wrong command.`;
@@ -1294,8 +1295,16 @@ export function runRunnerForText(
   prompt: string,
   config: SandboxConfig,
   timeoutSeconds = 180,
+  opts?: { neededServer?: string | null; toolAllow?: string[] },
 ): string | null {
-  const invocation = buildSubagentInvocation(prompt, config);
+  // Self-exploration pins the server it's exploring, so the verify agent ALWAYS
+  // gets that server's live MCP tools (mcp-<server>). This is NOT the backup
+  // path's dynamic per-action injection — for explore the server is constant.
+  const invocation = buildSubagentInvocation(
+    prompt,
+    config,
+    opts?.neededServer ? { neededServer: opts.neededServer, withMcp: true, toolAllow: opts.toolAllow } : undefined,
+  );
   if (!invocation) return null;
   const { bin, args } = invocation;
   try {
