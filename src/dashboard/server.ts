@@ -527,7 +527,7 @@ function handlePostRestore(
 ): void {
   const chunks: Buffer[] = [];
   req.on("data", (c: Buffer) => chunks.push(c));
-  req.on("end", () => {
+  req.on("end", async () => {
     const raw = Buffer.concat(chunks).toString("utf-8");
     let body: { mode?: string; file?: string } = {};
     if (raw.trim()) {
@@ -572,10 +572,10 @@ function handlePostRestore(
       let results;
       try {
         results = fileOnly
-          ? restore.restoreActionDirect(match, config, { fileOnly })
+          ? await restore.restoreActionDirect(match, config, { fileOnly })
           : mode === "loop"
-            ? restore.restoreActionLoop(match, config)
-            : restore.restoreActionDirect(match, config);
+            ? await restore.restoreActionLoop(match, config)
+            : await restore.restoreActionDirect(match, config);
       } finally {
         process.chdir(prevCwd);
       }

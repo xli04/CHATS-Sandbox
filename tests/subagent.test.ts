@@ -302,7 +302,7 @@ describe("subagent: runBackup wires subagent into tier-3", () => {
 // ── Restore subagent artifacts ───────────────────────────────────────
 
 describe("subagent: restore executes recovery commands", () => {
-  it("executes each command in subagentCommands sequentially", () => {
+  it("executes each command in subagentCommands sequentially", async () => {
     const tmpFile = path.join(os.tmpdir(), `chats-sub-marker-${Date.now()}.txt`);
     const artifact: BackupArtifact = {
       id: "test1",
@@ -319,7 +319,7 @@ describe("subagent: restore executes recovery commands", () => {
     };
 
     try {
-      const r = restoreArtifact(artifact);
+      const r = await restoreArtifact(artifact);
       assert.equal(r.success, true, `Expected success, got: ${r.description}`);
       assert.ok(fs.existsSync(tmpFile));
       const content = fs.readFileSync(tmpFile, "utf-8");
@@ -330,7 +330,7 @@ describe("subagent: restore executes recovery commands", () => {
     }
   });
 
-  it("stops on first failing command and reports partial execution", () => {
+  it("stops on first failing command and reports partial execution", async () => {
     const artifact: BackupArtifact = {
       id: "test2",
       timestamp: new Date().toISOString(),
@@ -346,12 +346,12 @@ describe("subagent: restore executes recovery commands", () => {
       ],
     };
 
-    const r = restoreArtifact(artifact);
+    const r = await restoreArtifact(artifact);
     assert.equal(r.success, false);
     assert.ok(r.description.includes("1/3") || r.description.includes("partially"));
   });
 
-  it("falls back to subagent prompt when no commands recorded", () => {
+  it("falls back to subagent prompt when no commands recorded", async () => {
     const artifact: BackupArtifact = {
       id: "test3",
       timestamp: new Date().toISOString(),
@@ -362,7 +362,7 @@ describe("subagent: restore executes recovery commands", () => {
       artifactPath: "/nonexistent",
     };
 
-    const r = restoreArtifact(artifact);
+    const r = await restoreArtifact(artifact);
     // Prompt-only deferral is now success:false — nothing was
     // actually restored (allSucceeded / restoreSubagent honesty fix).
     // The prompt is still surfaced so the caller knows what's pending.

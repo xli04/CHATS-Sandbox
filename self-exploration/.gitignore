@@ -1,0 +1,4 @@
+# Generated explore outputs + runtime artifacts (not source)
+results/*.json
+results/*.log
+.chats-sandbox/

@@ -54,7 +54,7 @@ function teardown(workspace: string, originalCwd: string): void {
 describe("restore e2e: single file overwrite", () => {
   beforeEach(() => resetAction());
 
-  it("restores file content from action 1", () => {
+  it("restores file content from action 1", async () => {
     const { workspace, config, originalCwd } = setupWorkspace();
     try {
       // Initial state
@@ -72,7 +72,7 @@ describe("restore e2e: single file overwrite", () => {
       assert.equal(actions.length, 1);
 
       // Restore direct
-      const results = restoreActionDirect(actions[0].name, config);
+      const results = await restoreActionDirect(actions[0].name, config);
       const ok = results.every((r) => r.success || r.subagentPrompt);
       assert.ok(ok, `Expected all results to succeed, got: ${JSON.stringify(results)}`);
 
@@ -90,7 +90,7 @@ describe("restore e2e: single file overwrite", () => {
 describe("restore e2e: restoreActionLoop", () => {
   beforeEach(() => resetAction());
 
-  it("walks back through multiple actions", () => {
+  it("walks back through multiple actions", async () => {
     const { workspace, config, originalCwd } = setupWorkspace();
     try {
       const filePath = path.join(workspace, "main.py");
@@ -113,7 +113,7 @@ describe("restore e2e: restoreActionLoop", () => {
       assert.equal(actions.length, 3);
 
       // Loop restore back to action 1
-      const results = restoreActionLoop(actions[0].name, config);
+      const results = await restoreActionLoop(actions[0].name, config);
 
       // Every step should have succeeded
       const failures = results.filter((r) => !r.success && !r.subagentPrompt);
@@ -127,10 +127,10 @@ describe("restore e2e: restoreActionLoop", () => {
     }
   });
 
-  it("rejects nonexistent action name", () => {
+  it("rejects nonexistent action name", async () => {
     const { workspace, config, originalCwd } = setupWorkspace();
     try {
-      const results = restoreActionLoop("action_999_00000000000000", config);
+      const results = await restoreActionLoop("action_999_00000000000000", config);
       assert.equal(results.length, 1);
       assert.equal(results[0].success, false);
       assert.ok(results[0].description.includes("not found"));
@@ -139,7 +139,7 @@ describe("restore e2e: restoreActionLoop", () => {
     }
   });
 
-  it("single-action restore applies the only snapshot", () => {
+  it("single-action restore applies the only snapshot", async () => {
     const { workspace, config, originalCwd } = setupWorkspace();
     try {
       // Create an original file BEFORE the first backup
@@ -156,7 +156,7 @@ describe("restore e2e: restoreActionLoop", () => {
       // Restore to action 1 (the only one) — should revert to "original"
       const actions = listRestorableActions(config);
       assert.equal(actions.length, 1);
-      const results = restoreActionLoop(actions[0].name, config);
+      const results = await restoreActionLoop(actions[0].name, config);
 
       // Should have actually restored (not short-circuited)
       const failures = results.filter((r) => !r.success && !r.subagentPrompt);
@@ -175,7 +175,7 @@ describe("restore e2e: restoreActionLoop", () => {
 describe("restore e2e: specific-commit targeting (not HEAD)", () => {
   beforeEach(() => resetAction());
 
-  it("restoreActionDirect uses the specific commit (not HEAD)", () => {
+  it("restoreActionDirect uses the specific commit (not HEAD)", async () => {
     const { workspace, config, originalCwd } = setupWorkspace();
     try {
       const filePath = path.join(workspace, "data.txt");
@@ -197,7 +197,7 @@ describe("restore e2e: specific-commit targeting (not HEAD)", () => {
       assert.equal(actions.length, 3);
 
       // Restore to action 1 → should get "A" (not "C", which would be the HEAD bug)
-      const res1 = restoreActionDirect(actions[0].name, config);
+      const res1 = await restoreActionDirect(actions[0].name, config);
       assert.ok(res1.every((r) => r.success || r.subagentPrompt));
       assert.equal(fs.readFileSync(filePath, "utf-8"), "A\n");
 
@@ -211,7 +211,7 @@ describe("restore e2e: specific-commit targeting (not HEAD)", () => {
     }
   });
 
-  it("restoreActionDirect to middle action prunes only later ones", () => {
+  it("restoreActionDirect to middle action prunes only later ones", async () => {
     const { workspace, config, originalCwd } = setupWorkspace();
     try {
       const filePath = path.join(workspace, "data.txt");
@@ -231,7 +231,7 @@ describe("restore e2e: specific-commit targeting (not HEAD)", () => {
 
       // Restore to action 2 → should get "B", prune actions 2 and 3
       // (snapshot 2 = state BEFORE action 2, so folder 2 is also removed)
-      const res = restoreActionDirect(actions[1].name, config);
+      const res = await restoreActionDirect(actions[1].name, config);
       assert.ok(res.every((r) => r.success || r.subagentPrompt));
       assert.equal(fs.readFileSync(filePath, "utf-8"), "B\n");
 
@@ -248,7 +248,7 @@ describe("restore e2e: specific-commit targeting (not HEAD)", () => {
 describe("restore e2e: files added after target commit are deleted", () => {
   beforeEach(() => resetAction());
 
-  it("restoreActionDirect removes files created by later actions", () => {
+  it("restoreActionDirect removes files created by later actions", async () => {
     const { workspace, config, originalCwd } = setupWorkspace();
     try {
       // Action 1: create file_a
@@ -275,7 +275,7 @@ describe("restore e2e: files added after target commit are deleted", () => {
 
       // Restore to action 1 — only file_a should remain
       const actions = listRestorableActions(config);
-      const res = restoreActionDirect(actions[0].name, config);
+      const res = await restoreActionDirect(actions[0].name, config);
       assert.ok(res.every((r) => r.success || r.subagentPrompt),
         `Restore failed: ${JSON.stringify(res)}`);
 
@@ -289,7 +289,7 @@ describe("restore e2e: files added after target commit are deleted", () => {
     }
   });
 
-  it("restoreActionLoop removes files created by undone actions", () => {
+  it("restoreActionLoop removes files created by undone actions", async () => {
     const { workspace, config, originalCwd } = setupWorkspace();
     try {
       const fileA = path.join(workspace, "alpha.txt");
@@ -303,7 +303,7 @@ describe("restore e2e: files added after target commit are deleted", () => {
 
       // Restore via loop to action 1
       const actions = listRestorableActions(config);
-      restoreActionLoop(actions[0].name, config);
+      await restoreActionLoop(actions[0].name, config);
 
       assert.ok(fs.existsSync(fileA), "alpha.txt should exist");
       assert.ok(!fs.existsSync(fileB), "beta.txt should be deleted");
@@ -318,7 +318,7 @@ describe("restore e2e: files added after target commit are deleted", () => {
 describe("restore e2e: --file single-file restore", () => {
   beforeEach(() => resetAction());
 
-  it("restores only the specified file, leaves others untouched", () => {
+  it("restores only the specified file, leaves others untouched", async () => {
     const { workspace, config, originalCwd } = setupWorkspace();
     try {
       const fileA = path.join(workspace, "a.txt");
@@ -337,7 +337,7 @@ describe("restore e2e: --file single-file restore", () => {
 
       // Now restore ONLY a.txt from action 1
       const actions = listRestorableActions(config);
-      const results = restoreActionDirect(actions[0].name, config, { fileOnly: "a.txt" });
+      const results = await restoreActionDirect(actions[0].name, config, { fileOnly: "a.txt" });
 
       const failures = results.filter((r) => !r.success);
       assert.equal(failures.length, 0, `Unexpected failures: ${JSON.stringify(failures)}`);
@@ -350,7 +350,7 @@ describe("restore e2e: --file single-file restore", () => {
     }
   });
 
-  it("returns failure when action has no git_snapshot", () => {
+  it("returns failure when action has no git_snapshot", async () => {
     const { workspace, config, originalCwd } = setupWorkspace();
     try {
       // Create an action folder manually with only a non-git-snapshot artifact
@@ -371,7 +371,7 @@ describe("restore e2e: --file single-file restore", () => {
         ]),
       );
 
-      const results = restoreActionDirect(
+      const results = await restoreActionDirect(
         "action_001_19990101000000",
         config,
         { fileOnly: "some_file.txt" },
@@ -391,7 +391,7 @@ describe("restore e2e: --file single-file restore", () => {
 describe("restore e2e: partial failure preserves folders", () => {
   beforeEach(() => resetAction());
 
-  it("restoreActionLoop does NOT prune when a step fails", () => {
+  it("restoreActionLoop does NOT prune when a step fails", async () => {
     const { workspace, config, originalCwd } = setupWorkspace();
     try {
       // Action 1: real backup
@@ -423,7 +423,7 @@ describe("restore e2e: partial failure preserves folders", () => {
       fs.writeFileSync(metaPath, JSON.stringify(meta));
 
       // Try to loop-restore to action 1
-      const results = restoreActionLoop(actions[0].name, config);
+      const results = await restoreActionLoop(actions[0].name, config);
 
       // Should have at least one failure
       const failures = results.filter((r: { success: boolean }) => !r.success);

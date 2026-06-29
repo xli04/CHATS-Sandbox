@@ -12,7 +12,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import * as os from "node:os";
 import { extractJsonObjects, extractJsonObject } from "../src/util/extract_json.js";
-import { isReadOnlyMcpTool, touchesOutsideWorkspace, isReadOnlySql } from "../src/backup/strategies.js";
+import { isReadOnlyMcpTool, touchesOutsideWorkspace } from "../src/backup/strategies.js";
 import { isDangerousRecoveryCommand } from "../src/restore/restore.js";
 import { renderExperiencesForPrompt } from "../src/explore/experiences.js";
 import { buildSubagentInvocation, isolatedMcpConfig } from "../src/backup/subagent.js";
@@ -62,23 +62,38 @@ describe("isReadOnlyMcpTool — compound verbs & mutating browser verbs", () => 
   }
 });
 
-describe("SQL-aware over-fire fix — read-only execute_sql skips backup", () => {
-  for (const s of ["SELECT count(*) FROM orders", "  select * from t", "SHOW TABLES",
-    "EXPLAIN SELECT 1", "WITH x AS (SELECT 1) SELECT * FROM x"]) {
-    it(`read-only SQL → no escalation: ${s.slice(0,30)}`, () => {
-      assert.equal(isReadOnlySql(s), true);
-      assert.equal(touchesOutsideWorkspace({ tool_name: "mcp__postgres__execute_sql",
-        tool_input: { sql: s } } as unknown as HookContext), false);
+describe("execute_sql backup decision via the per-server learned lists", () => {
+  const fsM = require("node:fs"), osM = require("node:os"), pathM = require("node:path");
+  const { saveExperiences } = require("../src/explore/experiences.js");
+  // A postgres profile like self-exploration produces: write verbs are
+  // Backup-patterns (triggers), read verbs are Non-Backup-patterns. execute_sql
+  // is deliberately NOT in readOnlyTools, so the SQL text drives the verdict.
+  function withPg(fn: (config: any) => void) {
+    const root = fsM.mkdtempSync(pathM.join(osM.tmpdir(), "chats-sql-"));
+    const config = { backupDir: pathM.join(root, ".chats-sandbox", "backups") } as any;
+    saveExperiences(config, {
+      server: "postgres", generated: "now", observed_tools: ["execute_sql"],
+      patterns: ["insert", "update", "delete", "drop", "truncate", "alter", "create"]
+        .map((t) => ({ action: t, easy_win: "snapshot", trigger: t })),
+      noBackupPatterns: ["select", "show", "explain"],
     });
+    try { fn(config); } finally { fsM.rmSync(root, { recursive: true, force: true }); }
   }
-  for (const s of ["DELETE FROM orders WHERE id<=30", "UPDATE t SET x=1", "DROP TABLE t",
-    "WITH x AS (SELECT 1) INSERT INTO t SELECT * FROM x", "SELECT * FROM t FOR UPDATE"]) {
-    it(`mutating SQL → still escalates: ${s.slice(0,30)}`, () => {
-      assert.equal(isReadOnlySql(s), false);
-      assert.equal(touchesOutsideWorkspace({ tool_name: "mcp__postgres__execute_sql",
-        tool_input: { sql: s } } as unknown as HookContext), true);
-    });
-  }
+  const sqlCtx = (sql: string) =>
+    ({ tool_name: "mcp__postgres__execute_sql", tool_input: { sql } } as unknown as HookContext);
+
+  it("read-only SQL → skip (matches a Non-Backup-pattern, no trigger)", () => withPg((config) => {
+    for (const s of ["SELECT count(*) FROM orders", "  select * from t", "SHOW TABLES",
+      "EXPLAIN SELECT 1", "WITH x AS (SELECT 1) SELECT * FROM x"]) {
+      assert.equal(touchesOutsideWorkspace(sqlCtx(s), config), false, s);
+    }
+  }));
+  it("mutating SQL → back up (matches a Backup-pattern; triggers win over read keywords)", () => withPg((config) => {
+    for (const s of ["DELETE FROM orders WHERE id<=30", "UPDATE t SET x=1", "DROP TABLE t",
+      "WITH x AS (SELECT 1) INSERT INTO t SELECT * FROM x", "SELECT * FROM t FOR UPDATE"]) {
+      assert.equal(touchesOutsideWorkspace(sqlCtx(s), config), true, s);
+    }
+  }));
 });
 
 describe("browser-affordance over-fire fix — nav/login clicks skip, mutations back up", () => {
@@ -135,10 +150,11 @@ describe("learned read-only patterns (from self-exploration) extend the skip-lis
   function withLearned(noBackupPatterns: string[], fn: (config: any) => void) {
     const root = fs.mkdtempSync(pathM.join(os.tmpdir(), "chats-learned-"));
     const config = { backupDir: pathM.join(root, ".chats-sandbox", "backups") } as any;
-    // File it under server "reddit" — the EXACT keying-bug shape: a website's
-    // experience whose browser tool resolves to "playwright". The unified
-    // list must still apply it to a mcp__playwright__ click.
-    saveExperiences(config, { server: "reddit", generated: "now", observed_tools: [], patterns: [], noBackupPatterns });
+    // File it under server "reddit" but declare appliesTo:["playwright"] — a
+    // website's experience whose browser tool resolves to "playwright". The
+    // per-server gate resolves playwright→reddit via this appliesTo mapping
+    // (serverToExperienceMap / experienceNameForServer) and applies its list.
+    saveExperiences(config, { server: "reddit", appliesTo: ["playwright"], generated: "now", observed_tools: [], patterns: [], noBackupPatterns });
     try { fn(config); } finally { fs.rmSync(root, { recursive: true, force: true }); }
   }
 

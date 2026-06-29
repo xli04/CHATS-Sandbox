@@ -615,19 +615,9 @@ function isBareBrowserTool(toolName: string): boolean {
   return /^browser_/.test(toolName);
 }
 
-/** True when a SQL statement only READS (no backup needed). Conservative:
- *  must start with a read verb AND contain no mutating keyword anywhere
- *  (so `WITH … INSERT`, `EXPLAIN ANALYZE DELETE`, `SELECT … FOR UPDATE`
- *  all correctly fall through to "treat as mutating"). */
-export function isReadOnlySql(sql: string): boolean {
-  const s = sql.trim().replace(/^\(+\s*/, "").toLowerCase();
-  if (!/^(select|show|explain|with|values|describe|desc|pragma|\\d)\b/.test(s)) return false;
-  return !/\b(insert|update|delete|drop|truncate|alter|create|grant|revoke|merge|call|copy|replace|comment|reindex|vacuum|refresh|for\s+update|for\s+share|set\s)\b/.test(s);
-}
-
 // A mutating verb in an MCP tool's action segment → NOT read-only. Module-
-// scoped so the learned read-only-TOOL guard (matchesLearnedReadOnlyTool) can
-// reuse the exact same vocabulary as the hardcoded isReadOnlyMcpTool check.
+// scoped so the per-server Non-Backup-ToolList guard in isBackupWorthyRemote
+// can reuse the exact same vocabulary as the hardcoded isReadOnlyMcpTool check.
 const MUTATING_VERB = /(^|_)(create|delete|update|remove|insert|drop|truncate|purge|ack|acknowledge|replace|write|set|post|put|send|publish|destroy|kill|cancel|revoke|grant|upsert|patch|rename|merge|install|uninstall|close|submit|clear|reset|flush|move|edit|modify)(_|$)/i;
 
 export function isReadOnlyMcpTool(toolName: string): boolean {
@@ -717,106 +707,28 @@ export function isMutatingBrowserClick(input: Record<string, unknown>): boolean 
 }
 
 /**
- * Consult the LEARNED per-environment read-only list (from self-exploration)
- * to clear a benign action the hardcoded heuristics didn't recognize. The
- * stronger explorer agent identified which actions in THIS environment need
- * no backup (login, pagination, opening an item, selecting a dropdown…) and
- * wrote them to the experience file; here we match them in-process for free.
- *
- * SAFETY: a learned pattern can NEVER clear a destructive verb — STRONG_MUTATING
- * always wins. Learned data is attacker-influenceable (it comes from a remote
- * system the explorer browsed), so it may only EXTEND the benign skip-list,
- * never authorize skipping a delete/remove/drop/ban.
- */
-function matchesLearnedReadOnly(ctx: HookContext, config?: SandboxConfig): boolean {
-  if (!config) return false;
-  try {
-    const { aggregateReadOnlyRegex } = require("../explore/experiences.js");
-    // ONE unified read-only list (union across all environments) — no
-    // server keying, so a website's "reddit" experience still applies to its
-    // "playwright" browser tool.
-    const rx: RegExp | null = aggregateReadOnlyRegex(config);
-    if (!rx) return false;
-    const input = (ctx.tool_input ?? {}) as Record<string, unknown>;
-    const desc = [
-      ctx.tool_name, input.element, input.text, input.selector, input.name,
-      input.command, input.sql, input.query,
-    ].filter(Boolean).map(String).join(" ").toLowerCase();
-    if (STRONG_MUTATING.test(desc)) return false; // destructive always backs up
-    return rx.test(desc);
-  } catch {
-    return false;
-  }
-}
-
-/**
- * Consult the LEARNED read-only TOOL list (readOnlyTools from self-exploration)
- * — tools the explorer picked, from the actual provided tool list, as
- * read/inspect-only. Skip backup for them by tool NAME (complements
- * matchesLearnedReadOnly, which matches affordance KEYWORDS in the description).
- *
- * SAFETY: a learned tool can NEVER clear a mutating/destructive verb in its own
- * name — MUTATING_VERB and STRONG_MUTATING both veto the match. Experience data
- * is attacker-influenceable (scraped from a remote system), so a poisoned
- * `readOnlyTools: ["delete_submission"]` is inert; learned data may only EXTEND
- * the benign skip-list, never authorize skipping a mutation.
- */
-function matchesLearnedReadOnlyTool(toolName: string, config?: SandboxConfig): boolean {
-  if (!config || !toolName) return false;
-  try {
-    const { aggregateReadOnlyToolSet } = require("../explore/experiences.js");
-    const set: Set<string> = aggregateReadOnlyToolSet(config);
-    if (!set || !set.size) return false;
-    const lc = toolName.toLowerCase();
-    const action = lc.split("__").pop() || lc;
-    if (MUTATING_VERB.test(action) || STRONG_MUTATING.test(action)) return false;
-    return set.has(lc) || set.has(action);
-  } catch {
-    return false;
-  }
-}
-
-/** Does this action match the LEARNED backup-worthy trigger list (the union
- *  of recovery-pattern triggers across environments)? */
-function matchesBackupTrigger(ctx: HookContext, config?: SandboxConfig): boolean {
-  if (!config) return false;
-  try {
-    const { aggregateBackupTriggerRegex } = require("../explore/experiences.js");
-    const rx: RegExp | null = aggregateBackupTriggerRegex(config);
-    if (!rx) return false;
-    const input = (ctx.tool_input ?? {}) as Record<string, unknown>;
-    const desc = [
-      ctx.tool_name, input.element, input.text, input.selector, input.name,
-      input.command, input.sql, input.query,
-    ].filter(Boolean).map(String).join(" ").toLowerCase();
-    return rx.test(desc);
-  } catch {
-    return false;
-  }
-}
-
-/**
  * REMOTE actions (MCP + browser tools) use a backup-worthy ALLOWLIST: only
  * actions that look consequential are backed up; navigation, reads, and
  * unknown UI are ignored. This is the inverse of the local default (which
  * stays "escalate unless known-safe"). Local actions never reach here.
  *
  * Order matters — most reliable signal first:
- *   SQL arg          → read vs mutating decides (execute_sql etc.)
- *   read-verb name   → MCP get/list/view → ignore
- *   learned read-only→ ignore (env said so)
- *   learned trigger  → back up (env said so)
- *   destructive verb → back up (floor; beats the link rule)
- *   a LINK           → ignore (navigation never commits)
- *   mutating verb    → back up (generic create/submit/delete/vote/…)
- *   otherwise        → ignore (allowlist default)
+ *   SQL arg            → read vs mutating decides (execute_sql etc.)
+ *   read-verb name     → MCP get/list/view → ignore
+ *   destructive verb   → back up (floor; no learned entry may suppress it)
+ *   PER-SERVER learned → judge against THIS server's lists only:
+ *                        Non-Backup-ToolList → ignore; Backup-patterns → back
+ *                        up (checked FIRST); Non-Backup-patterns → ignore
+ *   FALLBACK (no profile / no match): LINK → ignore; mutating verb → back up;
+ *                        otherwise → ignore (allowlist default)
  */
 function isBackupWorthyRemote(ctx: HookContext, config?: SandboxConfig): boolean {
   const toolName = ctx.tool_name;
   const input = (ctx.tool_input ?? {}) as Record<string, unknown>;
 
-  const sql = String(input.sql ?? input.query ?? input.statement ?? "");
-  if (sql) return !isReadOnlySql(sql);
+  // A SQL/query arg is NOT special-cased — it flows through the per-server
+  // learned lists like any other action (its text is part of rawDesc below,
+  // matched against that server's Backup-/Non-Backup-patterns).
 
   // Arbitrary-code browser tools (browser_run_code_unsafe, browser_evaluate,
   // *_evaluate) carry their real action in a `code`/`function` arg, NOT the
@@ -832,21 +744,47 @@ function isBackupWorthyRemote(ctx: HookContext, config?: SandboxConfig): boolean
     return /\.(fill|click|type|press|check|uncheck|select_?option|set_?input_?files|tap|drag_?to|set_?checked|clear)\s*\(|\.submit\s*\(|get_?by\w*\([^)]*\)\s*\.\s*(click|fill|check|press|type|select)/i.test(code);
   }
 
-  // Tool-NAME read-only skip: the hardcoded verb heuristic OR a learned
-  // read-only tool (from self-exploration's readOnlyTools), both guarded so a
-  // mutating-named tool is never cleared.
+  // Hardcoded read-verb tool-name skip (applies to any tool, learned or not).
   if (toolName.startsWith("mcp__") && isReadOnlyMcpTool(toolName)) return false;
-  if (matchesLearnedReadOnlyTool(toolName, config)) return false;
 
   // Normalize `_` → ` ` so verbs in tool names match word-boundary regexes
   // (`create_page` → `create page`; `\bcreate\b` matches only after this).
   const desc = [
     toolName, input.element, input.text, input.selector, input.name,
   ].filter(Boolean).map(String).join(" ").toLowerCase().replace(/_/g, " ");
+  // Raw text (incl. command/sql/query) for the learned keyword matchers.
+  const rawDesc = [
+    toolName, input.element, input.text, input.selector, input.name,
+    input.command, input.sql, input.query,
+  ].filter(Boolean).map(String).join(" ").toLowerCase();
 
-  if (matchesLearnedReadOnly(ctx, config)) return false;
-  if (matchesBackupTrigger(ctx, config)) return true;
+  // Destructive floor: a clearly destructive op ALWAYS backs up — no learned
+  // entry may suppress it (learned data is attacker-influenceable).
   if (STRONG_MUTATING.test(desc)) return true;
+
+  // ── PER-SERVER learned judgment (primary path): map the action to its server
+  //    and judge ONLY against THAT server's lists. Backup-patterns are checked
+  //    BEFORE Non-Backup-patterns, so a write wearing a read keyword (e.g.
+  //    `INSERT … SELECT`) still backs up. ──
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const { serverFromToolName, experienceNameForServer, serverMatchers } =
+      require("../explore/experiences.js");
+    const server = config ? serverFromToolName(toolName) : null;
+    const expName = server ? experienceNameForServer(config, server) : null;
+    if (expName) {
+      const m = serverMatchers(config, expName);
+      const lc = toolName.toLowerCase();
+      const seg = lc.split("__").pop() || lc;
+      // Non-Backup-ToolList — guarded so a mutating-named tool is never cleared.
+      if ((m.readOnlyTools.has(lc) || m.readOnlyTools.has(seg)) && !MUTATING_VERB.test(seg)) return false;
+      if (m.triggerRegex && m.triggerRegex.test(rawDesc)) return true;   // Backup-patterns
+      if (m.noBackupRegex && m.noBackupRegex.test(rawDesc)) return false; // Non-Backup-patterns
+    }
+  } catch { /* fall through to the generic verb-list fallback */ }
+
+  // ── FALLBACK (no server / no experience profile / matched none of the
+  //    three): the generic verb-list heuristic. ──
   if (/\blink\b/.test(desc)) return false;
   if (IRREVERSIBLE_VERB.test(desc)) return true;
   return false; // reversible toggle / unknown / read → ignore (allowlist default)

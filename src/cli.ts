@@ -15,7 +15,7 @@ import * as path from "node:path";
 import { loadConfig, saveConfig, getConfigDir } from "./config/load.js";
 import { buildBackupGuidance } from "./backup/subagent.js";
 import { loadManifest } from "./backup/manifest.js";
-import { DEFAULT_CONFIG } from "./types.js";
+import { DEFAULT_CONFIG, type SandboxConfig } from "./types.js";
 import { ALL_ADAPTERS, findAdapter, detectAdapters } from "./agents/index.js";
 
 const CLAUDE_SETTINGS_PATH = ".claude/settings.json";
@@ -199,21 +199,66 @@ function setConfigValue(
 
 // ── Explore (self-exploration of easy-win reversal patterns) ──────────
 
-function exploreCommand(projectRoot: string, ...rest: string[]): void {
-  const config = loadConfig(projectRoot);
-  // Parse [server], --target <url>, --gen-model <m>, --verify-model <m>.
+function exploreCommand(_projectRoot: string, ...rest: string[]): void {
+  // Self-exploration is a STANDALONE, offline pipeline — NOT the runtime backup
+  // path — so it does NOT read .chats-sandbox/config.json. The runner, model,
+  // and provider come from explicit CLI args; everything else uses the shipped
+  // defaults. (This is what kills the silent "fell back to claude" trap where
+  // running from a dir without a config picked the wrong runner.)
+  //
+  //   explore <server> --agent <hermes|claude|codex|openclaw> --model <id> [--provider <p>] [--target <url>]
+  //   (<server> may also be given as --tools/--server)
+  const VALID_AGENTS = ["hermes", "claude", "codex", "openclaw"] as const;
   let serverArg: string | undefined;
   let targetArg: string | undefined;
-  let genModel: string | undefined;
-  let verifyModel: string | undefined;
+  let agentArg: string | undefined;
+  let modelArg: string | undefined;
+  let providerArg: string | undefined;
   for (let i = 0; i < rest.length; i++) {
     if (rest[i] === "--target") { targetArg = rest[++i]; }
-    else if (rest[i] === "--gen-model") { genModel = rest[++i]; }
-    else if (rest[i] === "--verify-model") { verifyModel = rest[++i]; }
+    else if (rest[i] === "--agent") { agentArg = rest[++i]; }
+    else if (rest[i] === "--model") { modelArg = rest[++i]; }
+    else if (rest[i] === "--provider") { providerArg = rest[++i]; }
+    else if (rest[i] === "--tools" || rest[i] === "--server") { serverArg = rest[++i]; }
     else if (!rest[i].startsWith("--")) { serverArg = rest[i]; }
   }
+
+  const agent = (agentArg ?? "hermes") as SandboxConfig["subagentRunner"];
+  if (!VALID_AGENTS.includes(agent)) {
+    console.log(`Unknown --agent "${agentArg}". Choose one of: ${VALID_AGENTS.join(", ")}.`);
+    return;
+  }
+  // Stage-2 (verify) drives the chosen agent against the LIVE MCP server. Today
+  // that only works for hermes (buildSubagentInvocation scopes a filtered
+  // ~/.hermes with the mcp-<server> toolset); claude/codex/openclaw have no MCP
+  // wiring on this path, so their verify stage would silently get zero tools.
+  // Fail loudly rather than produce empty "unverified" results.
+  if (agent !== "hermes") {
+    console.log(`explore: --agent "${agent}" is not supported yet — the verify stage needs live MCP tools, which is currently wired only for hermes. Re-run with --agent hermes.`);
+    return;
+  }
+
+  // Build the runner config from ARGS (not from disk). Route the single --model
+  // to the field the chosen runner reads; everything else is DEFAULT_CONFIG.
+  // backupDir stays at its default, so the experiences sink + target scan are
+  // cwd-relative (<cwd>/.chats-sandbox/…) — run explore from the project whose
+  // backup subagent will consume the learned patterns.
+  const modelField: Partial<SandboxConfig> =
+    agent === "hermes"     ? { subagentHermesModel: modelArg ?? DEFAULT_CONFIG.subagentHermesModel }
+    : agent === "codex"    ? { subagentCodexModel: modelArg ?? DEFAULT_CONFIG.subagentCodexModel }
+    : agent === "openclaw" ? { subagentOpenclawModel: modelArg ?? DEFAULT_CONFIG.subagentOpenclawModel }
+    :                        { subagentModel: (modelArg as SandboxConfig["subagentModel"]) ?? DEFAULT_CONFIG.subagentModel };
+  const config: SandboxConfig = {
+    ...DEFAULT_CONFIG,
+    subagentRunner: agent,
+    subagentHermesProvider: providerArg ?? DEFAULT_CONFIG.subagentHermesProvider,
+    ...modelField,
+  };
+
+  // The self-exploration pipeline lives in its own top-level module, compiled
+  // into dist/self-exploration (a sibling of this file under dist/).
   // eslint-disable-next-line @typescript-eslint/no-require-imports
-  const { runExplore, readMcpServers } = require("./explore/explore.js");
+  const { runExplore, readMcpServers } = require("./self-exploration/explore.js");
 
   // Tool acquisition is LIVE off the runner's MCP config (initialize →
   // tools/list), not backup history. Enumerate / validate against
@@ -230,15 +275,16 @@ function exploreCommand(projectRoot: string, ...rest: string[]): void {
     return;
   }
 
+  const modelLabel = config.subagentHermesModel;
   console.log(serverArg
-    ? `Exploring easy-win reversal patterns for "${serverArg}"…`
-    : `Exploring ${known.length} server(s): ${known.join(", ")}…`);
+    ? `Exploring easy-win reversal patterns for "${serverArg}" (agent=${agent}, model=${modelLabel})…`
+    : `Exploring ${known.length} server(s): ${known.join(", ")} (agent=${agent}, model=${modelLabel})…`);
   console.log("Two stages per server: (1) a model PROPOSES candidate reversals,");
   console.log("(2) a live agent EXECUTES each against the real target to verify.");
-  console.log("One-time cost per server (a few minutes each).\n");
+  console.log("One model is used for both stages. One-time cost per server (a few minutes each).\n");
 
   const nowIso = new Date().toISOString();
-  const outcomes = runExplore(config, nowIso, serverArg, targetArg, genModel, verifyModel) as Array<{
+  const outcomes = runExplore(config, nowIso, serverArg, targetArg) as Array<{
     server: string; tools: string[]; target: string | null; saved: boolean; path?: string; proposed: number; verified: number; error?: string;
   }>;
 
@@ -342,7 +388,7 @@ function printRestoreResults(results: Array<{
  * restore <N> — Reverse-loop restore. Undoes actions one by one from
  * latest back to N+1, then restores N's state. Safer for non-workspace state.
  */
-function restoreCommand(projectRoot: string, actionArg?: string, fileArg?: string): void {
+async function restoreCommand(projectRoot: string, actionArg?: string, fileArg?: string): Promise<void> {
   const config = loadConfig(projectRoot);
   const actions = listActionsForRestore(projectRoot);
 
@@ -375,7 +421,7 @@ function restoreCommand(projectRoot: string, actionArg?: string, fileArg?: strin
   if (fileArg) {
     const { restoreActionDirect } = require("./restore/restore.js");
     console.log(`Restoring file ${fileArg} from ${target.name}\n`);
-    const results = restoreActionDirect(target.name, config, { fileOnly: fileArg });
+    const results = await restoreActionDirect(target.name, config, { fileOnly: fileArg });
     printRestoreResults(results);
     return;
   }
@@ -383,7 +429,7 @@ function restoreCommand(projectRoot: string, actionArg?: string, fileArg?: strin
   // Reverse-loop restore
   const { restoreActionLoop } = require("./restore/restore.js");
   console.log(`Reverse-loop restore to: ${target.name}\n`);
-  const results = restoreActionLoop(target.name, config);
+  const results = await restoreActionLoop(target.name, config);
   printRestoreResults(results);
 }
 
@@ -392,7 +438,7 @@ function restoreCommand(projectRoot: string, actionArg?: string, fileArg?: strin
  * Fast, but only covers what that single action backed up.
  * No-arg default: jump to the action before the latest (undo last).
  */
-function restoreDirectCommand(projectRoot: string, actionArg?: string): void {
+async function restoreDirectCommand(projectRoot: string, actionArg?: string): Promise<void> {
   const config = loadConfig(projectRoot);
   const actions = listActionsForRestore(projectRoot);
 
@@ -420,7 +466,7 @@ function restoreDirectCommand(projectRoot: string, actionArg?: string): void {
   const target = actions[idx];
   const { restoreActionDirect } = require("./restore/restore.js");
   console.log(`Direct restore from: ${target.name}\n`);
-  const results = restoreActionDirect(target.name, config);
+  const results = await restoreActionDirect(target.name, config);
   printRestoreResults(results);
 }
 
@@ -818,11 +864,13 @@ switch (command) {
   case "restore": {
     const fileIdx = args.indexOf("--file");
     const fileArg = fileIdx !== -1 ? args[fileIdx + 1] : undefined;
-    restoreCommand(projectRoot, args[1], fileArg);
+    restoreCommand(projectRoot, args[1], fileArg)
+      .catch((e: unknown) => { console.error(e instanceof Error ? e.message : String(e)); process.exit(1); });
     break;
   }
   case "restore_direct":
-    restoreDirectCommand(projectRoot, args[1]);
+    restoreDirectCommand(projectRoot, args[1])
+      .catch((e: unknown) => { console.error(e instanceof Error ? e.message : String(e)); process.exit(1); });
     break;
   case "diff":
     diffCommand(projectRoot, args[1]);
@@ -850,7 +898,8 @@ switch (command) {
     console.log("  config set <key> <value>        Set a config value");
     console.log("  status                          Show sandbox state");
     console.log("  backups                         List recent backup artifacts");
-    console.log("  explore [server] [--target URL] Drive MCP to learn easy-win reversal patterns");
+    console.log("  explore <server> [--agent hermes] [--model <id>] [--provider <p>]");
+    console.log("                                  Self-exploration: learn easy-win reversal patterns (standalone, arg-driven)");
     console.log("  history [N]                     Timeline of last N actions (default 10)");
     console.log("  restore                         List restorable actions");
     console.log("  restore <N>                     Reverse-loop restore to action N");

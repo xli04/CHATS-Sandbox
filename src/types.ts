@@ -354,6 +354,13 @@ export interface BackupArtifact {
    *  plugin will spawn a fresh subagent to reason about current state
    *  rather than executing the canned commands. */
   liveRestore?: boolean;
+  /** Subagent-only (live_restore=false): the EXACT MCP tool call(s) that
+   *  deterministically reverse a remote action, recorded by the backup
+   *  agent as structured data. On restore they are replayed verbatim via
+   *  the MCP (tools/call) — never via psql/curl or any direct binary.
+   *  Each entry names the `tool` and its `args`; `server` is optional
+   *  (defaults to the action's own server). */
+  recoveryMcpCalls?: Array<{ server?: string; tool: string; args: Record<string, unknown> }>;
   /** policy_rewrite-only: commands that reverse the rewrite. Runs via
    *  execSync on restore — same contract as subagent's recovery_commands. */
   recoveryCommands?: string[];

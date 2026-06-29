@@ -8,6 +8,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import * as os from "node:os";
 import { restoreArtifact } from "../src/restore/restore.js";
+import { DEFAULT_CONFIG } from "../src/types.js";
 import type { BackupArtifact, SandboxConfig, HookContext } from "../src/types.js";
 
 function makeArtifact(overrides: Partial<BackupArtifact>): BackupArtifact {
@@ -24,8 +25,8 @@ function makeArtifact(overrides: Partial<BackupArtifact>): BackupArtifact {
 }
 
 describe("restore - pip_freeze", () => {
-  it("fails when backup file is missing", () => {
-    const r = restoreArtifact(makeArtifact({
+  it("fails when backup file is missing", async () => {
+    const r = await restoreArtifact(makeArtifact({
       strategy: "pip_freeze",
       artifactPath: "/tmp/nonexistent_pip_freeze.txt",
     }));
@@ -35,11 +36,11 @@ describe("restore - pip_freeze", () => {
 });
 
 describe("restore - env_snapshot", () => {
-  it("returns a restore command for env snapshots", () => {
+  it("returns a restore command for env snapshots", async () => {
     const tmpFile = path.join(os.tmpdir(), `env_test_${Date.now()}.txt`);
     fs.writeFileSync(tmpFile, "FOO=bar\nBAZ=qux\n", "utf-8");
 
-    const r = restoreArtifact(makeArtifact({
+    const r = await restoreArtifact(makeArtifact({
       strategy: "env_snapshot",
       artifactPath: tmpFile,
     }));
@@ -49,8 +50,8 @@ describe("restore - env_snapshot", () => {
     fs.unlinkSync(tmpFile);
   });
 
-  it("fails when env file is missing", () => {
-    const r = restoreArtifact(makeArtifact({
+  it("fails when env file is missing", async () => {
+    const r = await restoreArtifact(makeArtifact({
       strategy: "env_snapshot",
       artifactPath: "/tmp/nonexistent_env.txt",
     }));
@@ -59,8 +60,8 @@ describe("restore - env_snapshot", () => {
 });
 
 describe("restore - git_tag", () => {
-  it("fails when tag does not exist", () => {
-    const r = restoreArtifact(makeArtifact({
+  it("fails when tag does not exist", async () => {
+    const r = await restoreArtifact(makeArtifact({
       strategy: "git_tag",
       artifactPath: "chats-sandbox/nonexistent-tag-999",
     }));
@@ -70,8 +71,8 @@ describe("restore - git_tag", () => {
 });
 
 describe("restore - git_snapshot", () => {
-  it("fails when shadow repo is missing", () => {
-    const r = restoreArtifact(makeArtifact({
+  it("fails when shadow repo is missing", async () => {
+    const r = await restoreArtifact(makeArtifact({
       strategy: "git_snapshot",
       artifactPath: "/tmp/nonexistent_shadow_repo",
     }));
@@ -79,7 +80,7 @@ describe("restore - git_snapshot", () => {
     assert.ok(r.description.includes("not found"));
   });
 
-  it("verifies commit exists by querying with GIT_DIR (not cwd)", () => {
+  it("verifies commit exists by querying with GIT_DIR (not cwd)", async () => {
     // Regression: previously `git rev-parse <commit>` was called with
     // cwd=shadowDir, which fails because the shadow dir is bare-style
     // (no .git/ subdir). This made every restore_direct on an older
@@ -107,7 +108,7 @@ describe("restore - git_snapshot", () => {
     try {
       // Modify f.txt so restore has work to do
       fs.writeFileSync(path.join(work, "f.txt"), "modified\n");
-      const r = restoreArtifact(makeArtifact({
+      const r = await restoreArtifact(makeArtifact({
         strategy: "git_snapshot",
         artifactPath: shadow,
         commitHash: head,
@@ -123,10 +124,10 @@ describe("restore - git_snapshot", () => {
 });
 
 describe("restore - subagent", () => {
-  it("returns a subagent prompt", () => {
+  it("returns a subagent prompt", async () => {
     // subagent restore now EXECUTES the recovery commands deterministically.
     // Use a safe, always-succeeding command so the test is hermetic.
-    const r = restoreArtifact(makeArtifact({
+    const r = await restoreArtifact(makeArtifact({
       strategy: "subagent",
       description: "backup complete",
       subagentCommands: ["true"],   // POSIX 'true' always succeeds
@@ -139,8 +140,8 @@ describe("restore - subagent", () => {
     );
   });
 
-  it("returns failure when a recovery command fails", () => {
-    const r = restoreArtifact(makeArtifact({
+  it("returns failure when a recovery command fails", async () => {
+    const r = await restoreArtifact(makeArtifact({
       strategy: "subagent",
       description: "backup",
       subagentCommands: ["false"],  // POSIX 'false' always exits non-zero
@@ -151,8 +152,8 @@ describe("restore - subagent", () => {
       `Expected failure description, got: ${r.description}`);
   });
 
-  it("handles missing subagentCommands gracefully", () => {
-    const r = restoreArtifact(makeArtifact({
+  it("handles missing subagentCommands gracefully", async () => {
+    const r = await restoreArtifact(makeArtifact({
       strategy: "subagent",
       description: "Some backup",
     }));
@@ -166,8 +167,8 @@ describe("restore - subagent", () => {
 });
 
 describe("restore - unknown strategy", () => {
-  it("fails for unknown strategy", () => {
-    const r = restoreArtifact(makeArtifact({
+  it("fails for unknown strategy", async () => {
+    const r = await restoreArtifact(makeArtifact({
       strategy: "file_copy" as "pip_freeze", // file_copy was removed but test the fallback
     }));
     // file_copy doesn't exist as a strategy in restore — should handle gracefully
@@ -182,7 +183,7 @@ describe("restore - unknown strategy", () => {
 // replay them newest-last (which would leave the agent's edits un-reverted).
 // See collapseGitSnapshots() in restore.ts.
 describe("restore - grouped git_snapshots (concurrent-backup regression)", () => {
-  it("reverts all edits when one action holds multiple snapshots", () => {
+  it("reverts all edits when one action holds multiple snapshots", async () => {
     const cp = require("node:child_process") as typeof import("node:child_process");
     const { runBackup } = require("../src/backup/strategies.js") as typeof import("../src/backup/strategies.js");
     const { restoreActionLoop } = require("../src/restore/restore.js") as typeof import("../src/restore/restore.js");
@@ -211,12 +212,169 @@ describe("restore - grouped git_snapshots (concurrent-backup regression)", () =>
       const snaps = meta.filter((m: { strategy: string }) => m.strategy === "git_snapshot").length;
       assert.ok(snaps >= 2, `expected grouped snapshots, got ${snaps}`);
 
-      restoreActionLoop(acts[0], cfg);
+      await restoreActionLoop(acts[0], cfg);
       assert.equal(fs.readFileSync("tests.py", "utf-8").trim(), "TESTS-orig", "tests.py must revert");
       assert.equal(fs.readFileSync("a.py", "utf-8").trim(), "A-orig", "a.py must revert");
     } finally {
       process.chdir(cwd0);
       fs.rmSync(W, { recursive: true, force: true });
     }
+  });
+});
+
+// Restore must reach a remote system ONLY through the MCP — a deterministic
+// (liveRestore=false) artifact carrying recoveryMcpCalls is REPLAYED via
+// tools/call against the action's STDIO server. No psql/curl/binary, and no
+// connection-string scraping. (See restoreSubagent's recoveryMcpCalls branch.)
+describe("restore - deterministic MCP replay (recoveryMcpCalls)", () => {
+  // A minimal STDIO MCP server: speaks just enough JSON-RPC for callMcpTool
+  // (initialize id:1 → tools/call id:3) and records the arguments it was
+  // called with to a marker file, proving the replay went through the MCP.
+  function writeMockMcpServer(scriptPath: string, markerPath: string): void {
+    const src = `
+const fs = require("fs");
+let buf = "";
+process.stdin.on("data", (d) => {
+  buf += d.toString();
+  let i;
+  while ((i = buf.indexOf("\\n")) >= 0) {
+    const line = buf.slice(0, i); buf = buf.slice(i + 1);
+    let m; try { m = JSON.parse(line); } catch { continue; }
+    if (m.id === 1) {
+      process.stdout.write(JSON.stringify({ jsonrpc: "2.0", id: 1, result: { protocolVersion: "2024-11-05", capabilities: {}, serverInfo: { name: "mock", version: "1" } } }) + "\\n");
+    } else if (m.id === 3) {
+      fs.writeFileSync(${JSON.stringify(markerPath)}, JSON.stringify(m.params));
+      process.stdout.write(JSON.stringify({ jsonrpc: "2.0", id: 3, result: { content: [{ type: "text", text: "ok" }] } }) + "\\n");
+    }
+  }
+});
+`;
+    fs.writeFileSync(scriptPath, src, "utf-8");
+  }
+
+  function mcpConfig(workspace: string, server: string, scriptPath: string): string {
+    const cfgPath = path.join(workspace, "mcp-config.json");
+    fs.writeFileSync(cfgPath, JSON.stringify({
+      mcpServers: { [server]: { command: process.execPath, args: [scriptPath] } },
+    }), "utf-8");
+    return cfgPath;
+  }
+
+  it("replays a deterministic artifact via the MCP (no binary, no SQL shell-out)", async () => {
+    const W = fs.mkdtempSync(path.join(os.tmpdir(), "mcp-replay-"));
+    try {
+      const script = path.join(W, "mock_mcp.js");
+      const marker = path.join(W, "called.json");
+      writeMockMcpServer(script, marker);
+      const cfg = { ...DEFAULT_CONFIG, subagentMcpConfig: mcpConfig(W, "mydb", script) } as SandboxConfig;
+
+      const r = await restoreArtifact(makeArtifact({
+        strategy: "subagent",
+        toolName: "mcp__mydb__execute_sql",
+        description: "delete reversal",
+        liveRestore: false,
+        recoveryMcpCalls: [{ tool: "execute_sql", args: { sql: "INSERT INTO t VALUES (1)" } }],
+      }), cfg);
+
+      assert.equal(r.success, true, `expected MCP replay success, got: ${r.description}`);
+      assert.ok(r.description.includes("MCP call"), `expected MCP-replay description, got: ${r.description}`);
+      // The tool call actually reached the MCP server with our args.
+      assert.ok(fs.existsSync(marker), "MCP server should have been invoked via tools/call");
+      const called = JSON.parse(fs.readFileSync(marker, "utf-8"));
+      assert.equal(called.name, "execute_sql");
+      assert.equal(called.arguments.sql, "INSERT INTO t VALUES (1)");
+    } finally {
+      fs.rmSync(W, { recursive: true, force: true });
+    }
+  });
+
+  it("reports failure (keeps backup) when the MCP tool call errors", async () => {
+    const W = fs.mkdtempSync(path.join(os.tmpdir(), "mcp-replay-err-"));
+    try {
+      // A server script that returns isError:true for the tool call.
+      const script = path.join(W, "mock_err.js");
+      fs.writeFileSync(script, `
+let buf="";process.stdin.on("data",d=>{buf+=d;let i;while((i=buf.indexOf("\\n"))>=0){const l=buf.slice(0,i);buf=buf.slice(i+1);let m;try{m=JSON.parse(l)}catch{continue}
+if(m.id===1)process.stdout.write(JSON.stringify({jsonrpc:"2.0",id:1,result:{protocolVersion:"2024-11-05",capabilities:{}}})+"\\n");
+else if(m.id===3)process.stdout.write(JSON.stringify({jsonrpc:"2.0",id:3,result:{isError:true,content:[{type:"text",text:"boom"}]}})+"\\n");}});
+`, "utf-8");
+      const cfg = { ...DEFAULT_CONFIG, subagentMcpConfig: mcpConfig(W, "mydb", script) } as SandboxConfig;
+
+      const r = await restoreArtifact(makeArtifact({
+        strategy: "subagent",
+        toolName: "mcp__mydb__execute_sql",
+        liveRestore: false,
+        recoveryMcpCalls: [{ tool: "execute_sql", args: { sql: "BAD" } }],
+      }), cfg);
+
+      assert.equal(r.success, false);
+      assert.ok(/MCP replay|failed/i.test(r.description), `got: ${r.description}`);
+    } finally {
+      fs.rmSync(W, { recursive: true, force: true });
+    }
+  });
+
+  it("routes to the restore subagent (never a binary) when the server is unresolved", async () => {
+    // No config / no mcp-config: resolveServerDef returns null, so the
+    // deterministic replay must NOT shell out — it routes to the subagent.
+    // With config undefined, that path returns success:false + a prompt.
+    const r = await restoreArtifact(makeArtifact({
+      strategy: "subagent",
+      toolName: "mcp__mydb__execute_sql",
+      liveRestore: false,
+      recoveryMcpCalls: [{ tool: "execute_sql", args: { sql: "INSERT INTO t VALUES (1)" } }],
+    }));
+    assert.equal(r.success, false);
+    assert.ok(r.subagentPrompt, "unresolved server must defer to the restore subagent");
+  });
+
+  it("routes an HTTP server to the restore subagent (we don't dispatch HTTP ourselves)", async () => {
+    const W = fs.mkdtempSync(path.join(os.tmpdir(), "mcp-http-"));
+    try {
+      const cfgPath = path.join(W, "mcp-config.json");
+      fs.writeFileSync(cfgPath, JSON.stringify({
+        mcpServers: { web: { url: "http://127.0.0.1:9/never" } },
+      }), "utf-8");
+      // resolveServerDef returns an HTTP def for "web". We do NOT dispatch
+      // HTTP tools/call ourselves — it must route to the restore subagent.
+      // Use a runner whose CLI is absent (codex) so invokeRestoreSubagent
+      // returns "CLI not found" immediately — hermetic, no real spawn — while
+      // still exercising the real def.url branch in restoreSubagent.
+      const cfg = {
+        ...DEFAULT_CONFIG, subagentMcpConfig: cfgPath,
+        subagentRunner: "codex", subagentTimeoutSeconds: 5,
+      } as SandboxConfig;
+      const r = await restoreArtifact(makeArtifact({
+        strategy: "subagent",
+        toolName: "mcp__web__do_thing",
+        liveRestore: false,
+        recoveryMcpCalls: [{ server: "web", tool: "do_thing", args: { x: 1 } }],
+      }), cfg);
+      // Routed to the subagent (failed only because the runner CLI is absent),
+      // NOT replayed locally and NOT via any binary.
+      assert.ok(!r.description.includes("replayed"), `HTTP must not be replayed locally, got: ${r.description}`);
+      assert.ok(/subagent/i.test(r.description), `expected subagent routing, got: ${r.description}`);
+    } finally {
+      fs.rmSync(W, { recursive: true, force: true });
+    }
+  });
+});
+
+// A legacy artifact (no recoveryMcpCalls) whose action is REMOTE (its
+// toolName resolves to an MCP server) must route to the restore subagent —
+// its raw recovery_commands are prose for an agent, never fed to /bin/sh or
+// a DB binary.
+describe("restore - legacy remote raw-string recovery routes to subagent", () => {
+  it("does not run a binary for a remote legacy recovery", async () => {
+    const r = await restoreArtifact(makeArtifact({
+      strategy: "subagent",
+      toolName: "mcp__mydb__execute_sql",
+      liveRestore: false,
+      subagentCommands: ["INSERT INTO t VALUES (1)"], // prose-ish, NOT shell
+    }));
+    // config undefined → subagent path returns success:false with a prompt,
+    // proving we routed to the agent rather than executing the string.
+    assert.equal(r.success, false);
+    assert.ok(r.subagentPrompt, "remote legacy recovery must defer to the restore subagent");
   });
 });

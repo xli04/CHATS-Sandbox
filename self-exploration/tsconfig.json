@@ -1,0 +1,19 @@
+{
+  "//": "Self-exploration is built on its own AFTER the main build (npm run build runs both). It compiles into ../dist/self-exploration so it travels inside dist/ wherever dist is copied (global install, benchmark docker), and reuses the main build's compiled modules (../dist/explore, ../dist/backup, ../dist/util) via infra.ts. Requires the main build's emitted .d.ts (declaration:true) to be present first.",
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "Node16",
+    "moduleResolution": "Node16",
+    "outDir": "../dist/self-exploration",
+    "rootDir": ".",
+    "strict": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "forceConsistentCasingInFileNames": true,
+    "declaration": true,
+    "sourceMap": true,
+    "resolveJsonModule": true
+  },
+  "include": ["*.ts"],
+  "exclude": ["node_modules", "results"]
+}

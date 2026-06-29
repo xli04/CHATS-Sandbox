@@ -126,134 +126,79 @@ export function loadExperiences(config: SandboxConfig, server: string): ServerEx
   }
 }
 
-// Cache: experiences dir → { sig, regex }. There is ONE read-only list (the
-// union of every environment's learned `noBackupPatterns`), so the gate does
-// not need to know which server an action belongs to — that fixed the bug
-// where a website's experience was filed under "reddit" but its browser tool
-// resolved to "playwright", leaving the learned list inert. Cached by a
-// signature of the dir's files + mtimes; recompiled when any changes.
-const _readOnlyAggCache = new Map<string, { sig: string; regex: RegExp | null }>();
-
 /**
- * Compile the UNIFIED learned read-only list — the union of `noBackupPatterns`
- * across every experience file — into one matcher (cached). Returns null when
- * nothing has been learned yet. The caller still owns the destructive-verb
- * override: a learned pattern may only extend the benign skip-list, never
- * clear a delete/remove/drop/ban.
+ * Resolve the experience FILE name for a runtime server. A site explored via a
+ * browser is filed under e.g. "reddit" with appliesTo:["playwright"], so the
+ * tool's MCP server ("playwright") must be mapped to the file ("reddit"). Order:
+ * explicit config override → appliesTo map → a file named after the server →
+ * null (no profile; caller falls back to the verb-list heuristic).
  */
-export function aggregateReadOnlyRegex(config: SandboxConfig): RegExp | null {
-  const dir = experiencesDir(config);
-  let files: string[];
-  try { files = fs.readdirSync(dir).filter((f) => f.endsWith(".json")).sort(); }
-  catch { return null; }
-
-  const sig = files.map((f) => {
-    try { return `${f}:${fs.statSync(path.join(dir, f)).mtimeMs}`; } catch { return f; }
-  }).join("|");
-  const cached = _readOnlyAggCache.get(dir);
-  if (cached && cached.sig === sig) return cached.regex;
-
-  const pats = new Set<string>();
-  for (const f of files) {
-    try {
-      const data = JSON.parse(fs.readFileSync(path.join(dir, f), "utf-8")) as ServerExperiences;
-      for (const s of data.noBackupPatterns ?? []) {
-        const k = String(s).trim().toLowerCase();
-        if (k.length >= 3 && k.length <= 60) pats.add(k);
-      }
-    } catch { /* skip unreadable file */ }
-  }
-  let regex: RegExp | null = null;
-  if (pats.size) {
-    const escaped = [...pats].map((s) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
-    regex = new RegExp(`\\b(${escaped.join("|")})`, "i");
-  }
-  _readOnlyAggCache.set(dir, { sig, regex });
-  return regex;
+export function experienceNameForServer(config: SandboxConfig, server: string): string | null {
+  const override = (config as { experienceForServer?: Record<string, string> }).experienceForServer?.[server];
+  if (override) return override;
+  const mapped = serverToExperienceMap(config)[server];
+  if (mapped) return mapped;
+  return fs.existsSync(experiencePath(config, server)) ? server : null;
 }
 
-// Cache for the unified read-only TOOL set (union of every experience file's
-// `readOnlyTools`), keyed by dir-file signature.
-const _readOnlyToolCache = new Map<string, { sig: string; set: Set<string> }>();
-
-/**
- * Compile the UNIFIED read-only TOOL-NAME set — the union of every experience
- * file's `readOnlyTools` — that the runtime skips by tool name. Stores each
- * name lowercased plus its action segment (`mcp__srv__list_x` → `list_x`) so a
- * tool matches whether it arrives prefixed or bare. Empty set when nothing
- * learned. The runtime still applies a mutating-verb guard before honoring a
- * match (learned data may only EXTEND the read-only set, never clear a mutation).
- */
-export function aggregateReadOnlyToolSet(config: SandboxConfig): Set<string> {
-  const dir = experiencesDir(config);
-  let files: string[];
-  try { files = fs.readdirSync(dir).filter((f) => f.endsWith(".json")).sort(); }
-  catch { return new Set(); }
-
-  const sig = files.map((f) => {
-    try { return `${f}:${fs.statSync(path.join(dir, f)).mtimeMs}`; } catch { return f; }
-  }).join("|");
-  const cached = _readOnlyToolCache.get(dir);
-  if (cached && cached.sig === sig) return cached.set;
-
-  const set = new Set<string>();
-  for (const f of files) {
-    try {
-      const data = JSON.parse(fs.readFileSync(path.join(dir, f), "utf-8")) as ServerExperiences;
-      for (const t of data.readOnlyTools ?? []) {
-        const lc = String(t).trim().toLowerCase();
-        if (!lc) continue;
-        set.add(lc);
-        const seg = lc.split("__").pop();
-        if (seg && seg !== lc) set.add(seg);
-      }
-    } catch { /* skip unreadable file */ }
-  }
-  _readOnlyToolCache.set(dir, { sig, set });
-  return set;
+/** The compiled matchers for ONE server's learned experience:
+ *    readOnlyTools — Non-Backup-ToolList (skip by tool name)
+ *    noBackupRegex — Non-Backup-patterns (skip by keyword)
+ *    triggerRegex  — Backup-patterns (back up by keyword) */
+export interface ServerMatchers {
+  readOnlyTools: Set<string>;
+  noBackupRegex: RegExp | null;
+  triggerRegex: RegExp | null;
 }
 
-// Cache for the unified backup-trigger matcher (union of every pattern's
-// `trigger` across all experience files), keyed by dir-file signature.
-const _triggerAggCache = new Map<string, { sig: string; regex: RegExp | null }>();
+// Per-server cache, keyed by `${dir}::${expName}` + that one file's mtime — a
+// dir-only key would hand one server's compiled regex to another.
+const _serverMatcherCache = new Map<string, { sig: string; m: ServerMatchers }>();
+
+const _buildKeywordRegex = (vals: Iterable<string>): RegExp | null => {
+  const pats = new Set<string>();
+  for (const s of vals) {
+    const k = String(s).trim().toLowerCase();
+    if (k.length >= 3 && k.length <= 60) pats.add(k);
+  }
+  if (!pats.size) return null;
+  const escaped = [...pats].map((s) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
+  return new RegExp(`\\b(${escaped.join("|")})`, "i");
+};
 
 /**
- * Compile the UNIFIED backup-worthy trigger list — the union of every
- * recovery pattern's `trigger` across all experience files — into one
- * matcher (cached). A remote action matching it is BACKED UP. Uses ALL
- * patterns (verified or not): "is this worth backing up" is independent of
- * "have we verified the reversal", and the safe direction is to over-back-up.
- * Returns null when nothing has been learned.
+ * Compile the three matchers for a SINGLE server's experience file (cached).
+ * This is the per-server replacement for the old global aggregates — an action
+ * is judged ONLY against its own server's learned lists, never a union across
+ * environments. Returns empty matchers when that server has no experience.
  */
-export function aggregateBackupTriggerRegex(config: SandboxConfig): RegExp | null {
-  const dir = experiencesDir(config);
-  let files: string[];
-  try { files = fs.readdirSync(dir).filter((f) => f.endsWith(".json")).sort(); }
-  catch { return null; }
+export function serverMatchers(config: SandboxConfig, expName: string): ServerMatchers {
+  const key = `${experiencesDir(config)}::${expName}`;
+  const p = experiencePath(config, expName);
+  let sig: string;
+  try { sig = String(fs.statSync(p).mtimeMs); } catch { sig = "none"; }
+  const cached = _serverMatcherCache.get(key);
+  if (cached && cached.sig === sig) return cached.m;
 
-  const sig = files.map((f) => {
-    try { return `${f}:${fs.statSync(path.join(dir, f)).mtimeMs}`; } catch { return f; }
-  }).join("|");
-  const cached = _triggerAggCache.get(dir);
-  if (cached && cached.sig === sig) return cached.regex;
+  const empty: ServerMatchers = { readOnlyTools: new Set(), noBackupRegex: null, triggerRegex: null };
+  const data = loadExperiences(config, expName);
+  if (!data) { _serverMatcherCache.set(key, { sig, m: empty }); return empty; }
 
-  const pats = new Set<string>();
-  for (const f of files) {
-    try {
-      const data = JSON.parse(fs.readFileSync(path.join(dir, f), "utf-8")) as ServerExperiences;
-      for (const p of data.patterns ?? []) {
-        const t = String(p.trigger ?? "").trim().toLowerCase();
-        if (t.length >= 3 && t.length <= 60) pats.add(t);
-      }
-    } catch { /* skip unreadable file */ }
+  const tools = new Set<string>();
+  for (const t of data.readOnlyTools ?? []) {
+    const lc = String(t).trim().toLowerCase();
+    if (!lc) continue;
+    tools.add(lc);
+    const seg = lc.split("__").pop();
+    if (seg && seg !== lc) tools.add(seg);
   }
-  let regex: RegExp | null = null;
-  if (pats.size) {
-    const escaped = [...pats].map((s) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
-    regex = new RegExp(`\\b(${escaped.join("|")})`, "i");
-  }
-  _triggerAggCache.set(dir, { sig, regex });
-  return regex;
+  const m: ServerMatchers = {
+    readOnlyTools: tools,
+    noBackupRegex: _buildKeywordRegex(data.noBackupPatterns ?? []),
+    triggerRegex: _buildKeywordRegex((data.patterns ?? []).map((x) => String(x.trigger ?? ""))),
+  };
+  _serverMatcherCache.set(key, { sig, m });
+  return m;
 }
 
 export function saveExperiences(config: SandboxConfig, data: ServerExperiences): string {

@@ -51,6 +51,11 @@ interface SubagentResponse {
    *  (remote/dynamic state) and restore should spawn a fresh subagent
    *  instead of replaying the commands. */
   live_restore?: boolean;
+  /** live_restore=false ONLY: the exact MCP tool call(s) that reverse a
+   *  remote/MCP action, to be replayed verbatim at restore via tools/call.
+   *  Each is {tool, args} (+ optional server). Empty/absent for live_restore
+   *  reversals (those use recovery_commands prose) and local shell reversals. */
+  recovery_mcp_calls?: Array<{ server?: string; tool: string; args: Record<string, unknown> }>;
   /** True when the subagent inspected the upcoming action and determined
    *  it is READ-ONLY — it changes nothing outside the workspace, so no
    *  backup is needed. Honored as a clean skip (no artifact, no warning),
@@ -309,36 +314,6 @@ function filteredClaudeMcpConfig(mcpPath: string, neededServer: string, isolateB
 }
 
 /**
- * Per-server MCP tool ALLOWLISTS for the backup subagent (robustness-reviewed
- * superset). A backup READS current state + RECORDS the reversal, so it needs
- * the capture/read tools, not the full mutation toolset — trimming the schema
- * (~6.7k tok/call for 33 playwright tools) is the subagent's biggest cost win.
- * NOT a minimal set: an under-trimmed allowlist makes the subagent emit
- * confident-but-empty backups, so we ship the reviewer-approved superset.
- *   - postgres.execute_sql is MANDATORY — the capture IS a mutating
- *     `INSERT … SELECT` into a shadow table, not a read.
- *   - browser keeps interaction/wait tools because capture often must
- *     navigate/select/await before snapshotting (SPAs, multi-tab, async).
- * A server NOT in this map is left UNFILTERED (all tools) — safety default.
- */
-const SUBAGENT_TOOL_ALLOWLIST: Record<string, string[]> = {
-  playwright: [
-    "browser_navigate", "browser_navigate_back", "browser_snapshot",
-    "browser_take_screenshot", "browser_wait_for", "browser_tabs",
-    "browser_click", "browser_type", "browser_select_option",
-    "browser_hover", "browser_evaluate",
-    // handle_dialog is REQUIRED: deleting a post/comment (the reversal of a
-    // Create) triggers a browser confirm() dialog — without this the restore
-    // subagent can click Delete but can't accept the dialog, so the reversal
-    // hangs/fails. press_key covers Enter-to-submit / Escape on forms.
-    "browser_handle_dialog", "browser_press_key",
-  ],
-  postgres: ["execute_sql", "list_objects", "get_object_details", "list_schemas"],
-  filesystem: ["read_file", "write_file", "move_file", "get_file_info"],
-  fs: ["read_file", "write_file", "move_file", "get_file_info"],
-};
-
-/**
  * Dynamic MCP loading (hermes runner): hermes always reads
  * `$HOME/.hermes/config.yaml` and has no per-call MCP flag, so give the
  * subagent its OWN HOME — a copy of the user's `.hermes` (auth/sessions
@@ -370,12 +345,15 @@ function filteredHermesHome(neededServer: string, isolateBrowserProfile?: boolea
     const all = cfg.mcp_servers ?? {};
     cfg.mcp_servers = all[neededServer] ? { [neededServer]: all[neededServer] } : {};
 
-    // Action-aware tool allowlist: register ONLY the capture/read tools this
-    // server's backups need (via hermes' `mcp_servers.<name>.tools.include`),
-    // cutting the per-call tool-schema cost without losing coverage. Unknown
-    // servers are left unfiltered. Uses raw (unprefixed) MCP tool names.
-    // Per-spawn override (BACKUP narrows; RESTORE passes nothing → full default).
-    const allow = toolAllow !== undefined ? toolAllow : SUBAGENT_TOOL_ALLOWLIST[neededServer];
+    // Action-aware tool allowlist: register ONLY the tools the CALLER passed
+    // (via hermes' `mcp_servers.<name>.tools.include`), cutting the per-call
+    // tool-schema cost without losing coverage. Uses raw (unprefixed) MCP tool
+    // names. There is NO hardcoded per-server tool map: a caller that passes no
+    // `toolAllow` (the backup path, restore) leaves the server UNFILTERED — its
+    // own tools, the safe default. The only current caller that narrows is
+    // self-exploration's verify, which derives the set from the server's OWN
+    // live tools (not a curated guess), so this stays fully server-general.
+    const allow = toolAllow;
     const kept0 = cfg.mcp_servers[neededServer];
     if (allow && kept0 && typeof kept0 === "object" && !Array.isArray(kept0)) {
       const srv = kept0 as Record<string, unknown>;
@@ -657,29 +635,49 @@ recovery instructions:
    is NOT a backup; the restore must be able to re-INSERT every row.
    If the result is large, page through it; do not truncate.
 
-4. recovery_commands MUST reverse the EFFECT of the action, not merely
+4. The recovery MUST reverse the EFFECT of the action, not merely
    undo the UI interaction or summarize what happened. Decide the
    action's direction and record the true inverse:
    - DESTRUCTIVE (delete/close/remove/archive): recovery RE-CREATES the
-     destroyed state. Example for a deleted post: "Use the Playwright
-     MCP to log in as the same user, navigate to the submit page, and
-     create a text post with title=<X>, body=<Y> from
-     remote-state.json. Report the new post's URL."
-   - CONSTRUCTIVE (create/submit/send/post/add — e.g. clicking a Post
-     button that publishes a new post, create_page, send_message):
-     recovery DELETES/RETRACTS the entity this action created. Example
-     for a post-submit: "Use the Playwright MCP to log in, locate the
-     post titled <X> in forum <F>, open it, and click delete." Merely
-     resetting or clearing the form is NOT valid recovery — once the
-     post exists the form fields are irrelevant; the post itself must
-     be removed.
+     destroyed state from remote-state.json.
+   - CONSTRUCTIVE (create/submit/send/post/add — create_page,
+     send_message, an INSERT): recovery DELETES/RETRACTS the entity this
+     action created (by its captured id/unique key — never by position).
    - MUTATING (edit/update/rename): recovery RESTORES the prior content
      captured in remote-state.json.
    Capture in remote-state.json whatever locator a future restore needs
    to act on the created/changed entity (title, URL, id, parent id).
 
-5. live_restore: true for this category — the recovery needs a fresh
-   restore subagent (it'll execute MCP calls, not shell commands).
+5. CHOOSE THE RECOVERY FORM — there are TWO mutually-exclusive modes.
+   Pick based on whether the reversal can be written down NOW as a fixed,
+   replayable MCP call, or genuinely needs LIVE state read at restore:
+
+   • DETERMINISTIC (set live_restore:false): the reversal is a fixed MCP
+     tool call you can write out completely right now — nothing about it
+     depends on re-reading state later. Emit it as STRUCTURED tool calls
+     in recovery_mcp_calls (NOT prose, NOT shell). Each entry is
+     {"tool":"<an MCP tool on THIS server>","args":{…}} — use this
+     server's OWN tool names and arg shapes (the same ones you used to
+     read state). Optionally add "server" if it differs from the action's
+     server. Leave recovery_commands EMPTY in this mode.
+       - DB example (a deleted row, captured in remote-state.json):
+         {"tool":"execute_sql","args":{"sql":"INSERT INTO t (...) VALUES (...);"}}
+       - Non-DB example (a created Notion page, captured id):
+         {"tool":"archive_page","args":{"page_id":"<captured id>"}}
+     Do NOT put SQL or prose in recovery_commands for this case.
+
+   • LIVE (set live_restore:true): reversing genuinely needs the CURRENT
+     state at restore time (element refs / page layout move between now
+     and restore, or remote state may have shifted — typical for a
+     browser/UI reversal). Then leave recovery_mcp_calls EMPTY and
+     DESCRIBE the fix as prose in recovery_commands; at restore a fresh
+     subagent follows it through the SAME MCP. Example for a deleted post
+     in a browser flow: "Use the Playwright MCP to log in as the same
+     user, navigate to the submit page, and re-create the post with
+     title=<X>, body=<Y> from remote-state.json."
+
+   Prefer DETERMINISTIC whenever the reversal is a self-contained MCP
+   call; use LIVE only when re-reading current state is unavoidable.
 
 If the MCP doesn't expose a clean read-side counterpart, do your best:
 take a screenshot, save the DOM, save the URL. Always emit a JSON
@@ -755,16 +753,17 @@ ${categoryGuidance}
 
 Your result is a **single JSON object with this exact shape**:
 
-{"description":"...","backup_commands":["cmd1","cmd2"],"recovery_commands":["cmd1","cmd2"],"artifact_paths":["path1"],"live_restore":false,"no_backup_needed":false}
+{"description":"...","backup_commands":["cmd1","cmd2"],"recovery_commands":["cmd1","cmd2"],"recovery_mcp_calls":[{"tool":"...","args":{}}],"artifact_paths":["path1"],"live_restore":false,"no_backup_needed":false}
 
 - description: short human-readable summary
 - backup_commands: the commands you ACTUALLY RAN to create the backup
-- recovery_commands: commands that would reverse the upcoming action (these will be executed verbatim by chats-sandbox restore)
+- recovery_commands: how to reverse the upcoming action. For a LOCAL shell reversal (file/package/env), these are commands run verbatim by chats-sandbox restore. For a LIVE remote reversal (live_restore:true), these are PROSE the restore subagent follows via the MCP. For a DETERMINISTIC remote reversal, leave this EMPTY and use recovery_mcp_calls instead.
+- recovery_mcp_calls: DETERMINISTIC remote/MCP reversal ONLY (live_restore:false). The exact MCP tool call(s) that reverse the action, replayed VERBATIM at restore via tools/call — no agent, no prose, no psql/curl/shell. Array of {"tool":"<an MCP tool on the action's own server>","args":{…}} (optional "server" to override). e.g. a deleted-row reversal → [{"tool":"execute_sql","args":{"sql":"INSERT …"}}]. Leave EMPTY for LIVE reversals and for local shell reversals.
 - artifact_paths: files you created inside the backup storage directory
-- live_restore: YOU decide, based on whether the reversal can be written down NOW as a fixed, runnable recovery, or genuinely needs an agent to look at LIVE state at restore time.
-    • live_restore=false (PREFERRED — fast, no agent at restore): your recovery_commands are a complete, self-contained statement/command that will still work when replayed verbatim — e.g. a SQL statement that re-inserts from your shadow table, a file restore, a git checkout, an API call with a fixed id. Most backups are this. Write the EXACT recovery_commands.
-    • live_restore=true (only when needed): reversing genuinely requires reading the CURRENT state at restore time because positions/handles/contents move — e.g. a web/UI reversal (element refs and page layout change between now and restore), or remote state that may have shifted. Then chats-sandbox spawns a fresh agent to re-derive instead of replaying blindly.
-  When in doubt and your recovery is a concrete command/statement, choose false.
+- live_restore: YOU decide, based on whether the reversal can be written down NOW as a fixed, replayable MCP call, or genuinely needs an agent to look at LIVE state at restore time.
+    • live_restore=false: the reversal of a REMOTE/MCP action is a fixed, self-contained MCP call → put it in recovery_mcp_calls (NOT recovery_commands). A LOCAL shell reversal (file restore, pip install -r freeze, git checkout) is also live_restore=false → put it in recovery_commands as before. Most backups are this.
+    • live_restore=true (only when needed): reversing genuinely requires reading CURRENT state at restore because positions/handles/contents move — e.g. a web/UI reversal. Leave recovery_mcp_calls empty, describe the fix in recovery_commands (prose); chats-sandbox spawns a fresh agent to re-derive and act via the MCP.
+  When in doubt and your remote reversal is a concrete MCP call, choose false and fill recovery_mcp_calls.
 - no_backup_needed: true ONLY when the action is READ-ONLY (Category R) — it changes nothing outside the workspace. When true, leave backup_commands and recovery_commands empty. Default false. Be conservative: when in doubt, perform the backup and leave this false.
 
 ## HOW THE RESULT IS COLLECTED — IMPORTANT
@@ -799,6 +798,25 @@ function extractOurShape(candidate: unknown): SubagentResponse | null {
     Array.isArray((candidate as Record<string, unknown>).recovery_commands)
   ) {
     const c = candidate as Record<string, unknown>;
+    // Lenient extraction of structured recovery MCP calls: keep only
+    // entries that are objects with a string `tool` and an object `args`;
+    // `server` is optional (string). Drop anything malformed.
+    let recoveryMcpCalls: Array<{ server?: string; tool: string; args: Record<string, unknown> }> | undefined;
+    if (Array.isArray(c.recovery_mcp_calls)) {
+      const cleaned = (c.recovery_mcp_calls as unknown[])
+        .filter((e): e is Record<string, unknown> =>
+          typeof e === "object" && e !== null &&
+          typeof (e as Record<string, unknown>).tool === "string" &&
+          typeof (e as Record<string, unknown>).args === "object" &&
+          (e as Record<string, unknown>).args !== null &&
+          !Array.isArray((e as Record<string, unknown>).args))
+        .map((e) => ({
+          tool: String(e.tool),
+          args: e.args as Record<string, unknown>,
+          ...(typeof e.server === "string" ? { server: e.server } : {}),
+        }));
+      if (cleaned.length) recoveryMcpCalls = cleaned;
+    }
     return {
       description: String(c.description),
       backup_commands: (c.backup_commands as unknown[]).map(String),
@@ -807,6 +825,7 @@ function extractOurShape(candidate: unknown): SubagentResponse | null {
         ? (c.artifact_paths as unknown[]).map(String)
         : undefined,
       live_restore: typeof c.live_restore === "boolean" ? c.live_restore : undefined,
+      recovery_mcp_calls: recoveryMcpCalls,
       no_backup_needed: c.no_backup_needed === true,
     };
   }
@@ -1100,7 +1119,12 @@ export function runSubagentBackup(
   // it's visible in forensics (subagent.log) and on the user's terminal — this
   // is the ONE case we want flagged for a possible future live-read.
   const _descUpper = (parsed.description || "").trimStart().toUpperCase();
-  if (_descUpper.startsWith("UNVERIFIED") || (parsed.recovery_commands ?? []).length === 0) {
+  // A deterministic remote reversal records its inverse as structured
+  // recovery_mcp_calls (recovery_commands stays empty) — that is NOT an
+  // unverified backup, so only flag when BOTH forms are empty.
+  const _noRecovery = (parsed.recovery_commands ?? []).length === 0 &&
+    (parsed.recovery_mcp_calls ?? []).length === 0;
+  if (_descUpper.startsWith("UNVERIFIED") || _noRecovery) {
     logDebug(`[CHATS-Sandbox] BACKUP UNVERIFIED: pre-state value not captured for ${ctx.tool_name} — ${(parsed.description || "").slice(0, 120)}`);
     tellUser(`[CHATS-Sandbox] BACKUP UNVERIFIED: pre-state value not captured for ${ctx.tool_name}`);
   }
@@ -1144,7 +1168,11 @@ export function runSubagentBackup(
     /\b(git\s+push|curl|wget|ssh|scp|rsync|docker|kubectl|helm|terraform|aws|gcloud|az|systemctl)\b/.test(cmdStr) ||
     /\b(psql|mysql|mariadb|mongo|mongosh|redis-cli)\b/.test(cmdStr); // DB clients
   const modelLiveRestore = parsed.live_restore ?? false;
-  const hasRecovery = (parsed.recovery_commands ?? []).length > 0;
+  // A remote reversal can be recorded either as prose recovery_commands OR
+  // as structured recovery_mcp_calls (the deterministic, live_restore=false
+  // mode). Either form counts as recovery for the verification gate.
+  const hasRecovery = (parsed.recovery_commands ?? []).length > 0 ||
+    (parsed.recovery_mcp_calls ?? []).length > 0;
   // NOTE: a tighter gate ("remote backup must have a captured artifact") was
   // considered to stop confident-empty backups, but it regresses legitimate
   // CREATE actions (docker run, pip install, create-post) whose reversal is a
@@ -1193,6 +1221,7 @@ export function runSubagentBackup(
     strategy: "subagent",
     artifactPath: artifactFile,
     subagentCommands: parsed.recovery_commands,
+    recoveryMcpCalls: parsed.recovery_mcp_calls,
     liveRestore,
     originalAction: describeToolAction(ctx.tool_name, ctx.tool_input),
   };
