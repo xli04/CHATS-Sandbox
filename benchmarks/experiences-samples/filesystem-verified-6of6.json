@@ -8,42 +8,42 @@
   "patterns": [
     {
       "action": "Overwrite existing file (write_file to a path that already exists)",
-      "easy_win": "Before write_file, read original bytes and cp to .chats-sandbox/backups/<sanitized-path>/<ISO-timestamp>.bak; reversal: cp .bak back to original path, rm .bak",
+      "skill": "Before write_file, read original bytes and cp to .chats-sandbox/backups/<sanitized-path>/<ISO-timestamp>.bak; reversal: cp .bak back to original path, rm .bak",
       "applies_to": "write_file where path already exists",
       "verified": true,
       "verify_note": "cp snapshot captured 'original content v1'; overwrite changed it; cp .bak back restored exact bytes; confirmed by re-read"
     },
     {
       "action": "Truncate or partially overwrite a file (write_file with empty or shorter content)",
-      "easy_win": "Identical snapshot path as full overwrite: cp pre-write bytes to .chats-sandbox/backups/<sanitized-path>/<ISO-timestamp>.bak; reversal: cp .bak back",
+      "skill": "Identical snapshot path as full overwrite: cp pre-write bytes to .chats-sandbox/backups/<sanitized-path>/<ISO-timestamp>.bak; reversal: cp .bak back",
       "applies_to": "write_file with empty or shorter payload",
       "verified": true,
       "verify_note": "5-line file truncated to 0 bytes; cp .bak restored all 5 lines exactly; one code path handles both overwrite cases"
     },
     {
       "action": "Create a new file (write_file to a path that did not previously exist)",
-      "easy_win": "Write sentinel .chats-sandbox/backups/<sanitized-path>/<ISO-timestamp>.created containing only the original path; reversal: mv created file to <ISO-timestamp>.deleted (trash), rm sentinel",
+      "skill": "Write sentinel .chats-sandbox/backups/<sanitized-path>/<ISO-timestamp>.created containing only the original path; reversal: mv created file to <ISO-timestamp>.deleted (trash), rm sentinel",
       "applies_to": "write_file where destination path was absent before the call",
       "verified": true,
       "verify_note": "sentinel recorded path; after creation, reversal mv'd file to .deleted and rm'd sentinel; original path absent on re-check"
     },
     {
       "action": "Move or rename a file (move_file, destination does not exist)",
-      "easy_win": "Append JSON entry {from, to, ts} to .chats-sandbox/backups/move-log.jsonl; reversal: parse entry, call move_file(to, from)",
+      "skill": "Append JSON entry {from, to, ts} to .chats-sandbox/backups/move-log.jsonl; reversal: parse entry, call move_file(to, from)",
       "applies_to": "move_file where destination path did not previously exist",
       "verified": true,
       "verify_note": "log entry written; mv src->dst; reverse mv dst->src restored file with original content intact; no copy needed"
     },
     {
       "action": "Move file onto an existing destination (move_file where destination path already holds a file, clobbering it)",
-      "easy_win": "Snapshot destination to .chats-sandbox/backups/<sanitized-dst-path>/<ISO-timestamp>.bak before move; record move-log entry; reversal: (1) move_file(dst,src), (2) cp .bak back to dst",
+      "skill": "Snapshot destination to .chats-sandbox/backups/<sanitized-dst-path>/<ISO-timestamp>.bak before move; record move-log entry; reversal: (1) move_file(dst,src), (2) cp .bak back to dst",
       "applies_to": "move_file where destination path already exists",
       "verified": true,
       "verify_note": "dst snapshotted; mv clobbered dst; reversal restored src via mv and dst via cp .bak; both files verified with original content"
     },
     {
       "action": "Move a file out of a tracked directory (effectively removing it from a watched scope)",
-      "easy_win": "Same move-log entry {from, to, ts} as plain move; reversal: move_file(to, from); no bytes copied, original content/permissions/mtime survive intact",
+      "skill": "Same move-log entry {from, to, ts} as plain move; reversal: move_file(to, from); no bytes copied, original content/permissions/mtime survive intact",
       "applies_to": "move_file where source is inside a watched/tracked directory scope",
       "verified": true,
       "verify_note": "file moved from chats_probe_p6_tracked/ to outside path; reverse mv restored it to original directory path; content identical, zero-copy cost"

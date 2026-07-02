@@ -1,11 +1,12 @@
 /**
  * STAGE 2 — verify.
  *
- * A live agent actually executes each proposed easy-win reversal against the
- * real backend and reports what worked (keep / adjust / delete). Each pattern
+ * A live agent actually executes each proposed reverter / skill reversal
+ * against the real backend and reports what worked (keep / adjust / delete),
+ * tuning the trigger keyword and fixing the skill / capture_tools. Each pattern
  * runs against a freshly SEEDED sandbox (a per-server reset hook) so every test
- * starts from known data. The agent may also HARVEST extra ops it verifies live.
- * Read-only candidates get one cheap batch pass (confirming "nothing changed").
+ * starts from known data. The agent may also HARVEST extra ops it verifies
+ * live; a "delete" verdict DROPS the pattern (the no-backup default covers it).
  */
 
 import * as fs from "node:fs";
@@ -15,11 +16,11 @@ import { execFileSync } from "node:child_process";
 import type { McpTool } from "../dist/explore/list_mcp_tools.js";
 import type { RecoveryPattern } from "../dist/explore/experiences.js";
 import { subagent } from "./infra.js";
-import { buildVerificationPrompt, buildReadOnlyVerifyPrompt } from "./prompts.js";
-import { parsePatterns, parseReadOnly } from "./tree_generation.js";
+import { buildVerificationPrompt } from "./prompts.js";
+import { parsePatterns } from "./tree_generation.js";
 import { listToolsCliPath } from "./mcp_scan.js";
 import { serverProfile } from "./server_profiles.js";
-import type { McpServerDef, ReadOnlyTemplate, VerdictPattern } from "./types.js";
+import type { McpServerDef, VerdictPattern } from "./types.js";
 import type { SandboxConfig } from "../dist/types.js";
 
 const { runRunnerForText } = subagent;
@@ -70,7 +71,11 @@ const isEchoOf = (p: VerdictPattern, cand: VerdictPattern): boolean =>
 
 export interface VerifyResult {
   finalPatterns: RecoveryPattern[];
-  noBackupPatterns: string[];
+  /** Merge keys (trigger-or-action, lowercased — MUST mirror explore.ts keyOf)
+   *  of candidates the verifier DELETED this run, so the accumulate step can
+   *  RETRACT a matching pattern persisted by an earlier exploration (otherwise
+   *  a stale prior entry is carried forward forever). */
+  droppedKeys: string[];
   adjusted: number;
   harvested: number;
 }
@@ -78,26 +83,32 @@ export interface VerifyResult {
 /**
  * VERIFY & ACCUMULATE, ONE PATTERN PER RUN. Each pattern gets its own agent run
  * + a fresh SEEDED sandbox. The agent destructs → reverses → confirms, returning
- * a verdict: keep / adjust (re-test the corrected fix once) / delete. It may also
- * HARVEST extra patterns it verified live. Read-only candidates get one cheap
- * batch run at the end.
+ * a verdict: keep / adjust (re-test the corrected fix once) / delete (drop the
+ * pattern — the no-backup default covers it — and retract any prior persisted
+ * entry under the same key). It may also HARVEST extra patterns it verified live.
  */
 export function verifyAndAccumulate(
   server: string,
   def: McpServerDef,
   candidates: VerdictPattern[],
-  proposedReadOnly: ReadOnlyTemplate[],
-  mixedNoBackup: string[],
   liveTools: McpTool[],
   target: string | null,
   verifyConfig: SandboxConfig,
+  /** Called after EACH candidate's verdict lands (echo + harvest applied) with
+   *  the patterns/dropped-keys so far — the caller persists them immediately,
+   *  so a killed run keeps every pattern verified up to that point instead of
+   *  losing the whole in-memory accumulation. */
+  onCheckpoint?: (patternsSoFar: RecoveryPattern[], droppedKeysSoFar: string[]) => void,
 ): VerifyResult {
   let idx = 0;
 
   // Run ONE verify pass for a single candidate against a freshly-seeded
-  // sandbox. Returns every pattern object the agent emitted (echoed +
-  // harvested), each carrying its `verdict`. Preserves the Stage-1 trigger
-  // when the verifier omits it.
+  // sandbox. Returns every pattern object the agent emitted, each carrying its
+  // `verdict`. ONLY the echo of the candidate inherits the candidate's fields
+  // (so an omitted trigger/skill is preserved); a HARVESTED new op is kept
+  // exactly as emitted — inheriting the candidate's skill/capture_tools/
+  // reverter/trigger would contaminate it AND make isEchoOf misclassify it as
+  // the echo (losing the harvest).
   const runOneVerify = (cand: VerdictPattern): VerdictPattern[] => {
     resetSandboxState(server, def); // fresh known state before each test
     const resultFile = path.join(os.tmpdir(), `chats-verify-${process.pid}-${idx++}.json`);
@@ -111,74 +122,93 @@ export function verifyAndAccumulate(
       if (fs.existsSync(resultFile)) parsed = parsePatterns(fs.readFileSync(resultFile, "utf-8"));
     } catch { /* ignore */ }
     if (!parsed) parsed = verifyText ? parsePatterns(verifyText) : null;
-    try { fs.rmSync(resultFile, { force: true }); } catch { /* ignore */ }
+    // ARCHIVE the raw per-pattern verdict file (don't delete): the trail under
+    // <cwd>/.chats-sandbox/verdicts/ is the inspectable evidence of what each
+    // verify run actually reported. Copy+rm (rename can EXDEV across /tmp).
+    try {
+      if (fs.existsSync(resultFile)) {
+        const vdir = path.join(process.cwd(), ".chats-sandbox", "verdicts");
+        fs.mkdirSync(vdir, { recursive: true });
+        fs.copyFileSync(resultFile, path.join(vdir, `${server}-${path.basename(resultFile)}`));
+      }
+      fs.rmSync(resultFile, { force: true });
+    } catch { /* best-effort */ }
     if (!parsed || !parsed.length) return [];
-    return parsed.map((pp) => ({
-      ...cand, ...pp,
-      trigger: pp.trigger || cand.trigger,
-    }));
+    return parsed.map((pp) => (
+      isEchoOf(pp, cand)
+        ? { ...cand, ...pp, trigger: pp.trigger || cand.trigger }
+        : pp
+    ));
   };
 
+  // Merge key — MUST mirror keyOf in explore.ts (trigger else action, lowercased)
+  // so a dropped key retracts the matching prior-file entry.
+  const keyOf = (p: VerdictPattern): string => (p.trigger || p.action || "").toLowerCase();
+
   const finalPatterns: RecoveryPattern[] = [];
+  const droppedKeys: string[] = [];
   let adjusted = 0;
   let harvested = 0;
 
+  const MAX_ATTEMPTS = 3;   // verify up to 3x; if never confirmed, DROP the pattern
   for (const cand of candidates) {
-    const results = runOneVerify(cand);
-    // The echoed verdict for THIS candidate.
-    let echo = results.find((p) => isEchoOf(p, cand));
-    // "adjust": the agent supplied a corrected easy_win — re-test ONCE.
-    if (echo && echo.verdict === "adjust") {
-      adjusted++;
-      const retry = runOneVerify({ ...cand, easy_win: echo.easy_win });
-      const re = retry.find((p) => isEchoOf(p, cand));
-      if (re) echo = re;
+    // Attempt loop: keep re-testing (feeding the verifier's corrections back)
+    // until we get a CONFIRMED verified=true keep, an explicit delete, or we
+    // exhaust the attempt budget. Only a confirmed pattern is shipped — an
+    // unverified proposal (flaky, or a reversal that never actually worked) is
+    // removed from the experience, not persisted as an unverified guess.
+    let echo: VerdictPattern | undefined;
+    let current: VerdictPattern = cand;
+    let confirmed = false;
+    let deleted = false;
+    let attempt = 0;
+    const allResults: VerdictPattern[] = [];
+    while (attempt < MAX_ATTEMPTS) {
+      attempt++;
+      const results = runOneVerify(current);
+      for (const r of results) allResults.push(r);
+      echo = results.find((p) => isEchoOf(p, current) || isEchoOf(p, cand));
+      if (echo && echo.verdict === "delete") { deleted = true; break; }
+      if (echo && echo.verdict === "keep" && echo.verified === true) { confirmed = true; break; }
+      // "adjust" (or an unconfirmed keep): feed ALL the verifier's corrections
+      // back and re-test, until the attempt budget runs out.
+      if (echo) {
+        if (echo.verdict === "adjust") adjusted++;
+        const { verdict: _v, ...corrected } = echo; void _v;
+        current = { ...cand, ...corrected } as VerdictPattern;
+      }
     }
-    // keep the candidate's record (deleted ones are recorded as verified=false
-    // so the backup trigger still fires — over-back-up is the safe direction).
-    if (echo) {
-      const verdict = echo.verdict;
-      finalPatterns.push(stripVerdict({
-        ...echo,
-        verified: verdict === "delete" ? false : echo.verified,
-      }));
+    if (confirmed && echo) {
+      finalPatterns.push(stripVerdict(echo));
     } else {
-      finalPatterns.push(stripVerdict(cand));
+      // explicit delete OR never confirmed after MAX_ATTEMPTS → drop + retract.
+      if (!deleted && attempt >= MAX_ATTEMPTS) {
+        process.stderr.write(`  [${server}] dropped after ${MAX_ATTEMPTS} unconfirmed attempts: ${keyOf(cand)}\n`);
+      }
+      droppedKeys.push(keyOf(cand));
+      if (echo) droppedKeys.push(keyOf(echo));
     }
-    // HARVEST: any extra pattern the agent reported (not the echo) — already
-    // verified live by the agent. Keep ones marked keep+verified.
-    for (const extra of results) {
-      if (extra === echo || isEchoOf(extra, cand)) continue;
+    // HARVEST: any extra pattern the agent reported (not the echo), across all
+    // attempts — already verified live by the agent. Keep keep+verified ones.
+    const seenHarvest = new Set<string>();
+    for (const extra of allResults) {
+      if (echo && (extra === echo || isEchoOf(extra, cand))) continue;
       if (extra.verdict !== "delete" && extra.verified === true) {
+        const k = keyOf(extra);
+        if (seenHarvest.has(k)) continue;
+        seenHarvest.add(k);
         harvested++;
         finalPatterns.push(stripVerdict(extra));
       }
     }
+    // CHECKPOINT: persist everything verified so far — a kill after this point
+    // loses at most the pattern currently being tested, never completed work.
+    try {
+      onCheckpoint?.([...finalPatterns], [...new Set(droppedKeys)].filter(Boolean));
+    } catch (e) {
+      process.stderr.write(`  [${server}] checkpoint save failed: ${(e as Error).message}\n`);
+    }
   }
 
-  // ── Read-only verify (ONE batch run — confirming "nothing changed" is
-  //    cheap, so all candidates go in a single agent pass) ──────────
-  let noBackupPatterns: string[] = [];
-  if (proposedReadOnly.length) {
-    const rf = path.join(os.tmpdir(), `chats-ro-verify-${process.pid}.json`);
-    try { fs.rmSync(rf, { force: true }); } catch { /* ignore */ }
-    const vtext = runRunnerForText(
-      buildReadOnlyVerifyPrompt(server, proposedReadOnly, target, rf), verifyConfig, 600,
-      { neededServer: server, toolAllow: liveTools.map((t) => t.name) },
-    );
-    let verified: ReadOnlyTemplate[] = [];
-    try { if (fs.existsSync(rf)) verified = parseReadOnly(fs.readFileSync(rf, "utf-8")); } catch { /* ignore */ }
-    if (!verified.length && vtext) verified = parseReadOnly(vtext);
-    try { fs.rmSync(rf, { force: true }); } catch { /* ignore */ }
-    // Keep ONLY entries the live pass confirmed unchanged. A flaky/failed
-    // verify yields an empty list rather than admitting unverified guesses.
-    noBackupPatterns = verified.filter((r) => r.verified === true).map((r) => r.match);
-  }
-  // MIXED-tool read-only ARG keywords (e.g. execute_sql SELECT/EXPLAIN/SHOW):
-  // the proposer derived these as the no-backup half of a MIXED tool. They
-  // need no live read-only pass (a SELECT shape is self-evidently a read), so
-  // union them straight into the no-backup list.
-  noBackupPatterns = [...new Set([...noBackupPatterns, ...mixedNoBackup])];
-
-  return { finalPatterns, noBackupPatterns, adjusted, harvested };
+  return { finalPatterns, droppedKeys: [...new Set(droppedKeys)].filter(Boolean), adjusted, harvested };
 }

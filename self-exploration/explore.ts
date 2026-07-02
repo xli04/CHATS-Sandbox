@@ -1,6 +1,6 @@
 /**
- * Self-exploration pipeline — extract "easy-win" reversal patterns per MCP
- * server and store them as recovery experiences.
+ * Self-exploration pipeline — learn the backup SKILL (reversal patterns) per
+ * MCP server and store it as recovery experiences.
  *
  * `chats-sandbox explore [server]` reads the runner's LIVE MCP connections,
  * then asks the configured model (the same runner the tier-3 subagent uses) to
@@ -11,7 +11,7 @@
  * Two stages per server (modeled on NVIDIA ToolShield's experience pipeline,
  * aimed at recoverability instead of safety):
  *   Stage 1 PROPOSE  (tree_generation.ts) — a model reasons about destructive
- *                    actions and proposes candidate easy-win reversals.
+ *                    actions and proposes a candidate backup skill for each.
  *   Stage 2 VERIFY   (verify.ts) — a live agent actually executes each proposed
  *                    reversal against the real backend and reports what worked.
  *
@@ -46,6 +46,34 @@ function resultsDir(): string {
     || path.join(__dirname, "..", "..", "self-exploration", "results");
 }
 
+/**
+ * Assemble the server-level SKILL playbook — the generic backup procedure
+ * refined to this server's VERIFIED tool surface — from the per-pattern branch
+ * guidance Stage 2 produced. One entry per verified pattern: the in-place
+ * reversal how-to or the capture recipe (a mutating op's `skill`), or the
+ * deterministic-reverter note (a creation-only op). Deterministic string
+ * assembly, no LLM. Empty string when nothing is verified.
+ */
+export function assemblePlaybook(server: string, patterns: RecoveryPattern[]): string {
+  const usable = patterns.filter((p) => p.verified === true);
+  if (!usable.length) return "";
+  const lines = usable.map((p) => {
+    const head = `- ${p.action}${p.trigger ? ` (trigger: ${p.trigger})` : ""}: `;
+    // A verified concrete recipe is appended as a REFERENCE example (adapt, do
+    // not replay blindly — the live env is dynamic).
+    const ref = p.recipe ? `\n    verified reversal (reference, adapt to the live page): ${p.recipe}` : "";
+    if (p.skill) return head + p.skill + ref;
+    if (p.reverter) {
+      const inv = p.reverter.mcp_calls
+        ? p.reverter.mcp_calls.map((c) => `${c.tool}(${JSON.stringify(c.args)})`).join("; ")
+        : (p.reverter.commands ?? []).join("; ");
+      return head + `creation-only — the runtime reverses it deterministically (delete the created entity pinned by "${p.reverter.pin}": ${inv}); capture nothing.`;
+    }
+    return head + "(verified, no branch guidance recorded)";
+  });
+  return `How to back up mutations on the "${server}" server — every entry was VERIFIED live and is the fewest-calls approach found. Apply the matching entry's method directly (do NOT re-explore for alternatives); where a "verified reversal (reference)" recipe is given, use it as a known-good starting point and ADAPT its concrete calls to the live page (refs/layout may have shifted):\n${lines.join("\n")}`;
+}
+
 /** Best-effort archive of a server's result into self-exploration/results/. */
 function archiveResult(data: ServerExperiences): void {
   try {
@@ -66,6 +94,12 @@ export function runExplore(
   nowIso: string,
   serverArg?: string,
   targetArg?: string,
+  /** Experience NAME to save under (e.g. "reddit"): the experience identity is
+   *  the SITE when a browser MCP drives many sites — the file is named
+   *  <experience>.json, its `server` field is the experience name, and
+   *  `appliesTo` routes it to the driving MCP server. Without it, the MCP
+   *  server's own name is used (dedicated servers like postgres). */
+  experienceArg?: string,
 ): ExploreOutcome[] {
   // One model (in `config`) drives BOTH stages — the runner/model/provider were
   // chosen from CLI args by the caller; there is no separate verify model.
@@ -98,8 +132,18 @@ export function runExplore(
     const tools = liveTools.map((t) => t.name);
     const target = targetArg ?? discoverTarget(config, server);
 
+    // Experience identity: the explicit --experience name (the SITE, for a
+    // browser MCP driving many sites) else the MCP server's own name. Prior
+    // merges, the saved filename, and the playbook heading all key off it.
+    const expName = experienceArg || server;
+    const keyOf = (p: RecoveryPattern) => (p.trigger || p.action || "").toLowerCase();
+
     // ── Stage 1: PROPOSE (tree generation) ────────────────────────
-    const proposal = proposePatterns(server, liveTools, config);
+    // ToolShield-style accumulation: hand the proposer the EXISTING experience
+    // so it decides per op to UPDATE (re-emit same trigger, improved) or ADD a
+    // new one — avoiding duplicate/overlapping patterns across re-explorations.
+    const priorPatterns = loadExperiences(config, expName)?.patterns ?? [];
+    const proposal = proposePatterns(server, liveTools, config, target, priorPatterns);
     if (!proposal.candidates.length) {
       outcomes.push({
         server, tools, target, saved: false, proposed: 0, verified: 0,
@@ -108,45 +152,70 @@ export function runExplore(
       continue;
     }
 
-    // ── Stage 2: VERIFY & ACCUMULATE ──────────────────────────────
-    const { finalPatterns, noBackupPatterns, adjusted, harvested } = verifyAndAccumulate(
-      server, def, proposal.candidates, proposal.proposedReadOnly, proposal.mixedNoBackup,
-      liveTools, target, config,
+    // ── MERGE + SAVE (write-through) ──────────────────────────────
+    // Union the given patterns into the ON-DISK prior (re-loaded every call,
+    // so successive checkpoints merge into the file they just wrote — the
+    // by-key overwrite makes this idempotent). Keyed by trigger (else action);
+    // a new verified=true entry wins, a prior verified entry is preserved
+    // against an unverified newcomer, and a key the verifier DELETED is
+    // RETRACTED (keyOf MUST mirror verify.ts's). Rebuilds the playbook and
+    // saves to BOTH sinks. No force-complete-coverage: the runtime defaults
+    // to no-backup, so only explorer-flagged actions are covered.
+    const mergeAndSave = (pats: RecoveryPattern[], dropped: string[]): { path: string; verified: number } => {
+      const prior = loadExperiences(config, expName);
+      const byKey = new Map<string, RecoveryPattern>();
+      for (const p of prior?.patterns ?? []) byKey.set(keyOf(p), p);
+      for (const k of dropped) byKey.delete(k);
+      for (const p of pats) {
+        const k = keyOf(p);
+        const existing = byKey.get(k);
+        if (existing && existing.verified === true && p.verified !== true) continue;
+        byKey.set(k, p);
+      }
+      const mergedPatterns = [...byKey.values()];
+      const mergedReadOnlyTools = [...new Set([...(prior?.readOnlyTools ?? []), ...proposal.readOnlyTools])];
+      // appliesTo routing: a SITE-named experience routes to its driving server.
+      const appliesTo = [...new Set([
+        ...(prior?.appliesTo ?? []),
+        ...(expName !== server ? [server] : []),
+      ])];
+      const data: ServerExperiences = {
+        server: expName, generated: nowIso, observed_tools: tools, patterns: mergedPatterns,
+        ...(mergedReadOnlyTools.length ? { readOnlyTools: mergedReadOnlyTools } : {}),
+        ...(appliesTo.length ? { appliesTo } : {}),
+        // PRESERVE learned fields this pipeline does not (re)produce.
+        ...(prior?.noBackupPatterns?.length ? { noBackupPatterns: prior.noBackupPatterns } : {}),
+      };
+      const playbook = assemblePlaybook(expName, mergedPatterns);
+      if (playbook) data.skill = playbook;
+      const p = saveExperiences(config, data);  // runtime experiences dir (backup injection reads here)
+      archiveResult(data);                      // + human-inspectable copy under self-exploration/results/
+      return { path: p, verified: mergedPatterns.filter((x) => x.verified === true).length };
+    };
+
+    // ── Stage 2: VERIFY, checkpointing to disk after EVERY pattern ──
+    // Nothing accumulates only in memory: a killed run keeps all completed
+    // verifications, and a re-run resumes from the merged on-disk prior.
+    let ckpt = 0;
+    const { finalPatterns, droppedKeys, adjusted, harvested } = verifyAndAccumulate(
+      server, def, proposal.candidates, liveTools, target, config,
+      (pats, dropped) => {
+        const saved = mergeAndSave(pats, dropped);
+        ckpt++;
+        process.stderr.write(`  [${server}] checkpoint ${ckpt}/${proposal.candidates.length}: ${saved.verified} verified so far → ${saved.path}\n`);
+      },
     );
 
-    // ── ACCUMULATE: union the newly-verified patterns into any prior verified
-    //    ones (don't blow away earlier hard-won verifications). Keyed by trigger
-    //    (else action). A new verified=true entry wins; otherwise a prior
-    //    verified entry is preserved. ──────────────────────────────────────
-    const prior = loadExperiences(config, server);
-    const byKey = new Map<string, RecoveryPattern>();
-    const keyOf = (p: RecoveryPattern) => (p.trigger || p.action || "").toLowerCase();
-    for (const p of prior?.patterns ?? []) byKey.set(keyOf(p), p);
-    for (const p of finalPatterns) {
-      const k = keyOf(p);
-      const existing = byKey.get(k);
-      // Keep a prior VERIFIED entry if the new one for the same key is unverified.
-      if (existing && existing.verified === true && p.verified !== true) continue;
-      byKey.set(k, p);
-    }
-    const mergedPatterns = [...byKey.values()];
-    const mergedReadOnlyTools = [...new Set([...(prior?.readOnlyTools ?? []), ...proposal.readOnlyTools])];
-    const mergedNoBackup = [...new Set([...(prior?.noBackupPatterns ?? []), ...noBackupPatterns])];
-
-    const data: ServerExperiences = {
-      server, generated: nowIso, observed_tools: tools, patterns: mergedPatterns,
-      ...(mergedNoBackup.length ? { noBackupPatterns: mergedNoBackup } : {}),
-      ...(mergedReadOnlyTools.length ? { readOnlyTools: mergedReadOnlyTools } : {}),
-    };
-    const p = saveExperiences(config, data);  // runtime experiences dir (backup injection reads here)
-    archiveResult(data);                      // + human-inspectable copy under self-exploration/results/
+    // Final save — idempotent with the last checkpoint; also covers the
+    // zero-candidate case where no checkpoint ever fired.
+    const finalSave = mergeAndSave(finalPatterns, droppedKeys);
     if (adjusted || harvested) {
       process.stderr.write(`  [${server}] stage-2: ${adjusted} adjusted, ${harvested} harvested\n`);
     }
     outcomes.push({
-      server, tools, target, saved: true, path: p,
+      server, tools, target, saved: true, path: finalSave.path,
       proposed: proposal.candidates.length,
-      verified: mergedPatterns.filter((x) => x.verified === true).length,
+      verified: finalSave.verified,
     });
   }
   return outcomes;

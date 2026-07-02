@@ -34,6 +34,14 @@ function expandHome(p: string): string {
 import type { BackupArtifact, HookContext, SandboxConfig } from "../types.js";
 import { describeToolAction } from "../types.js";
 import { runSubagentBackup } from "./subagent.js";
+import {
+  serverFromToolName,
+  experienceNameForServer,
+  matchPattern,
+  loadExperiences,
+  experiencesDir,
+} from "../explore/experiences.js";
+import { isDangerousRecoveryCommand } from "../restore/restore.js";
 
 // ── Action folder management (LAZY) ─────────────────────────────
 
@@ -763,12 +771,18 @@ function isBackupWorthyRemote(ctx: HookContext, config?: SandboxConfig): boolean
   if (STRONG_MUTATING.test(desc)) return true;
 
   // ── PER-SERVER learned judgment (primary path): map the action to its server
-  //    and judge ONLY against THAT server's lists. Backup-patterns are checked
-  //    BEFORE Non-Backup-patterns, so a write wearing a read keyword (e.g.
-  //    `INSERT … SELECT`) still backs up. ──
+  //    and judge ONLY against THAT server's lists, in this fixed order:
+  //      1. Non-Backup-ToolList (read-only tools) → skip
+  //      2. Reverter check (a creation-only pattern with a deterministic
+  //         reverter) → back up via the cheap no-agent path
+  //      3. Backup-patterns → back up   (before Non-Backup, so a write wearing
+  //         a read keyword like `INSERT … SELECT` still backs up)
+  //      4. Non-Backup-patterns → skip
+  //    Anything matching none falls through to the fallback, whose default for
+  //    remote actions is NON-backup. ──
   try {
     // eslint-disable-next-line @typescript-eslint/no-require-imports
-    const { serverFromToolName, experienceNameForServer, serverMatchers } =
+    const { serverFromToolName, experienceNameForServer, serverMatchers, matchPattern } =
       require("../explore/experiences.js");
     const server = config ? serverFromToolName(toolName) : null;
     const expName = server ? experienceNameForServer(config, server) : null;
@@ -776,10 +790,17 @@ function isBackupWorthyRemote(ctx: HookContext, config?: SandboxConfig): boolean
       const m = serverMatchers(config, expName);
       const lc = toolName.toLowerCase();
       const seg = lc.split("__").pop() || lc;
-      // Non-Backup-ToolList — guarded so a mutating-named tool is never cleared.
+      // 1. Non-Backup-ToolList — guarded so a mutating-named tool is never cleared.
       if ((m.readOnlyTools.has(lc) || m.readOnlyTools.has(seg)) && !MUTATING_VERB.test(seg)) return false;
-      if (m.triggerRegex && m.triggerRegex.test(rawDesc)) return true;   // Backup-patterns
-      if (m.noBackupRegex && m.noBackupRegex.test(rawDesc)) return false; // Non-Backup-patterns
+      // 2. Reverter check — a matched creation-only pattern carrying a
+      //    deterministic reverter is backup-worthy via the no-agent create path
+      //    (tryPatternCreateReverter applies it). Checked BEFORE the pattern
+      //    gate so a create is never dropped just because its trigger keyword
+      //    did not fire on rawDesc.
+      const pat = matchPattern(config, expName, toolName, rawDesc);
+      if (pat?.reverter) return true;
+      if (m.triggerRegex && m.triggerRegex.test(rawDesc)) return true;   // 3. Backup-patterns
+      if (m.noBackupRegex && m.noBackupRegex.test(rawDesc)) return false; // 4. Non-Backup-patterns
     }
   } catch { /* fall through to the generic verb-list fallback */ }
 
@@ -1379,6 +1400,188 @@ export function loadRecentBrowserSnapshot(
   } catch { return null; }
 }
 
+// =====================================================================
+// Tier-3 (cheap): pattern-driven MCP create reverter — a create whose learned
+// pattern carries a deterministic `reverter` replays its native MCP inverse
+// (e.g. create_directory -> delete_directory) at backup time, NO subagent.
+// =====================================================================
+
+/** Build the rawDesc the gate/matcher use to key learned patterns. */
+function rawDescForMatch(ctx: HookContext): string {
+  const input = (ctx.tool_input ?? {}) as Record<string, unknown>;
+  return [
+    ctx.tool_name, input.element, input.text, input.selector, input.name,
+    input.command, input.sql, input.query, input.path, input.source, input.destination,
+  ].filter(Boolean).map(String).join(" ").toLowerCase();
+}
+
+/**
+ * Derive the MINIMAL MCP tool allowlist a capture subagent actually needs for
+ * THIS action, from the learned experience — so hermes registers ~2-3 tool
+ * schemas instead of the server's full list (the dominant per-call token cost).
+ * Prefers the explorer's learned `capture_tools` for the matched pattern; if
+ * absent, falls back to the action's own tool + a few read/snapshot tools (to
+ * capture pre-state), capped at 5. Returns undefined when there's no
+ * experience/match — the caller then
+ * leaves the server UNFILTERED (today's safe default), so a backup never breaks.
+ * GENERAL: derived from observed data, never a hardcoded per-server map.
+ */
+export function minimalToolAllow(ctx: HookContext, config: SandboxConfig): string[] | undefined {
+  const server = serverFromToolName(ctx.tool_name);
+  if (!server) return undefined;
+  const expName = experienceNameForServer(config, server);
+  if (!expName) return undefined;
+  const exp = loadExperiences(config, expName);
+  if (!exp) return undefined;
+  const seg = (t: string): string => (t.split("__").pop() || t).toLowerCase();
+  const pat = matchPattern(config, expName, ctx.tool_name, rawDescForMatch(ctx));
+
+  // PREFERRED: the LEARNED minimal toolset the explorer recorded for THIS op
+  // (the exact read + restore tools Stage-2 verify actually used). This list
+  // IS the allowlist — used VERBATIM (already deduped + capped at parse time),
+  // never re-derived and never padded with the action's own tool (the explorer
+  // already chose the minimal set, e.g. [read_text_file, write_file] for an
+  // edit, deliberately WITHOUT edit_file). Intersect with observed tools so a
+  // hallucinated name can't poison the include set; if nothing survives, fall
+  // through to the heuristic below.
+  if (pat?.capture_tools && pat.capture_tools.length) {
+    const observed = new Set((exp.observed_tools ?? []).map(seg));
+    const learned = pat.capture_tools.filter((t) => observed.has(seg(t)));
+    if (learned.length) return learned;
+  }
+
+  // FALLBACK (no learned capture_tools — e.g. an experience from before this
+  // field existed): derive heuristically from the action + read tools.
+  const allow = new Set<string>();
+  allow.add(seg(ctx.tool_name));                       // the action's own tool
+  const READ_LIKE = /(^|_)(read|get|cat|stat|info|list|search|find|show|view)(_|$)/;
+  for (const t of exp.readOnlyTools ?? []) {           // read/snapshot tools (to capture pre-state)
+    if (allow.size >= 5) break;
+    if (READ_LIKE.test(seg(t))) allow.add(seg(t));
+  }
+  const out = [...allow].slice(0, 5);
+  return out.length ? out : undefined;
+}
+
+/**
+ * Pattern-driven CREATE reverter — the "T1/T2 for remote" cheap path. When the
+ * matched learned pattern for an outside-workspace action is a CREATE that
+ * carries a deterministic `reverter` (the explorer fills it ONLY for
+ * create/insert/post/add/upload/new patterns), replay that fixed inverse
+ * deterministically instead of paying for the capture subagent. Everything is
+ * done over MCP: the inverse is a native tool call on the SAME server (e.g.
+ * create_directory → delete_directory), never a local shell command.
+ *
+ * A create's inverse is unconditional: delete EXACTLY the entity this action
+ * created, pinned by a STABLE identifier (the reverter's `pin` — an id, or a
+ * unique input attribute like an exact title/key). We resolve that pinned value
+ * from the already-captured typed input (the tool_input here, plus the recent
+ * browser-typed values the hook persisted). If we CANNOT confidently resolve the
+ * pinned value, return null and fall through to the capture subagent — we NEVER
+ * guess, and NEVER target by position/recency.
+ *
+ * Returns a deterministic artifact (no subagent) on success, else null.
+ */
+export function tryPatternCreateReverter(
+  ctx: HookContext,
+  config: SandboxConfig,
+): BackupArtifact | null {
+  const server = serverFromToolName(ctx.tool_name);
+  if (!server) return null;                          // not a remote/MCP action
+  const expName = experienceNameForServer(config, server);
+  if (!expName) return null;
+  const pat = matchPattern(config, expName, ctx.tool_name, rawDescForMatch(ctx));
+  const rev = pat?.reverter;
+  if (!rev || !rev.pin) return null;                 // no deterministic create-inverse
+  if (!(rev.commands?.length) && !(rev.mcp_calls?.length)) return null;
+
+  // Resolve the PINNED stable identifier from already-captured typed input —
+  // NEVER by position/recency. Look it up by the pin's name in the action's own
+  // args first (exact key, then case-insensitive), e.g. pin "title" → input.title.
+  const input = (ctx.tool_input ?? {}) as Record<string, unknown>;
+  const pin = rev.pin.trim();
+  const pinLc = pin.toLowerCase();
+  const stringify = (v: unknown): string | null =>
+    (typeof v === "string" && v.trim()) ? v.trim()
+      : (typeof v === "number" || typeof v === "boolean") ? String(v) : null;
+  let pinned: string | null = stringify(input[pin]);
+  if (pinned === null) {
+    for (const [k, v] of Object.entries(input)) {
+      if (k.toLowerCase() === pinLc) { pinned = stringify(v); break; }
+    }
+  }
+  // Browser creates carry no structured id arg — the value lives in the recently
+  // typed text. Only adopt it when there is exactly ONE candidate, so we never
+  // guess which typed string is the pinned identifier.
+  if (pinned === null) {
+    try {
+      const recent = loadRecentBrowserInput(config);
+      if (recent.length === 1) pinned = recent[0];
+    } catch { /* optional */ }
+  }
+  if (pinned === null) return null;                  // unresolved → fall through to subagent
+
+  // MCP-call inverse (preferred): substitute the pinned value into the recorded
+  // args wherever the explorer left a "<...>" placeholder, then replay verbatim
+  // through the SAME server via tools/call (restore.ts handles this).
+  if (rev.mcp_calls?.length) {
+    const fill = (v: unknown): unknown =>
+      (typeof v === "string" && /<[^>]*>/.test(v)) ? v.replace(/<[^>]*>/g, pinned!) : v;
+    const calls = rev.mcp_calls.map((c) => ({
+      server,
+      tool: c.tool,
+      args: Object.fromEntries(Object.entries(c.args ?? {}).map(([k, v]) => [k, fill(v)])),
+    }));
+    return recordDeterministicArtifact(ctx, config, {
+      recoveryMcpCalls: calls,
+      description: `Deterministic create reverter (${server}): delete the created entity pinned by ${pin}=${pinned.slice(0, 80)}`,
+    });
+  }
+
+  // Prose/CLI inverse: substitute the pinned value, then guard every command
+  // through isDangerousRecoveryCommand.
+  const cmds = rev.commands!.map((c) => c.replace(/<[^>]*>/g, pinned!));
+  for (const cmd of cmds) {
+    if (isDangerousRecoveryCommand(cmd)) return null; // refuse → fall through to subagent
+  }
+  return recordDeterministicArtifact(ctx, config, {
+    recoveryCommands: cmds,
+    description: `Deterministic create reverter (${server}): delete the created entity pinned by ${pin}=${pinned.slice(0, 80)}`,
+  });
+}
+
+/** Materialize the action dir and write a tier-3 "subagent"-strategy artifact
+ *  carrying a deterministic (no-LLM) reversal, so the existing restore path
+ *  replays it WITHOUT a subagent: liveRestore:false with either recoveryCommands
+ *  (local shell inverse, run via execSync) OR recoveryMcpCalls (a fixed MCP call
+ *  replayed verbatim via tools/call). Exactly one is supplied. */
+function recordDeterministicArtifact(
+  ctx: HookContext,
+  config: SandboxConfig,
+  parts: {
+    recoveryCommands?: string[];
+    recoveryMcpCalls?: Array<{ server?: string; tool: string; args: Record<string, unknown> }>;
+    description: string;
+  },
+): BackupArtifact {
+  const dir = materializeActionDir(config);
+  const artifact: BackupArtifact = {
+    id: makeId(),
+    timestamp: new Date().toISOString(),
+    trigger: "rule",
+    toolName: ctx.tool_name,
+    description: parts.description,
+    strategy: "subagent",
+    artifactPath: dir,
+    liveRestore: false,
+    originalAction: describeToolAction(ctx.tool_name, ctx.tool_input),
+    ...(parts.recoveryCommands ? { recoveryCommands: parts.recoveryCommands } : {}),
+    ...(parts.recoveryMcpCalls ? { recoveryMcpCalls: parts.recoveryMcpCalls } : {}),
+  };
+  writeMetadata(dir, artifact);
+  return artifact;
+}
+
 export function runBackup(
   ctx: HookContext,
   config: SandboxConfig
@@ -1523,6 +1726,26 @@ export function runBackup(
   if (outsideWorkspace && !targetedSucceeded) {
     const cmdStr = String(ctx.tool_input.command ?? JSON.stringify(ctx.tool_input));
 
+    // ── Tier-3 (cheap): pattern-driven MCP create reverter ────────
+    // An MCP CREATE whose learned pattern carries a deterministic `reverter`
+    // (delete the just-created entity, pinned by a captured stable identifier)
+    // replays that fixed inverse with NO subagent — the "T1/T2 for remote" path.
+    // If the pinned value can't be resolved, this returns null and we fall
+    // through to the capture subagent (never a guess).
+    try {
+      const rev = tryPatternCreateReverter(ctx, config);
+      if (rev) {
+        result.actionDir = rev.artifactPath;
+        result.artifacts.push(rev);
+        return result;
+      }
+    } catch (e) {
+      if (config.verbose) {
+        process.stderr.write(`[CHATS-Sandbox] pattern create reverter error: ${e}\n`);
+      }
+      // fall through to the capture subagent
+    }
+
     // Try to invoke the real subagent via `claude -p` subprocess.
     // The subagent is SYNCHRONOUS — blocks until it produces an artifact
     // or hits the timeout. Safe to run here because we're already inside
@@ -1536,7 +1759,10 @@ export function runBackup(
         // Materialize the folder so the subagent has somewhere to write
         const dir = materializeActionDir(config);
         result.actionDir = dir;
-        const outcome = runSubagentBackup(ctx, dir, config);
+        // Narrow the subagent's MCP tool schema to the few tools this capture
+        // needs (read pre-state + inverse), derived from the experience.
+        const toolAllow = minimalToolAllow(ctx, config);
+        const outcome = runSubagentBackup(ctx, dir, config, { toolAllow });
         if (outcome === "read_only") {
           // Subagent inspected the action and found it changes nothing
           // outside the workspace — a clean skip, NOT a failure. Drop

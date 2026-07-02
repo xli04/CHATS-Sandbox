@@ -1,23 +1,46 @@
 /**
  * All self-exploration prompts live here.
  *
- *   buildProposalPrompt        — STAGE 1 (tree_generation): a model enumerates
- *                                 the server's mutating ops and proposes the
- *                                 cheapest reversible "easy-win" for each.
- *   buildVerificationPrompt    — STAGE 2 (verify): a live agent executes each
- *                                 proposed reversal against the real backend.
- *   buildReadOnlyVerifyPrompt  — STAGE 2 (verify, read-only): confirm a set of
- *                                 candidate actions change nothing persistent.
+ *   buildProposalPrompt      — STAGE 1 (tree_generation): a model sorts the
+ *                               server's tools into certain read-only tools,
+ *                               certain creation-only methods (deterministic
+ *                               reverter), and everything-else (reason about
+ *                               capabilities, flag the backup-worthy actions).
+ *   buildVerificationPrompt  — STAGE 2 (verify): a live agent executes each
+ *                               proposed reverter / skill against the real
+ *                               backend, tunes the trigger keyword, and fixes
+ *                               the skill / capture_tools.
  */
 
 import type { McpTool } from "../dist/explore/list_mcp_tools.js";
 import type { RecoveryPattern } from "../dist/explore/experiences.js";
-import type { ReadOnlyTemplate } from "./types.js";
 import { serverProfile } from "./server_profiles.js";
 
-// ── Stage 1: PROPOSE — a model reasons about possible actions and
-//    proposes candidate easy-win reversals. No execution. ───────────
-export function buildProposalPrompt(server: string, tools: McpTool[]): string {
+// ── Stage 1: PROPOSE — a model reasons about the tools and proposes, per
+//    backup-worthy action, the reverter (creation-only) or the skill +
+//    capture_tools (everything else). No execution. ────────────────────
+export function buildProposalPrompt(
+  server: string,
+  tools: McpTool[],
+  target?: string | null,
+  prior?: RecoveryPattern[],
+): string {
+  // ToolShield-style accumulation: show the model what's ALREADY known so it
+  // decides per op to UPDATE an existing pattern (re-emit the same trigger with
+  // a better skill/reverter) or ADD a genuinely new one — instead of blindly
+  // re-proposing duplicates or overlapping generic + site patterns.
+  const priorBlock = (prior && prior.length) ? `
+ALREADY-KNOWN patterns for this server (from prior exploration — treat as the current experience):
+${prior.map((p) => {
+    const how = p.reverter ? `reverter(pin=${p.reverter.pin})` : (p.skill ? p.skill.slice(0, 120) : "(none)");
+    return `  - trigger="${p.trigger ?? "?"}" applies_to="${p.applies_to ?? "?"}" : ${how}`;
+  }).join("\n")}
+DECIDE per op: if one of the above already covers it, RE-EMIT that pattern (SAME "trigger") with any IMPROVEMENT (a cheaper/clearer skill, a fixed reverter) — this UPDATES it. Only ADD a pattern for an op NOT already covered. Do NOT emit a near-duplicate of an existing trigger.
+` : "";
+  return _buildProposalPromptBody(server, tools, target, priorBlock);
+}
+
+function _buildProposalPromptBody(server: string, tools: McpTool[], target: string | undefined | null, priorBlock: string): string {
   const toolLines = tools.map((t) => {
     const desc = (t.description ?? "").replace(/\s+/g, " ").trim();
     // Surface key parameter names so the proposer reasons about the real
@@ -35,55 +58,48 @@ export function buildProposalPrompt(server: string, tools: McpTool[]): string {
 An agent uses the "${server}" MCP server. Live tools (from the server's tools/list):
 ${toolLines}
 
-CHATS-Sandbox must reverse destructive/mutating remote actions. The default is expensive: scrape the full remote state to local and recreate it on restore — costly and lossy (recreated entities get NEW ids/timestamps).
-
+CHATS-Sandbox reverses out-of-workspace mutations. It **defaults to NO backup** — an action is backed up ONLY if you flag it below. So you never enumerate the "safe" actions; you only name the ones that genuinely need reversing.
+${target ? `
+**A TARGET SITE is driven through this server's tools: ${target}**
+**The unit of enumeration is the SITE ACTION (affordance), NOT the tool.** Generic browser tools (click / fill / type / navigate) are only the vehicle — the SAME click can submit a post, delete a comment, or cast a vote, and each needs a DIFFERENT reversal. So:
+  - Enumerate the mutating AFFORDANCES this kind of site exposes (create a post/submission, comment/reply, edit content, delete content, vote, subscribe, change profile/bio, moderate, ...) and emit **one pattern per affordance**.
+  - **"trigger"** = a short lowercase keyword from the affordance's UI LABEL (e.g. "submit", "delete", "upvote", "biography") — the runtime matches it against the CLICKED ELEMENT's text, not just the tool name.
+  - **"applies_to"** = the driving tool (browser_click, browser_fill_form, ...).
+  - A **creation-only affordance** (submitting a brand-new post / comment) belongs in bucket 2: give it a "reverter" pinned by the typed content ("title" for a post, the full text for a comment), with the delete as prose "commands" (the runtime fills the pin from what the agent typed).
+  ALSO still emit the generic TOOL-level capture recipes (evaluate / type / fill / upload ...) as additional patterns — both layers are useful; the site affordances are the PRIMARY output.
+` : ""}${priorBlock}
 STAGE 1 — PROPOSE (reason only; do NOT execute anything)
 
-FIRST, CLASSIFY each listed tool as exactly one of:
-  - READ-ONLY: only reads/inspects/lists/searches/views; never creates, changes, or deletes anything → put its EXACT name in "read_only_tools".
-  - MUTATING: every use changes/destroys persistent state (always backup-worthy).
-  - MIXED: whether it mutates depends on its ARGUMENTS — e.g. a generic SQL/command runner where a SELECT only reads but an UPDATE/DELETE/DROP mutates. For a MIXED tool, derive TWO keyword sets from its arguments:
-      * read-only keywords (e.g. select, explain, show, describe, list) → emit them in "no_backup_patterns" (these arg-shapes need NO backup). Do NOT emit generic SQL words that can wrap a write (e.g. "with" — a data-modifying CTE like WITH … UPDATE mutates).
-      * backup-needed keywords (e.g. insert, update, delete, drop, truncate, alter, merge, replace) → emit ONE pattern PER keyword, using that keyword as its "trigger".
+Sort the tools into three buckets:
 
-SECOND, ENUMERATE EXHAUSTIVELY by effect — cover EVERY operation this server exposes, ONE pattern per distinct mutating op; do NOT stop at an arbitrary count. Use THIS server's OWN domain vocabulary — the examples below are illustrative across domains (a database, a forum, a file store, an issue tracker, a cloud API), NOT a checklist; pick the words that actually appear in this server's tools. Group by effect so none is missed:
-  - READ (e.g. get / list / view / search / a SQL SELECT / open a page): returns or displays data and commits NOTHING → NO pattern (any read keyword goes to no_backup_patterns). NOTE: merely navigating / scrolling / viewing is a READ (everything stays in place) — but an action that LOOKS like navigation yet submits or saves IS a mutation.
-  - CREATE (e.g. create / add / insert / submit / post / upload): makes NEW persistent state → needs a pattern + trigger.
-  - UPDATE (e.g. update / edit / rename / replace / vote): overwrites prior state → needs a pattern + trigger.
-  - DELETE (e.g. delete / remove / drop / truncate): removes data → needs a pattern + trigger.
-  - OTHER PERSISTENT SIDE-EFFECT (e.g. change permissions, subscribe, send, schema/config changes): a durable change that isn't a plain create/update/delete → needs a pattern + trigger ANYWAY (even if it cannot be safely verified live later — "unsafe to verify" does NOT mean "no trigger").
-  Hybrids (an upsert / merge = create + update) → emit a trigger for BOTH shapes.
+**1. Certain read-only tools -> "read_only_tools".** List a tool here ONLY if you are **100% sure** it can NEVER create, change, or delete anything (it only reads / lists / searches / views). Copy the name VERBATIM from the list above. When unsure, leave it out.
 
-For every op in CREATE / UPDATE / DELETE / OTHER above (a MUTATING tool, or each backup-needed keyword of a MIXED tool), PROPOSE the cheapest reversible "EASY-WIN" — an in-place reversible state change or cheap capture that preserves the original entity.
+**2. Creation-only OR deletion methods -> a "reverter".** Both emit a **"reverter"** (shape below), no backup agent:
+   - **Creation-only** (ONLY creates a brand-new entity, never updates/replaces): inverse = **delete the created entity**. "action_rewrite": false (runs at restore). An upsert/merge/replace is NOT creation-only -> bucket 3.
+   - **Deletion** (removes an EXISTING entity): propose a reverter that **SOFT-DELETES instead** — rewrite the delete into a reversible move (move the entity to a trash location / set inactive) so it survives and is restorable. "action_rewrite": true. **Propose this even if unsure a soft-delete/trash affordance exists** — it is TESTED next; if none works it FALLS BACK to a capture skill (bucket 3). This applies ONLY when the delete is a **dedicated delete op** (a delete-verb tool, e.g. delete_file) AND the server has a **relocate tool** (move/rename); a delete performed by a GENERIC tool (a SQL runner, a UI click) has no soft form -> bucket 3.
 
-Shape of what we want:
-  - "delete a post"  → set it to private/draft instead; reverse = set back to public. No content copy; id preserved.
-  - "delete a file"  → move to trash/archive; reverse = move back.
-  - "edit a page"    → use version history; reverse = restore prior version.
-  - "close an issue" → close is itself reversible; reverse = reopen, capture nothing.
+**3. Everything else -> a capture "skill".** For the remaining backup-worthy actions (update / edit / overwrite / durable side effect, and any deletion that did NOT qualify for a soft-delete reverter in bucket 2), the reversal is CAPTURE-then-RESTORE: read the affected state BEFORE the action, let the action run untouched, restore AFTER. Actions that only read or move the view — open a page, scroll, sort, **switch page**, view a profile — change nothing and need NO pattern (default no-backup). **MIXED tools:** if a SINGLE tool mutates only for certain verbs/args (a SQL runner where SELECT reads but UPDATE/DELETE/DROP write; a code executor), emit **ONE pattern PER mutating verb** — "trigger" = that verb keyword (insert/update/delete/drop/truncate/alter), NEVER the tool name — so read verbs (select/explain) match no trigger and are skipped by default. For each backup-worthy action emit a pattern with:
+   - **"trigger"**: a SHORT lowercase keyword that appears in the tool name or the control's label (for a MIXED tool, the MUTATING VERB) — what this mutation is actually called on THIS server. The runtime matches remote actions against triggers.
+   - **"skill"**: your HYPOTHESIS for the cheapest CAPTURE-restore, ONE sentence — read the prior state, restore it after. Shapes: overwrite/edit -> read the current content first, restore it after; update a field/row -> read (SELECT) the old value first, write it back; delete -> read the entity's full content/rows first, recreate on restore (say so if lossy: new id). Avoid the expensive scrape-and-recreate unless nothing cheaper is plausible. **Cheapest also means FEWEST TOOL CALLS**: prefer the one-call read form (e.g. one code-execution / SQL call).
+   - **"capture_tools"**: the MINIMAL set (**2 to 5**, verbatim tool names from the list above) a backup step needs to (a) **READ** the affected entity's current value and (b) **RESTORE** it — normally two, the read tool then the write/inverse tool, e.g. ["read_text_file","write_file"] or ["get_page","update_page"].
 
-These are PROPOSALS to be tested later, so be concrete about HOW to perform the reversal.
+The **"reverter"** shape (bucket 2 only):
+   - **"pin"**: the STABLE identifier of the ONE entity this action affects — its "id", else a UNIQUE attribute ("title"/"name"/"key"/"path"). For a create it's the created entity; for a delete it's the target being removed. The runtime fills this in.
+   - the inverse, EXACTLY ONE of:
+       * **"mcp_calls"** (PREFERRED): a fixed call on THIS server — creation-only [{"tool":"delete_submission","args":{"id":"<captured id>"}}]; soft-delete [{"tool":"move_file","args":{"source":"<path>","destination":"<trash>/<path>"}}]. "<...>" is the placeholder the runtime fills; copy tool names VERBATIM.
+       * **"commands"**: a prose inverse when no single MCP call fits.
+   - **"action_rewrite"**: false for a creation-only inverse (runs at restore); **true** for a soft-delete (the runtime REWRITES the delete into the reversible move now and reports a synthetic success — letting the original delete run afterward would error). When true, describe BOTH the soft form applied now AND the restore.
+   SAFETY — the reverter targets ONLY the ONE entity this action affects, pinned by that captured identifier. NEVER pin by position or recency ("the latest", "the most recent", "the first") — that hits the WRONG entity.
+   A reverter pattern STILL needs a "trigger" (and "applies_to") to match; it needs no "skill" / "capture_tools" — the reverter IS its backup.
 
-THE BACKUP-WORTHY TEST — the one rule for whether an action needs a backup: **would the action become IRREVERSIBLE if we do NOT capture state right before it?** Apply it to THIS server's tools, whatever the domain (files, database rows, tickets, cloud resources, messages, documents, …):
-  - IRREVERSIBLE without capture → NEEDS a pattern + trigger. The general shapes: destroying data (the content is gone once removed), overwriting prior state (the previous value is lost on update/replace), or creating a resource (you need the new item's identifier to find and remove it on undo).
-  - Trivially reversible LIVE without any capture → do NOT propose a pattern. The general shape: any action whose exact inverse is always available with no saved state — a toggle/flag you can flip back, a relationship/membership you can add then remove, a status you can switch and switch back.
-For each IRREVERSIBLE action, give a "trigger": a SHORT lowercase keyword that appears in its tool name or the control's label — whatever a user/tool would actually call that mutation on THIS server. The backup system backs up remote actions matching a trigger and ignores the rest. Only propose patterns for genuinely irreversible-without-capture actions.
-
-ALSO propose the READ-ONLY actions in this environment — things a user does that change NOTHING persistent, so they need no backup. The backup system keeps a READ-ONLY LIST and skips any action matching it for free; your job is to extend that list with this environment's specific affordances. Each entry is a TEMPLATE that drops straight into the list:
-  - "match": a SHORT lowercase keyword/phrase that appears in the action's description or click label (e.g. "open submission", "sort by", "expand comments", "view profile"). This is what the gate substring-matches.
-  - "why": one phrase on why it commits nothing (so a human can eyeball the list).
-Do NOT list generic tool reads that start with get/list/view/search/navigate/snapshot — those are already covered by predefined patterns; focus on environment-SPECIFIC UI affordances the predefined list would miss. Be CONSERVATIVE: only actions you are confident commit nothing. NEVER include anything that creates, edits, deletes, votes, submits, subscribes, or sends — when unsure, leave it out (a wrong "read-only" = a lost backup). These will be VERIFIED next (performed live; kept only if nothing changed).
-
-ALSO, from the EXACT tool list shown above, pick the tools that are READ-ONLY — they only read/inspect/list/search/view and never create, change, or delete anything. The runtime skips backups for these tools by name. Copy tool names VERBATIM from the list above into "read_only_tools"; do NOT invent, guess, or rename — only choose from the provided list, and NEVER include a tool that can mutate (when unsure, leave it out).
-
-Cover ONE pattern per mutating op you enumerated above (every CREATE / UPDATE / DELETE / OTHER op — do NOT cap at a fixed count), the read-only arg keywords of any MIXED tool in no_backup_patterns, 5-12 read_only templates, and the read_only_tools subset of the listed tools.
-
-CRITICAL OUTPUT FORMAT — respond with ONLY a single JSON object and NOTHING else: NO prose, NO explanation, NO reasoning, NO markdown, NO code fences. Emit the object EXACTLY ONCE — no duplicate copies — and stop IMMEDIATELY after the final }. Your ENTIRE response MUST begin with the character { and end with the character }. Keep it COMPACT so it is never truncated: each "easy_win" is ONE sentence (the verifier fills in details later). Use EXACTLY this shape:
-{"patterns":[{"action":"<destructive op, short>","easy_win":"<cheap reversal + how, ONE sentence>","applies_to":"<tool>","trigger":"<short keyword>"}],"read_only":[{"match":"<keyword/affordance>","why":"<short>"}],"no_backup_patterns":["<read-only arg keyword of a MIXED tool, e.g. select>"],"read_only_tools":["<exact read-only tool name copied verbatim from the list above>"]}`;
+CRITICAL OUTPUT FORMAT — respond with ONLY a single JSON object and NOTHING else: NO prose, NO explanation, NO markdown, NO code fences. Emit it EXACTLY ONCE and stop immediately after the final }. Your ENTIRE response MUST begin with { and end with }. Keep it COMPACT (each "skill" is ONE sentence — the verifier fills in details later). Use EXACTLY this shape:
+{"read_only_tools":["<verbatim read-only tool name>"],"patterns":[{"action":"<update/edit/side-effect, or generic-tool delete>","trigger":"<short keyword or MIXED verb>","applies_to":"<tool>","skill":"<cheapest capture-restore, ONE sentence>","capture_tools":["<read tool>","<write/inverse tool>"]},{"action":"<creation-only op>","trigger":"<short keyword>","applies_to":"<tool>","reverter":{"pin":"<id|title>","mcp_calls":[{"tool":"<delete tool>","args":{"id":"<captured>"}}],"action_rewrite":false}},{"action":"<dedicated delete op>","trigger":"<short keyword>","applies_to":"<delete tool>","reverter":{"pin":"<id|path>","mcp_calls":[{"tool":"<move/relocate tool>","args":{"source":"<captured>","destination":"<trash>"}}],"action_rewrite":true}}]}
+Per pattern, "skill"+"capture_tools" and "reverter" are MUTUALLY EXCLUSIVE — never both. Use "reverter" for a **creation-only** op (action_rewrite:false) or a **dedicated deletion with a relocate tool** (action_rewrite:true soft-delete); use "skill"+"capture_tools" for update/edit/side-effect and any generic-tool deletion. EVERY pattern has "action" + "trigger" + "applies_to".`;
 }
 
-// ── Stage 2: VERIFY — a live agent actually executes each proposed
-//    reversal against the real target and reports what worked. ──────
+// ── Stage 2: VERIFY — a live agent actually executes each proposed reverter
+//    or skill against the real target, tunes the trigger, and fixes the
+//    skill / capture_tools. ─────────────────────────────────────────────
 export function buildVerificationPrompt(
   server: string,
   candidates: RecoveryPattern[],
@@ -92,35 +108,58 @@ export function buildVerificationPrompt(
 ): string {
   const targetLine = target
     ? `TARGET (a disposable test system — safe to mutate): ${target}`
-    : `No URL target was given — the "${server}" MCP operates on its own configured backend (e.g. a database). Use the MCP tools directly against that backend to test. Treat it as disposable: create/clean up throwaway items, don't touch real-looking production data.`;
+    : `No URL target was given — the "${server}" MCP operates on its own configured backend (e.g. a database or file store). Use the MCP tools directly against that backend to test. Treat it as disposable: create/clean up throwaway items, do not touch real-looking production data.`;
   // Server-specific setup + safety come from the per-server profile, so this
   // prompt stays domain-general and each server sees ONLY its own info.
   const profile = serverProfile(server);
   const seedLine = profile.seed;
-  const list = candidates.map(
-    (c, i) => `  ${i + 1}. action: ${c.action}\n     proposed easy-win: ${c.easy_win}`,
-  ).join("\n");
+  const list = candidates.map((c, i) => {
+    let entry = `  ${i + 1}. action: ${c.action}  [trigger: ${c.trigger ?? "?"}, applies_to: ${c.applies_to ?? "?"}]`;
+    if (c.reverter) {
+      entry += `\n     proposed reverter (creation-only): ${JSON.stringify(c.reverter)}`;
+    } else {
+      entry += `\n     proposed skill: ${c.skill}`;
+      if (c.capture_tools?.length) entry += `\n     proposed capture_tools: ${JSON.stringify(c.capture_tools)}`;
+    }
+    return entry;
+  }).join("\n");
   return `You are the Recovery Verification agent for CHATS-Sandbox. You have LIVE access to the "${server}" MCP tools.
 
 ${targetLine}
 
 ${seedLine}
 
-STAGE 2 — VERIFY & ACCUMULATE (actually execute)
-Below are PROPOSED easy-win reversal patterns. For EACH one, actually TEST it with the MCP against the seeded sandbox:
-  1. Note the original state (re-read the seeded item).
-  2. Perform the destructive action on it.
-  3. Perform the PROPOSED easy-win reversal.
-  4. Confirm the original state is restored (re-read and compare).
-  5. Clean up any extra throwaway items you created.
+STAGE 2 — VERIFY & TUNE (actually execute against the seeded sandbox)
+Below are PROPOSED backup patterns. For EACH one, test it live and return a verdict, correcting whatever is wrong.
 
-Give EACH pattern a verdict:
-  - "keep": the proposed reversal actually worked (you saw the original state restored).
-  - "adjust": the reversal is close but the exact command is wrong. Put the CORRECTED easy_win in "easy_win" and set verdict "adjust" — it will be re-tested. Use this when you know the right fix.
-  - "delete": the action is NOT actually mutating, OR there is no working reversal (say why).
+**If the pattern has a "reverter" with action_rewrite=false (a creation-only op):** verify the deterministic inverse —
+  1. Perform the create, noting the EXACT args you passed.
+  2. Run the reverter's delete against the pinned identifier.
+  3. Confirm the created entity is GONE (re-read). If the delete tool or args are wrong, CORRECT them and set verdict "adjust".
+
+**If the pattern has a "reverter" with action_rewrite=true (a deletion -> soft-delete):** verify the SOFT-DELETE, with fallback —
+  1. On a seeded item, apply the proposed soft form (move to a trash location / set inactive): confirm the item is no longer at its original location/state (looks deleted) BUT is recoverable; then reverse it and confirm the original is fully back.
+  2. **WORKS** -> keep the reverter (action_rewrite=true), correcting the exact soft-delete + restore calls and the trash location you used.
+  3. **NO reversible soft-delete affordance / does not faithfully reverse** -> **FALL BACK**: drop the reverter and re-emit this pattern as a CAPTURE **"skill"** (read the entity's content BEFORE the delete, recreate on restore; note if lossy). Verify capture->delete->recreate end to end. Emit it as skill+capture_tools (verdict "keep", NO reverter).
+
+**Otherwise (a mutating op):** the proposed "skill" is a HYPOTHESIS — it may name an affordance that does not exist on this server. Test it and REWRITE it as the verified branch:
+  1. Re-read the seeded item (its original state).
+  2. **Try the hypothesis first** — does the proposed cheap reversal actually exist here (a private/hide/archive toggle, version history, a trash/restore pair, ...)?
+     - **EXISTS and faithfully reverses** (you performed it, reversed it, and the original entity came back with id and content intact): rewrite "skill" as CONCRETE guidance — **which tool/action, how to perform it, how to reverse it**, ending with "capture nothing". Set "capture_tools" to the tools this branch actually uses.
+     - **DOES NOT EXIST, or does not faithfully reverse**: rewrite "skill" as the CAPTURE recipe bound to this server — **which fields to capture (id, title, body, ...) with which read tool (one call)**, and how the restore recreates/restores from that capture; say so explicitly when a recreate is lossy (new id). Then verify THIS branch end to end: capture pre-state with the read tool, perform the destructive action, restore from the capture, confirm the original state is back.
+  3. **MINIMIZE the call count.** The runtime backup agent has a hard budget of about 3 tool calls, so the recipe you record must be the **fewest-calls form you actually executed successfully**: if the same move can be done in ONE call (e.g. a single code-execution / SQL call) instead of several UI steps, TEST the one-call form and record THAT one. State the exact call sequence in "skill" (which tool, doing what) so the backup agent can follow it verbatim without exploring.
+  4. Emit the MINIMAL "capture_tools" (**2-5, verbatim tool names**) the VERIFIED branch actually uses.
+  The "skill" you emit must be the **verified branch guidance**, never the untested hypothesis.
+
+**TUNE the "trigger".** The proposed keyword may not match how the mutation really appears — correct it to a short lowercase keyword that truly identifies this action. If a proposed pattern turns out NOT to mutate or is not worth backing up, set verdict **"delete"** (it will be DROPPED — the no-backup default then covers it). If while testing you find a **MISSED** mutating op worth backing up, ADD it as an extra pattern (verdict "keep", verified, with a filled verify_note) — this is how missing pieces get added.
+
+Verdicts:
+  - **"keep"**: the branch you are emitting was EXECUTED and SEEN to work (this includes a rewritten skill — hypothesis confirmed, or capture fallback verified end to end). Rewriting the skill to what you verified does NOT make it an "adjust".
+  - **"adjust"**: you corrected something (trigger / skill / capture_tools / reverter) but could NOT verify the corrected version live — it will be re-tested.
+  - **"delete"**: not mutating, or no working reversal exists — dropped.
 Set "verified"=true ONLY for a "keep" you actually executed and saw work. Do NOT invent success.
 
-HARVEST: if while testing you discover (a) a CHEAPER or otherwise valid reversal for one of these ops, or (b) a MISSED mutating op on this server worth backing up, ADD it as an extra pattern object with "verdict":"keep" and a filled verify_note describing the live test you ran — only add ops you actually verified.
+**RECORD the "recipe"** for every "keep": the EXACT tool call(s) / command(s) you ACTUALLY RAN to reverse the action, verbatim, in order — but replace the specific captured values (ids, titles, original field text) with **<PLACEHOLDER>** tokens so it generalizes. This is stored as a VERIFIED reference example the runtime backup agent adapts to the live page — so it must be concrete and correct (a real call you saw work), not a paraphrase. Example: "browser_run_code({code: \`await page.goto('<EDIT_URL>'); await page.getByRole('textbox',{name:'Biography'}).fill('<ORIGINAL_BIO>'); await page.getByRole('button',{name:'Save'}).click();\`})".
 
 ${profile.safety}
 
@@ -133,43 +172,7 @@ After testing, **WRITE your result as a JSON object to this EXACT file path** (u
 
 This file is how CHATS-Sandbox reads your result — stdout is NOT reliably parsed. The JSON shape:
 
-{"patterns":[{"action":"...","easy_win":"...","applies_to":"...","verdict":"keep|adjust|delete","verified":true,"verify_note":"<what you observed>"}]}
+{"patterns":[{"action":"...","trigger":"...","applies_to":"...","verdict":"keep|adjust|delete","verified":true,"verify_note":"<what you observed>","skill":"<for a mutating op>","recipe":"<exact reversal call(s) you ran, values as <PLACEHOLDER>>","capture_tools":["<read tool used>","<inverse/write tool used>"],"reverter":{"pin":"...","mcp_calls":[{"tool":"...","args":{}}]}}]}
 
-Echo every proposed pattern with a verdict, plus any harvested patterns. The LAST thing you do is write that file.`;
-}
-
-// ── Read-only verification: cheap because confirming "this changed
-//    nothing" is just do-it-and-compare (no setup→destroy→reverse). One
-//    batch run covers the whole candidate list. ──────────────────────
-export function buildReadOnlyVerifyPrompt(
-  server: string,
-  readOnly: ReadOnlyTemplate[],
-  target: string | null,
-  resultFile: string,
-): string {
-  const targetLine = target
-    ? `TARGET (a disposable test system — safe to operate): ${target}`
-    : `The "${server}" MCP operates on its own configured backend. Use the MCP tools directly; treat it as disposable.`;
-  const list = readOnly.map((r, i) => `  ${i + 1}. "${r.match}"${r.why ? ` — ${r.why}` : ""}`).join("\n");
-  return `You are the Read-Only Verification agent for CHATS-Sandbox. You have LIVE access to the "${server}" MCP tools.
-
-${targetLine}
-
-STAGE 2 (read-only) — CONFIRM each candidate action changes NOTHING persistent. This is cheap: do it and check nothing changed.
-For EACH candidate below:
-  1. Read/snapshot the small piece of state the action would plausibly touch.
-  2. Perform the action ONCE through the real tools/UI.
-  3. Re-read and compare. verified=true ONLY if nothing persistent changed (no vote registered, no field saved, no item created/edited). verified=false if anything changed OR the affordance doesn't exist.
-Operate only on existing or throwaway items — never create real data just to test. Be strict: when in doubt, verified=false (a wrong read-only silently loses a backup).
-
-CANDIDATES:
-${list}
-
-Write your result as JSON to this EXACT file path (stdout is not reliably parsed):
-
-  ${resultFile}
-
-{"read_only":[{"match":"<same keyword>","verified":true,"why":"<what you checked stayed unchanged>"}]}
-
-Echo every candidate with its verified flag. The LAST thing you do is write that file.`;
+Per pattern echo its verdict; include "skill" + "capture_tools" for a mutating op, or "reverter" for a creation-only op. Add any harvested ops. The LAST thing you do is write that file.`;
 }

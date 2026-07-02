@@ -464,8 +464,8 @@ export function buildBackupGuidance(opts: BackupGuidanceOpts): string {
   }
   const isBrowser = server === "playwright";
 
-  // Inject any learned easy-win reversal patterns for this MCP server
-  // (from `chats-sandbox explore`). Prefer-cheap-reversal guidance.
+  // Inject the learned backup SKILL for this MCP server (from
+  // `chats-sandbox explore`). Prefer-cheap-reversal guidance.
   let experienceBlock = "";
   if (config) {
     try {
@@ -497,7 +497,7 @@ export function buildBackupGuidance(opts: BackupGuidanceOpts): string {
       const { loadRecentBrowserInput } = require("./strategies.js");
       const recent: string[] = loadRecentBrowserInput(config);
       if (recent.length) {
-        recentInputBlock = `\n  ⭐ VALUES THE AGENT JUST TYPED (use these as the EXACT title/body — do NOT re-derive or guess): ${recent.map((v) => JSON.stringify(v)).join(" , ")}`;
+        recentInputBlock = `\n  **VALUES THE AGENT JUST TYPED** (use these as the EXACT title/body — do NOT re-derive or guess): ${recent.map((v) => JSON.stringify(v)).join(" , ")}`;
       }
     } catch { /* optional */ }
   }
@@ -513,43 +513,45 @@ export function buildBackupGuidance(opts: BackupGuidanceOpts): string {
       const snap = loadRecentBrowserSnapshot(config);
       if (snap && snap.text) {
         preStateBlock = `
-📍 THE ORIGINAL PRE-STATE is in PAGE_STATE below — the agent's last page view BEFORE this action (URL: ${snap.url || "unknown"}).
-🚫 You have NO browser. Write the recovery DIRECTLY from PAGE_STATE — do not browse, do not navigate, do not guess.
+**THE ORIGINAL PRE-STATE is in PAGE_STATE below** — the agent's last page view BEFORE this action (URL: ${snap.url || "unknown"}).
+**You have NO browser. Write the recovery DIRECTLY from PAGE_STATE** — do not browse, do not navigate, do not guess.
 <<<PAGE_STATE
 ${snap.text}
 PAGE_STATE>>>
-  • EDIT   → recovery = restore the field to the ORIGINAL value shown in PAGE_STATE. Put that original VERBATIM in recovery_commands; NEVER the just-typed new value.
-  • DELETE → capture the entity's CURRENT content from PAGE_STATE into remote-state.json.
-  • CREATE → the new entity isn't in the page yet; pin it by the typed values above.
-  📋 PAGE_STATE may include a "PRE-CAPTURED FORM CONTROLS ... = [...]" digest: a JSON list of the page's editable fields with their ORIGINAL values. A field PRESENT in that list IS the captured pre-state — if its "value" is "" that means the field was genuinely EMPTY (restore it to empty), NOT "not captured". Use the field's listed value VERBATIM as the original.
-  ⚠️ ONLY IF the field you need is ENTIRELY ABSENT from PAGE_STATE (not listed in the digest AND not in the page text): DO NOT fabricate (no assumed-empty, no turning an edit into "delete the post"). Instead set live_restore=true and begin the description with EXACTLY "UNVERIFIED: pre-state value not in snapshot" so a restore step re-derives instead of replaying a wrong command.`;
+  - **EDIT** → recovery = restore the field to the ORIGINAL value shown in PAGE_STATE. Put that original VERBATIM in recovery_commands; NEVER the just-typed new value.
+  - **DELETE** → capture the entity's CURRENT content from PAGE_STATE into remote-state.json.
+  - **CREATE** → the new entity isn't in the page yet; pin it by the typed values above.
+  PAGE_STATE may include a "PRE-CAPTURED FORM CONTROLS ... = [...]" digest: a JSON list of the page's editable fields with their ORIGINAL values. A field PRESENT in that list IS the captured pre-state — if its "value" is "" that means the field was genuinely EMPTY (restore it to empty), NOT "not captured". Use the field's listed value VERBATIM as the original.
+  **ONLY IF the field you need is ENTIRELY ABSENT from PAGE_STATE** (not listed in the digest AND not in the page text): DO NOT fabricate (no assumed-empty, no turning an edit into "delete the post"). Instead set live_restore=true and begin the description with EXACTLY "UNVERIFIED: pre-state value not in snapshot" so a restore step re-derives instead of replaying a wrong command.`;
       } else {
         preStateBlock = `
-⚠️ NO PRE-STATE PAGE VIEW AVAILABLE — you were NOT handed the page the agent is on, so the ORIGINAL value is unknown to you. If you can read the current state with your tools, do so. If you CANNOT, do NOT fabricate (do NOT assume the original was empty; do NOT turn an edit into "delete the post"): set live_restore=true and put "UNVERIFIED: pre-state not captured" in the description so a restore agent re-derives instead of replaying a wrong command.`;
+**NO PRE-STATE PAGE VIEW AVAILABLE** — you were NOT handed the page the agent is on, so the ORIGINAL value is unknown to you. If you can read the current state with your tools, do so. If you CANNOT, do NOT fabricate (do NOT assume the original was empty; do NOT turn an edit into "delete the post"): set live_restore=true and put "UNVERIFIED: pre-state not captured" in the description so a restore agent re-derives instead of replaying a wrong command.`;
       }
     } catch { /* optional */ }
   }
-  const browserPinDirective = isBrowser ? `
-🌐 BROWSER ACTION — PIN THE NEW ENTITY BY CONTENT (it has no id yet):${recentInputBlock}
-  The exact text being committed is in the typed values above (preferred) or one snapshot of the form; put it VERBATIM in recovery_commands:
+  // Split for cache friendliness: the pin RULES are per-server static (join
+  // the cached prefix); only the typed VALUES are per-action (dynamic tail).
+  const browserPinStatic = isBrowser ? `
+**BROWSER ACTION — PIN THE NEW ENTITY BY CONTENT** (it has no id yet):
+  The exact text being committed is in the typed values (see DYNAMIC CONTEXT below, preferred) or one snapshot of the form; put it VERBATIM in recovery_commands:
   - creating a POST/submission → capture the exact TITLE (e.g. recovery: "delete the submission whose title == '<exact title>'").
   - creating a COMMENT/reply  → capture the FULL comment text (it has no title; the body IS the identifier).
   - editing → capture the entity's id/title AND the original text to restore.
   NEVER target by position/recency ("the most recent", "the first") — that deletes the WRONG entity.
 ` : "";
+  // Inline mode renders once (no prefix caching) — keep the combined form.
+  const browserPinDirective = isBrowser ? `${browserPinStatic}${recentInputBlock ? `${recentInputBlock}\n` : ""}` : "";
 
   // Guidance (GENERAL — "capture / confirm / write", not tied to any one
   // MCP server) to keep the backup fast. This is a PROMPT instruction, not
   // a hard cap — the watcher wrapper still ends the run once the result is
   // written, so an over-eager model can't drag the tail out either way.
-  const directive = mode === "inline" ? `For EACH step that creates / edits / deletes state OUTSIDE your workspace (a file outside the project, a package install, an env change, a remote / MCP / browser / database mutation) and would be hard to undo: CAPTURE what you need to reverse it, perform the step, then RECORD the reversal (see RECOVERY NOTE FORMAT). Take the target + method from the KNOWN EASY-WIN PATTERNS and the matching strategy below.
-🎯 PIN THE TARGET: if the action creates / edits / deletes an identifiable entity (a record, post, comment, row, file, ticket, document…), your recovery MUST identify that EXACT entity by a captured STABLE IDENTIFIER — its id, or a unique attribute (exact title/key) when the id does not exist yet (a fresh create). Capture that identifier NOW. NEVER target by position or recency ("the most recent", "the first", "the latest") — that reverses the WRONG entity. For a create, the reversal is "delete the entity whose <id/title> == <captured value>"; for an edit, "restore <id>'s field to <captured original>".` : `⏱️ BE FAST — you are blocking the agent. Do the backup in essentially TWO steps and NO MORE:
-  STEP 1 — CAPTURE: preserve the state the upcoming action is about to change, in as FEW tool calls as possible (ideally one — combine statements if your tool allows it, e.g. create-shadow + copy-rows in a single call). Take the target + method DIRECTLY from the UPCOMING ACTION and the KNOWN EASY-WIN PATTERNS below; if a pattern matches, apply it as-is.
-  STEP 2 — WRITE the result JSON (see OUTPUT FORMAT).
-⛔ HARD LIMIT: ~3 tool calls. A 4th ENDS your session and FAILS the backup — so do NOT waste calls exploring/confirming; spend them on the capture then the result.
-🎯 PIN THE TARGET: if the action creates / edits / deletes an identifiable entity (a record, post, comment, row, file, ticket, document…), your recovery_commands MUST identify that EXACT entity by a captured STABLE IDENTIFIER — its id, or a unique attribute (exact title/key) when the id does not exist yet (a fresh create). Capture that identifier NOW. NEVER target by position or recency ("the most recent", "the first", "the latest") — that reverses the WRONG entity. For a create, the reversal is "delete the entity whose <id/title> == <captured value>"; for an edit, "restore <id>'s field to <captured original>".
-After STEP 2 you are DONE — STOP immediately. Do NOT confirm/verify the backup, do not re-query, do not re-read, do not reflect, do not summarise (a later restore step handles correctness).
-Do NOT spend steps listing / describing / enumerating / inspecting the system "to understand it" or "to be safe" — the action and the patterns already tell you what to capture. (Only if you genuinely cannot capture the state from the action + patterns may you look further — but never just to double-check.)`;
+  const directive = mode === "inline" ? `For EACH step that creates / edits / deletes state OUTSIDE your workspace (a file outside the project, a package install, an env change, a remote / MCP / browser / database mutation) and would be hard to undo: CAPTURE what you need to reverse it, perform the step, then RECORD the reversal (see RECOVERY NOTE FORMAT). Take the target + method from the LEARNED BACKUP SKILL and the matching strategy below.
+**PIN THE TARGET:** if the action creates / edits / deletes an identifiable entity (a record, post, comment, row, file, ticket, document…), your recovery MUST identify that EXACT entity by a captured STABLE IDENTIFIER — its id, or a unique attribute (exact title/key) when the id does not exist yet (a fresh create). Capture that identifier NOW. NEVER target by position or recency ("the most recent", "the first", "the latest") — that reverses the WRONG entity. For a create, the reversal is "delete the entity whose <id/title> == <captured value>"; for an edit, "restore <id>'s field to <captured original>".` : `**BE FAST** — you are blocking the agent. **TWO steps only:**
+  **STEP 1 — CAPTURE** the state the upcoming action will change, in as FEW calls as possible (ideally one). Take the target + method from the TRIGGERING ACTION + the LEARNED BACKUP SKILL below; if a pattern matches, apply it as-is.
+  **STEP 2 — WRITE the result JSON** (see OUTPUT FORMAT), then STOP.
+**HARD LIMIT ~3 calls** (a 4th FAILS the backup). **Do NOT explore / list / enumerate / navigate / re-read / verify** — the action + patterns already tell you exactly what to capture.
+**PIN THE TARGET** by a captured **stable identifier** — its id, or a unique attribute (exact title/key) for a fresh create. **NEVER by position or recency** ("the most recent", "the first") — that reverses the WRONG entity. Create → "delete the entity whose <id/title> == <captured value>"; edit → "restore <id>'s field to <captured original>".`;
 
   // ── Action-category dispatch ──────────────────────────────────────────
   // The plugin already knows the action type, so send ONLY the relevant
@@ -565,19 +567,19 @@ STRATEGY — shadow git repo scoped to the AFFECTED FILES ONLY:
    nearest project marker like .git/package.json if one is close). The
    root may be a big shared directory — that is fine because you will
    only ever add the affected file(s), never the whole tree.
-2. Create a shadow git repo at ${actionDir}/external-shadow/:
-     mkdir -p '${actionDir}/external-shadow'
-     GIT_DIR='${actionDir}/external-shadow' GIT_WORK_TREE='<root>' git init
-     GIT_DIR='${actionDir}/external-shadow' GIT_WORK_TREE='<root>' git config user.email "chats-sandbox@local"
-     GIT_DIR='${actionDir}/external-shadow' GIT_WORK_TREE='<root>' git config user.name "CHATS-Sandbox"
-     GIT_DIR='${actionDir}/external-shadow' GIT_WORK_TREE='<root>' git add -- <affected file(s), relative to root>
-     GIT_DIR='${actionDir}/external-shadow' GIT_WORK_TREE='<root>' git commit -m "pre-action snapshot" --allow-empty-message
+2. Create a shadow git repo at <STORAGE_DIR>/external-shadow/:
+     mkdir -p '<STORAGE_DIR>/external-shadow'
+     GIT_DIR='<STORAGE_DIR>/external-shadow' GIT_WORK_TREE='<root>' git init
+     GIT_DIR='<STORAGE_DIR>/external-shadow' GIT_WORK_TREE='<root>' git config user.email "chats-sandbox@local"
+     GIT_DIR='<STORAGE_DIR>/external-shadow' GIT_WORK_TREE='<root>' git config user.name "CHATS-Sandbox"
+     GIT_DIR='<STORAGE_DIR>/external-shadow' GIT_WORK_TREE='<root>' git add -- <affected file(s), relative to root>
+     GIT_DIR='<STORAGE_DIR>/external-shadow' GIT_WORK_TREE='<root>' git commit -m "pre-action snapshot" --allow-empty-message
    NEVER use \`git add -A\` here — the root may contain gigabytes of
    unrelated files.
 3. Record the root path and the commit hash.
 4. recovery_commands — two-step restore of exactly those files:
-     GIT_DIR='${actionDir}/external-shadow' GIT_WORK_TREE='<root>' git read-tree <hash>
-     GIT_DIR='${actionDir}/external-shadow' GIT_WORK_TREE='<root>' git checkout-index -f -a
+     GIT_DIR='<STORAGE_DIR>/external-shadow' GIT_WORK_TREE='<root>' git read-tree <hash>
+     GIT_DIR='<STORAGE_DIR>/external-shadow' GIT_WORK_TREE='<root>' git checkout-index -f -a
    If the upcoming action CREATES a file that does not exist yet, the
    recovery for that file is an explicit \`rm '<absolute path>'\` instead.
    NEVER include \`git clean -fd\` in recovery_commands: on a shared
@@ -590,99 +592,30 @@ STRATEGY — document recovery for out-of-band state:
 
   const CAT_C = `### Category C: System package install/uninstall (pip, npm, apt, brew)
 STRATEGY — save a manifest:
-- pip install → pip freeze > ${actionDir}/pip_freeze.txt, recovery = pip install -r that file
-- npm install -g → npm list -g --json > ${actionDir}/npm_list.json
-- apt install → dpkg --get-selections > ${actionDir}/apt_list.txt
-- brew install → brew list > ${actionDir}/brew_list.txt`;
+- pip install → pip freeze > <STORAGE_DIR>/pip_freeze.txt, recovery = pip install -r that file
+- npm install -g → npm list -g --json > <STORAGE_DIR>/npm_list.json
+- apt install → dpkg --get-selections > <STORAGE_DIR>/apt_list.txt
+- brew install → brew list > <STORAGE_DIR>/brew_list.txt`;
 
   const CAT_D = `### Category D: Environment variable mutation (export, unset, source)
-STRATEGY — snapshot env vars: env > ${actionDir}/env.txt`;
+STRATEGY — snapshot env vars: env > <STORAGE_DIR>/env.txt`;
 
-  const CAT_F = `### Category F: Remote state accessed via an MCP tool (mcp__*)
-The upcoming action is an MCP tool call (tool name starts with mcp__).
-Examples: mcp__playwright__browser_click, mcp__notion__create_page,
-mcp__github__create_issue, mcp__slack__send_message.
+  const CAT_F = `### Category F: Remote state via an MCP tool (mcp__*)
+The TRIGGERING ACTION above already names the exact tool + args being changed — you do NOT need to discover anything.
 
-STRATEGY — scrape the current remote state via the SAME MCP, then record
-recovery instructions:
+1. CAPTURE pre-state ONLY IF the action edits/deletes existing state: with the SAME MCP, read EXACTLY the affected entity (one call) and write the ACTUAL DATA verbatim — not a summary — to <STORAGE_DIR>/remote-state.json with enough fields to recreate it (id, parent id, title, body, timestamps…). For a SQL DELETE/UPDATE capture the affected rows (SELECT * with the SAME WHERE clause); for DROP/TRUNCATE the whole table; page through large results, do not truncate. (A fresh CREATE has no prior state — pin its identifier instead.) Do NOT navigate / list / enumerate to "understand" the system — read only the one affected entity, or nothing.
 
-1. Determine what state the action is about to modify or destroy. For a
-   browser_click that says "delete post," that's the post's current
-   content. For a notion__update_page, that's the page's current
-   contents. For an mcp__github__close_issue, that's the issue's
-   current state.
+2. **RECORD the true inverse of the action's EFFECT** (not the UI interaction):
+   - **DESTRUCTIVE** (delete/close/remove/archive) → recovery RE-CREATES the captured state.
+   - **CONSTRUCTIVE** (create/insert/send/post/add) → recovery DELETES the entity this action created, by its captured id/unique key (never by position).
+   - **MUTATING** (edit/update/rename) → recovery RESTORES the prior content from remote-state.json.
 
-2. Use the SAME MCP tools (they're available to you — your MCP servers
-   were inherited from the user's Claude Code session) to fetch the
-   current state. Examples:
-   - For Playwright: use browser_navigate + browser_snapshot to capture
-     the page DOM/text, parse out the relevant fields (title, body,
-     comments, etc.).
-   - For Notion: mcp__notion__get_page to capture the current page.
-   - For GitHub: mcp__github__get_issue to capture the issue's body,
-     state, labels.
+3. **CHOOSE THE RECOVERY FORM** — two mutually-exclusive modes:
+   - **DETERMINISTIC (live_restore:false):** the reversal is a fixed MCP call you can write out NOW. Put it in recovery_mcp_calls as {"tool":"<a tool on THIS server>","args":{…}} using this server's own tool/arg shapes; leave recovery_commands EMPTY. e.g. a deleted row → {"tool":"execute_sql","args":{"sql":"INSERT …"}}.
+   - **LIVE (live_restore:true):** reversing genuinely needs CURRENT state read at restore (refs/layout shift — typical of browser/UI). Leave recovery_mcp_calls EMPTY and describe the fix as prose in recovery_commands.
+   **Prefer DETERMINISTIC** whenever the reversal is a self-contained MCP call.
 
-3. Write the captured state as JSON to: ${actionDir}/remote-state.json
-   **This file is the BACKUP ARTIFACT (the captured data) — it is NOT your
-   result. You must STILL output the result JSON object at the very end
-   (see OUTPUT FORMAT). Do not treat remote-state.json as the deliverable.**
-   Include enough fields that a future restore subagent could recreate
-   the state (title, body, author, timestamps, IDs, parent IDs, etc.).
-   THE DATA ITSELF, NOT A SUMMARY: for a SQL/database mutation
-   (DELETE/UPDATE/DROP/TRUNCATE), capture the actual affected rows —
-   SELECT * with the same WHERE clause (or the whole table for
-   DROP/TRUNCATE) — into remote-state.json. A schema + row count alone
-   is NOT a backup; the restore must be able to re-INSERT every row.
-   If the result is large, page through it; do not truncate.
-
-4. The recovery MUST reverse the EFFECT of the action, not merely
-   undo the UI interaction or summarize what happened. Decide the
-   action's direction and record the true inverse:
-   - DESTRUCTIVE (delete/close/remove/archive): recovery RE-CREATES the
-     destroyed state from remote-state.json.
-   - CONSTRUCTIVE (create/submit/send/post/add — create_page,
-     send_message, an INSERT): recovery DELETES/RETRACTS the entity this
-     action created (by its captured id/unique key — never by position).
-   - MUTATING (edit/update/rename): recovery RESTORES the prior content
-     captured in remote-state.json.
-   Capture in remote-state.json whatever locator a future restore needs
-   to act on the created/changed entity (title, URL, id, parent id).
-
-5. CHOOSE THE RECOVERY FORM — there are TWO mutually-exclusive modes.
-   Pick based on whether the reversal can be written down NOW as a fixed,
-   replayable MCP call, or genuinely needs LIVE state read at restore:
-
-   • DETERMINISTIC (set live_restore:false): the reversal is a fixed MCP
-     tool call you can write out completely right now — nothing about it
-     depends on re-reading state later. Emit it as STRUCTURED tool calls
-     in recovery_mcp_calls (NOT prose, NOT shell). Each entry is
-     {"tool":"<an MCP tool on THIS server>","args":{…}} — use this
-     server's OWN tool names and arg shapes (the same ones you used to
-     read state). Optionally add "server" if it differs from the action's
-     server. Leave recovery_commands EMPTY in this mode.
-       - DB example (a deleted row, captured in remote-state.json):
-         {"tool":"execute_sql","args":{"sql":"INSERT INTO t (...) VALUES (...);"}}
-       - Non-DB example (a created Notion page, captured id):
-         {"tool":"archive_page","args":{"page_id":"<captured id>"}}
-     Do NOT put SQL or prose in recovery_commands for this case.
-
-   • LIVE (set live_restore:true): reversing genuinely needs the CURRENT
-     state at restore time (element refs / page layout move between now
-     and restore, or remote state may have shifted — typical for a
-     browser/UI reversal). Then leave recovery_mcp_calls EMPTY and
-     DESCRIBE the fix as prose in recovery_commands; at restore a fresh
-     subagent follows it through the SAME MCP. Example for a deleted post
-     in a browser flow: "Use the Playwright MCP to log in as the same
-     user, navigate to the submit page, and re-create the post with
-     title=<X>, body=<Y> from remote-state.json."
-
-   Prefer DETERMINISTIC whenever the reversal is a self-contained MCP
-   call; use LIVE only when re-reading current state is unavoidable.
-
-If the MCP doesn't expose a clean read-side counterpart, do your best:
-take a screenshot, save the DOM, save the URL. Always emit a JSON
-file even if it only contains the URL and a "manual recovery needed"
-note — having SOMETHING beats having nothing.`;
+If the MCP exposes no clean read-side counterpart, save what you can (URL/DOM) and emit a JSON note — SOMETHING beats nothing.`;
 
   // Classify from what the plugin already knows; pick ONE strategy block.
   const pickCategory = (): string => {
@@ -701,7 +634,7 @@ Apply the strategy that matches each action. The common case in this task is a r
 ${CAT_F}
 For other action types — a local file write outside the project, a package install (pip/npm/apt/brew), or an env change — apply the analogous "capture the prior state, then record the exact inverse" strategy. If an action only READS (mutates nothing outside the workspace), it needs no backup.` : `## HOW TO BACK UP THIS ACTION
 ${picked ? `\n${picked}\n` : ""}
-If the action is READ-ONLY (only reads/inspects, mutates nothing outside the workspace) return no_backup_needed:true with empty backup_commands/recovery_commands — be conservative, only when CERTAIN it mutates nothing. If nothing above fits, capture whatever recoverable state you can into ${actionDir} or clearly document what cannot be recovered.`;
+If the action is READ-ONLY (only reads/inspects, mutates nothing outside the workspace) return no_backup_needed:true with empty backup_commands/recovery_commands — be conservative, only when CERTAIN it mutates nothing. If nothing above fits, capture whatever recoverable state you can into <STORAGE_DIR> or clearly document what cannot be recovered.`;
 
   if (mode === "inline") {
     const persistDir = `${cwd}/.chats-sandbox/inline-backups`;
@@ -711,6 +644,8 @@ ${directive}
 ${browserPinDirective}${experienceBlock}
 
 ${categoryGuidance}
+
+(Wherever the instructions above say <STORAGE_DIR>, use ${persistDir})
 
 ## RECOVERY NOTE FORMAT — RECORD **AND PERSIST TO DISK** (a recovery is only usable if it survives)
 After performing each out-of-workspace action, do ALL of the following:
@@ -728,10 +663,36 @@ After performing each out-of-workspace action, do ALL of the following:
 You DO perform the actions — you are not only backing up.`;
   }
 
+  // ── PROMPT ORDER = CACHE ORDER ────────────────────────────────────────
+  // Providers cache on an identical PREFIX, so the prompt is assembled
+  // static-first: [identity + directive + category strategy + output format]
+  // is byte-identical across calls, [experience block] is per-server static,
+  // and everything per-action (triggering action, PAGE_STATE, typed values,
+  // paths) lives in the DYNAMIC CONTEXT tail. The static blocks refer to the
+  // storage path as <STORAGE_DIR>; the tail binds it to the real path.
   return `You are a backup subagent for CHATS-Sandbox. A tool call is about to execute that affects state OUTSIDE the workspace. Your job: **actually CREATE a minimal recovery artifact BEFORE the action runs**, then report what you did as a single JSON object.
 
 ${directive}
-${browserPinDirective}
+${browserPinStatic}
+${categoryGuidance}
+${experienceBlock}
+
+## OUTPUT FORMAT
+
+Your **result** is a single JSON object, **separate from any artifact file** (remote-state.json, dumps — those are NOT the result). As your **very last step**, write it to **<STORAGE_DIR>/subagent_result.json** (also print to stdout as a fallback; the file is authoritative). Exact shape:
+
+{"description":"...","backup_commands":["..."],"recovery_commands":["..."],"recovery_mcp_calls":[{"tool":"...","args":{}}],"artifact_paths":["..."],"live_restore":false,"no_backup_needed":false}
+
+- **description**: short summary.
+- **backup_commands**: the commands you ACTUALLY RAN to create the backup.
+- **recovery_commands**: how to reverse the action. For a LOCAL shell reversal (file/package/env) — run verbatim by restore. For a LIVE remote reversal (live_restore:true) — PROSE the restore subagent follows via the MCP. **EMPTY for a deterministic remote reversal** (use recovery_mcp_calls instead).
+- **recovery_mcp_calls**: deterministic remote/MCP reversal ONLY (live_restore:false) — the exact call(s) replayed VERBATIM at restore: {"tool":"<a tool on the action's own server>","args":{…}} (optional "server" to override). EMPTY for live or local-shell reversals.
+- **artifact_paths**: files you created in the storage directory.
+- **live_restore**: **false** when the reversal is a fixed, replayable command/MCP call (most backups); **true** only when reversing needs CURRENT state read at restore (web/UI — refs/layout move).
+- **no_backup_needed**: **true ONLY when the action is READ-ONLY** (changes nothing outside the workspace), with backup/recovery empty. Default false; be conservative.
+
+## DYNAMIC CONTEXT (this action)
+${recentInputBlock}
 TRIGGERING ACTION (what is about to change state):
   Tool: ${toolName}
   Args: ${args}
@@ -741,50 +702,10 @@ ${preStateBlock}
 WORKSPACE (files inside this directory are already captured by tier-2 git snapshot):
   ${cwd}
 
-BACKUP STORAGE DIRECTORY (write any artifact files you create here):
+BACKUP STORAGE DIRECTORY — this is <STORAGE_DIR>: substitute it wherever the instructions above say <STORAGE_DIR>, and write any artifact files here:
   ${actionDir}
-${experienceBlock}
 
-${categoryGuidance}
-
-## OUTPUT FORMAT
-
-**Any files you wrote (pip_freeze.txt, remote-state.json, dumps, copies) are BACKUP ARTIFACTS — they are NOT your result. Your RESULT is a SEPARATE single JSON object that you write to its own file, ${actionDir}/subagent_result.json (see below).**
-
-Your result is a **single JSON object with this exact shape**:
-
-{"description":"...","backup_commands":["cmd1","cmd2"],"recovery_commands":["cmd1","cmd2"],"recovery_mcp_calls":[{"tool":"...","args":{}}],"artifact_paths":["path1"],"live_restore":false,"no_backup_needed":false}
-
-- description: short human-readable summary
-- backup_commands: the commands you ACTUALLY RAN to create the backup
-- recovery_commands: how to reverse the upcoming action. For a LOCAL shell reversal (file/package/env), these are commands run verbatim by chats-sandbox restore. For a LIVE remote reversal (live_restore:true), these are PROSE the restore subagent follows via the MCP. For a DETERMINISTIC remote reversal, leave this EMPTY and use recovery_mcp_calls instead.
-- recovery_mcp_calls: DETERMINISTIC remote/MCP reversal ONLY (live_restore:false). The exact MCP tool call(s) that reverse the action, replayed VERBATIM at restore via tools/call — no agent, no prose, no psql/curl/shell. Array of {"tool":"<an MCP tool on the action's own server>","args":{…}} (optional "server" to override). e.g. a deleted-row reversal → [{"tool":"execute_sql","args":{"sql":"INSERT …"}}]. Leave EMPTY for LIVE reversals and for local shell reversals.
-- artifact_paths: files you created inside the backup storage directory
-- live_restore: YOU decide, based on whether the reversal can be written down NOW as a fixed, replayable MCP call, or genuinely needs an agent to look at LIVE state at restore time.
-    • live_restore=false: the reversal of a REMOTE/MCP action is a fixed, self-contained MCP call → put it in recovery_mcp_calls (NOT recovery_commands). A LOCAL shell reversal (file restore, pip install -r freeze, git checkout) is also live_restore=false → put it in recovery_commands as before. Most backups are this.
-    • live_restore=true (only when needed): reversing genuinely requires reading CURRENT state at restore because positions/handles/contents move — e.g. a web/UI reversal. Leave recovery_mcp_calls empty, describe the fix in recovery_commands (prose); chats-sandbox spawns a fresh agent to re-derive and act via the MCP.
-  When in doubt and your remote reversal is a concrete MCP call, choose false and fill recovery_mcp_calls.
-- no_backup_needed: true ONLY when the action is READ-ONLY (Category R) — it changes nothing outside the workspace. When true, leave backup_commands and recovery_commands empty. Default false. Be conservative: when in doubt, perform the backup and leave this false.
-
-## HOW THE RESULT IS COLLECTED — IMPORTANT
-
-As your VERY LAST step, **WRITE the result JSON object to this exact file path**:
-
-  ${actionDir}/subagent_result.json
-
-This file is the authoritative way CHATS-Sandbox reads your result — write
-it with the bash tool or a write-file tool. **This is a SEPARATE file from
-any backup artifact (remote-state.json, dumps): the result file holds the
-exact shape above, and nothing else.** Also print the JSON to stdout as a
-fallback, but the file is what matters.
-
-CRITICAL:
-- **DO NOT execute the upcoming action.** You only create the backup.
-- **Actually RUN your backup_commands with the bash tool — don't just describe them.**
-- **The LAST thing you do is WRITE ${actionDir}/subagent_result.json** with the result object.
-- Keep the JSON under 2KB.
-- **NEVER ask for clarification, NEVER call a clarify/question/ask tool, NEVER present multiple-choice options. DECIDE YOURSELF and act.**
-- **Always choose the backup approach you judge OPTIMAL for time and disk** — the cheapest, fastest backup that still allows full recovery of the affected state.`;
+**CRITICAL:** **DO NOT execute the upcoming action** — you only back it up. **Actually RUN your backup_commands** (don't just describe them). The LAST thing you do is **write ${actionDir}/subagent_result.json**. Keep the JSON **under 2KB**. **NEVER ask for clarification** or present options — decide yourself and act.`;
 }
 
 /** Validate + normalize a candidate object into our SubagentResponse
@@ -931,6 +852,7 @@ export function runSubagentBackup(
   ctx: HookContext,
   actionDir: string,
   config: SandboxConfig,
+  opts?: { toolAllow?: string[] },
 ): SubagentOutcome {
   if (!config.subagentEnabled) return null;
 
@@ -973,11 +895,15 @@ export function runSubagentBackup(
     // Dynamic MCP loading: only boot the server THIS action uses. For a browser
     // action, boot NOTHING — the subagent runs with only terminal,file toolsets.
     neededServer: _isBrowser ? null : _server,
-    // HARD turn cap: with no browser, a browser-action backup is ~2 calls
-    // (read PAGE_STATE from the prompt → write result). A DB/command backup is
-    // ~3 (create shadow + insert + write result). A call past the cap ends the
-    // session (enforced, not just prompt guidance).
-    maxTurns: 4,
+    // Narrow the MCP tool schema to the capture-relevant tools (read + inverse),
+    // derived by the caller from the experience. Undefined → server unfiltered.
+    toolAllow: opts?.toolAllow,
+    // HARD turn cap (the watcher also ends the run the instant the result file
+    // is valid, so a tight cap only ever trims a pathological tail). Fixed at 3:
+    // the worst legit case (a delete) needs check-info -> read the original
+    // value -> write the backup result = 3 calls. Narrowed tools (toolAllow)
+    // mean the subagent still cannot waste a call enumerating.
+    maxTurns: 3,
   });
   if (!invocation) {
     const runner = config.subagentRunner ?? "claude";
