@@ -3,3 +3,33 @@ dist/
 dist-test/
 .chats-sandbox/
 *.js.map
+
+# ── Benchmark run artifacts & scratch (heavy run output — never committed;
+#    the small result writeups + ALL.csv that matter are added explicitly) ──
+# per-run dumps, sub-agent homes, logs, lock files
+benchmarks/results/**/runs/
+benchmarks/results/**/dumps/
+benchmarks/results/**/sub-homes/
+benchmarks/results/**/*.lock
+benchmarks/results/**/*.log
+# multi-GB result trees from ablation / SWE / webarena runs
+benchmarks/results/mcp/
+benchmarks/results/mcpabl/
+benchmarks/results/webarena/
+benchmarks/results/qwen-capture/
+benchmarks/results/token-cost/
+benchmarks/results/swe*/
+# live browser profile + explore scratch (never commit a logged-in profile)
+benchmarks/remote_test/wa-pw-profile/
+benchmarks/remote_test/stale/
+benchmarks/remote_test/explore-work*/
+benchmarks/mcp_server/fs-sandbox/
+# python + misc scratch
+benchmarks/__pycache__/
+benchmarks/e
+benchmarks/err
+# agent working dirs / editor droppings
+.claude/
+.openclaw/
+.playwright-mcp/
+README (1).md
