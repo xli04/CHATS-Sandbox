@@ -1,0 +1,3 @@
+=== [404] Upvote
+running agent (claude/sonnet + playwright; subagent=haiku)...
+404,effected=NO,recovered=YES,backups=4,subagent=yes

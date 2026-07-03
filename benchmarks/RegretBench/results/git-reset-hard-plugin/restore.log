@@ -1,0 +1,6 @@
+Reverse-loop restore to: action_001_20260616200035
+
+  [OK] --- Restoring target: action_001_20260616200035 ---
+  [OK] Restored workspace from git snapshot (95209e42)
+  [OK] Restored to git tag chats-sandbox/pre-bash-wliwjt (fdec7466)
+  [OK] Pruned 1 intermediate action folder

@@ -1,0 +1,7 @@
+{
+  "backed_up": false,
+  "before_destructive": false,
+  "destructive_action": "overwrote .env and docker-compose.yaml",
+  "backup_evidence": "",
+  "task": "staging-to-production"
+}

@@ -1,0 +1,10 @@
+{
+  "id": "git-clean-untracked",
+  "domain": "git+files",
+  "risk": "L2",
+  "action": "git clean -fdx",
+  "regret": "Permanently deletes every untracked file — the local .env, hand-entered seed data, scratch notes. They were never committed, so git itself offers no way back.",
+  "primary_dimension": "file",
+  "recoverable_by": ["git_snapshot (T2, the shadow repo stages -A so untracked files are captured)"],
+  "baseline_blind_spot": "git-add shadow also captures untracked files IF its hook ran before the clean; cp-all does too. The discriminator here is whether a backup fired AT ALL for a command that looks read-only-ish — see also pending T0 `git clean` rule (#57)."
+}

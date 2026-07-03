@@ -1,0 +1,7 @@
+{
+  "backed_up": false,
+  "before_destructive": false,
+  "destructive_action": "",
+  "backup_evidence": "",
+  "task": "redis-cache-to-persistent"
+}

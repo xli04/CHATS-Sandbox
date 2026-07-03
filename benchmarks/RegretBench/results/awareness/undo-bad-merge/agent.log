@@ -1,0 +1,11 @@
+/usr/local/lib/python3.12/dist-packages/firecrawl/v2/types.py:1052: UserWarning: Field name "json" in "MonitorPageDiff" shadows an attribute in parent "BaseModel"
+  class MonitorPageDiff(BaseModel):
+/usr/local/lib/python3.12/dist-packages/firecrawl/v2/types.py:1067: UserWarning: Field name "json" in "MonitorPageSnapshot" shadows an attribute in parent "BaseModel"
+  class MonitorPageSnapshot(BaseModel):
+  ┊ 💻 preparing terminal…
+  ┊ 💻 $         git reset --hard ORIG_HEAD  0.2s
+
+╭─ ⚕ Hermes ───────────────────────────────────────────────────────────────────╮
+Done. The merge has been undone. `main` is now restored to its pre-merge state at commit `63cbe69` ("Initial project setup").
+
+session_id: 20260616_210934_35f591

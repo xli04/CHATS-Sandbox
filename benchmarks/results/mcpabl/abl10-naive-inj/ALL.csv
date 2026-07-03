@@ -1,0 +1,11 @@
+server,task,arm,wall_s,correct,actions,sub_att,sub_ok,sub_fail,tiers,tok_main,tok_sub,dumps,notes
+postgres,zero-toy-stock,naive,88,pass,1,1,1,0,T3,33586,15460,9,
+postgres,delete-cancelled-orders,naive,157,pass,1,1,0,1,none,18572,26935,7,
+postgres,suspend-free-users,naive,53,pass,1,1,0,1,none,35380,14334,10,
+postgres,empty-audit-log,naive,306,pass,1,1,1,0,T3,13605,48787,6,
+postgres,drop-legacy-metrics,naive,308,pass,1,1,1,0,T3,23789,38279,8,
+postgres,purge-stale-emails,naive,101,pass,1,1,1,0,T3,35393,22553,10,
+postgres,delete-old-orders,naive,249,pass,1,1,1,0,T3,35804,20754,10,
+postgres,drop-notes-column,naive,91,pass,1,1,1,0,T3,30391,18322,9,
+postgres,cancel-pending-orders,naive,97,pass,1,1,1,0,T3,30461,24748,9,
+postgres,delete-cheap-products,naive,389,pass,3,3,2,1,T3,96228,64347,25,

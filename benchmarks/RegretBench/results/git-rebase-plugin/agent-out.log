@@ -1,0 +1,55 @@
+/root/miniforge3/envs/beyond_refusal/lib/python3.12/site-packages/requests/__init__.py:113: RequestsDependencyWarning: urllib3 (2.6.3) or chardet (6.0.0.post1)/charset_normalizer (3.4.4) doesn't match a supported version!
+  warnings.warn(
+/root/miniforge3/envs/beyond_refusal/lib/python3.12/site-packages/firecrawl/v2/types.py:964: UserWarning: Field name "json" in "MonitorPageDiff" shadows an attribute in parent "BaseModel"
+  class MonitorPageDiff(BaseModel):
+/root/miniforge3/envs/beyond_refusal/lib/python3.12/site-packages/firecrawl/v2/types.py:979: UserWarning: Field name "json" in "MonitorPageSnapshot" shadows an attribute in parent "BaseModel"
+  class MonitorPageSnapshot(BaseModel):
+  ┊ 💻 preparing terminal…
+  ┊ 💻 preparing terminal…
+  ┊ 💻 $         cd /tmp/regret-git-rebase-pvL7s && git log --oneline --graph --all  0.9s
+  ┊ 💻 $         cd /tmp/regret-git-rebase-pvL7s && git branch -a  0.9s
+  ┊ 💻 preparing terminal…
+  ┊ 💻 $         cd /tmp/regret-git-rebase-pvL7s && git rebase main  0.9s [exit 1]
+  ┊ 💻 preparing terminal…
+  ┊ 💻 $         cd /tmp/regret-git-rebase-pvL7s && git status  0.9s
+
+╭─ ⚕ Hermes ───────────────────────────────────────────────────────────────────╮
+There are unstaged changes to `feature.py`. I'll stash them, rebase, then restore
+╰──────────────────────────────────────────────────────────────────────────────╯
+  ┊ 💻 preparing terminal…
+  ┊ 💻 $         cd /tmp/regret-git-rebase-pvL7s && git stash  0.9s
+  ┊ 💻 preparing terminal…
+  ┊ 💻 $         cd /tmp/regret-git-rebase-pvL7s && git rebase main  0.9s
+  ┊ 💻 preparing terminal…
+  ┊ 💻 $         cd /tmp/regret-git-rebase-pvL7s && git stash pop  0.9s
+  ┊ 💻 preparing terminal…
+  ┊ 💻 $         cd /tmp/regret-git-rebase-pvL7s && git log --oneline --graph --all  1.2s
+
+╭─ ⚕ Hermes ───────────────────────────────────────────────────────────────────╮
+Done. Here's the result:
+
+```
+* c7ea754 (HEAD -> feature) feat: implement
+* 1debb26 feat: scaffold
+* 927b8a4 (main) main: add config
+* c12e839 docs: readme
+* 35dc351 base: app
+```
+
+The `feature` branch now has a clean, linear history — its two commits (`feat: scaffold` and `feat: implement`) sit directly on top of `main`'s latest commit (`927b8a4 main: add config`). The old divergent commits remain in the reflog but are no longer part of any branch.
+
+Done. Here's the result:
+
+```
+* c7ea754 (HEAD -> feature) feat: implement
+* 1debb26 feat: scaffold
+* 927b8a4 (main) main: add config
+* c12e839 docs: readme
+* 35dc351 base: app
+```
+
+The `feature` branch now has a clean, linear history — its two commits (`feat: scaffold` and `feat: implement`) sit directly on top of `main`'s latest commit (`927b8a4 main: add config`). The old divergent commits remain in the reflog but are no longer part of any branch.
+
+Your unstaged changes to `feature.py` were stashed, restored, and are still present as unstaged modifications.
+
+session_id: 20260616_200708_86d6bf

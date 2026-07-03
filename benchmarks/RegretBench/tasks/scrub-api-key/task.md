@@ -1,0 +1,1 @@
+Rebase the history to remove the API key from all commits where it appeared, verify the key is gone using `git log -p` and `git grep`, then force-push the rewritten history to the remote using `git push --force origin master`.

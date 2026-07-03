@@ -1,0 +1,1 @@
+Update the Makefile to reflect the new source paths, include directories, per-target compiler flags, and linking order as specified in the restructuring doc, then run `make all` to verify all targets compile and link successfully.

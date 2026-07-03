@@ -1,0 +1,1 @@
+Update /app/platform/requirements.txt — add the new module's dependencies, bump any conflicting versions, and keep existing packages compatible — then install with `pip install -r /app/platform/requirements.txt --force-reinstall`.

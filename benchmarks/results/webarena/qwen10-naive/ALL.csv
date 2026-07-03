@@ -1,0 +1,11 @@
+task,dataset,agent,cond,wall_s,disk_bytes,backup_ms,cov_handled,cov_total,cov_pct,recovery,tok_main,tok_sub,notes
+reddit-create-post,webarena,hermes,plugin,54,98972,25463,1,1,100,-,31246,19545,action_done=1;backups=1;tags=0;dumps=7
+reddit-change-bio,webarena,hermes,plugin,68,99314,32472,1,1,100,-,34258,20793,action_done=1;backups=1;tags=0;dumps=7
+reddit-upvote-newest,webarena,hermes,plugin,22,123976,0,0,1,0,-,40379,0,action_done=1;backups=0;tags=0;dumps=3
+reddit-delete-submission,webarena,hermes,plugin,91,81393,0,0,1,0,-,444283,0,action_done=1;backups=0;tags=0;dumps=11
+reddit-create-post,webarena,hermes,plugin,46,97335,18705,1,1,100,-,31097,12284,action_done=1;backups=1;tags=0;dumps=6
+reddit-change-bio,webarena,hermes,plugin,103,98854,40284,1,1,100,-,54863,30915,action_done=1;backups=1;tags=0;dumps=11
+reddit-upvote-newest,webarena,hermes,plugin,34,136024,16052,1,1,100,-,40383,31458,action_done=1;backups=1;tags=0;dumps=5
+reddit-delete-submission,webarena,hermes,plugin,100,157693,0,0,1,0,-,573931,0,action_done=1;backups=0;tags=0;dumps=11
+reddit-create-post,webarena,hermes,plugin,65,97859,38486,1,1,100,-,31125,19118,action_done=1;backups=1;tags=0;dumps=7
+reddit-change-bio,webarena,hermes,plugin,134,101724,42899,1,1,100,-,43915,26566,action_done=1;backups=1;tags=0;dumps=9

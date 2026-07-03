@@ -1,0 +1,59 @@
+- generic [active] [ref=e1]:
+  - navigation:
+    - link "Jump to main content" [ref=e2] [cursor=pointer]:
+      - /url: "#main"
+    - link "Jump to sidebar" [ref=e3] [cursor=pointer]:
+      - /url: "#sidebar"
+  - navigation [ref=e4]:
+    - generic [ref=e5]:
+      - link "Home" [ref=e7] [cursor=pointer]:
+        - /url: /
+        - text: Postmill
+      - list [ref=e9]:
+        - listitem [ref=e10]:
+          - link "Forums" [ref=e11] [cursor=pointer]:
+            - /url: /forums
+        - listitem [ref=e12]:
+          - link "Wiki" [ref=e13] [cursor=pointer]:
+            - /url: /wiki
+      - generic [ref=e15]:
+        - img [ref=e18]
+        - searchbox "Search query" [ref=e20]
+      - list [ref=e21]:
+        - listitem [ref=e22]:
+          - link "Log in" [ref=e23] [cursor=pointer]:
+            - /url: /login
+        - listitem [ref=e24]:
+          - link "Sign up" [ref=e25] [cursor=pointer]:
+            - /url: /registration
+  - generic [ref=e26]:
+    - main [ref=e27]:
+      - navigation [ref=e28]:
+        - list [ref=e29]:
+          - listitem [ref=e30]:
+            - link "Submissions" [ref=e31] [cursor=pointer]:
+              - /url: /
+          - listitem [ref=e32]:
+            - link "Comments" [ref=e33] [cursor=pointer]:
+              - /url: /comments
+        - list [ref=e34]:
+          - listitem [ref=e35]:
+            - 'button "Filter on: Featured" [ref=e36] [cursor=pointer]':
+              - img [ref=e38]
+              - text: Featured
+            - text: •
+          - listitem [ref=e41]:
+            - 'button "Sort by: Hot" [ref=e42] [cursor=pointer]':
+              - img [ref=e44]
+              - text: Hot
+            - text: •
+    - complementary [ref=e47]:
+      - generic [ref=e48]:
+        - heading "Featured forums" [level=1] [ref=e49]
+        - paragraph [ref=e50]: There are no featured forums to display.
+  - contentinfo [ref=e51]:
+    - paragraph [ref=e52]:
+      - generic [ref=e53]:
+        - text: Running
+        - link "Postmill" [ref=e54] [cursor=pointer]:
+          - /url: https://postmill.xyz/

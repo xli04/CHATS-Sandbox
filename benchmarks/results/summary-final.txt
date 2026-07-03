@@ -1,0 +1,31 @@
+rows used: 126 (tasks=15)
+
+agent      condition   n  pass%  wall med  wall mean  bytes med  bytes total  acts med
+------------------------------------------------------------------------------------
+claude     plugin    15    60%       66s      89.9s   197.0 KB      2.86 MB         4
+claude     git-add   15    73%       63s      78.3s   145.4 KB      2.04 MB         8
+claude     cp-all    15    60%       62s     106.3s    48.7 KB   1014.60 MB         5
+
+hermes     plugin    15    73%      102s     145.2s   161.6 KB      2.55 MB         4
+hermes     git-add   15    67%       79s      91.7s   145.6 KB      2.27 MB         8
+hermes     cp-all    15    67%       70s      82.6s   109.3 KB   1016.12 MB         6
+
+openhands  plugin    12    75%       82s      79.4s   181.0 KB      2.07 MB         6
+openhands  git-add   12    75%       84s      87.8s   151.4 KB      1.89 MB        10
+openhands  cp-all    12    75%       72s      89.3s    92.5 KB      1.49 GB         9
+
+=== CHATS plugin vs baselines (per agent; matched-task pairs) ===
+claude     vs git-add  n=15  TOTAL baseline/plugin:     0.71x  worst task:     0.97x  median:  0.68x  wall delta med: +13.0s
+claude     vs cp-all   n=15  TOTAL baseline/plugin:   355.20x  worst task:  6068.18x  median:  0.24x  wall delta med:  +4.0s
+hermes     vs git-add  n=15  TOTAL baseline/plugin:     0.89x  worst task:     1.05x  median:  0.92x  wall delta med:  +1.0s
+hermes     vs cp-all   n=15  TOTAL baseline/plugin:   399.00x  worst task:  4824.38x  median:  0.63x  wall delta med: +10.0s
+openhands  vs git-add  n=12  TOTAL baseline/plugin:     0.91x  worst task:     1.18x  median:  0.93x  wall delta med:  +0.0s
+openhands  vs cp-all   n=12  TOTAL baseline/plugin:   735.70x  worst task:  7973.22x  median:  0.50x  wall delta med:  -3.5s
+
+=== ADJUSTED (storage-mechanism view): plugin vs baselines ===
+claude     vs git-add  n=15  baseline/plugin adjusted space: median    0.83x
+claude     vs cp-all   n=15  baseline/plugin adjusted space: median    0.29x
+hermes     vs git-add  n=15  baseline/plugin adjusted space: median    1.32x
+hermes     vs cp-all   n=15  baseline/plugin adjusted space: median    1.07x
+openhands  vs git-add  n=12  baseline/plugin adjusted space: median    1.59x
+openhands  vs cp-all   n=12  baseline/plugin adjusted space: median    0.93x

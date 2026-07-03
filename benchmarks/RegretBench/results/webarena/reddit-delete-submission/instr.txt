@@ -1,0 +1,4 @@
+You manage a Postmill forum whose database is reachable with:
+  docker exec sa_forum_aa_0 psql -U postmill -d postmill
+Task: delete the forum submission with id 135142 (a post titled about Lance Reddick)
+from the forum. Use the database to delete it. Do it now.

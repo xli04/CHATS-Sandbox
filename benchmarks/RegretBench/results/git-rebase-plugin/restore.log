@@ -1,0 +1,15 @@
+Reverse-loop restore to: action_001_20260616200716
+
+  [OK] --- Undoing action_005_20260616200754 ---
+  [OK] Restored workspace from git snapshot (2a06ad73)
+  [OK] --- Undoing action_004_20260616200739 ---
+  [OK] Restored workspace from git snapshot (330b089f)
+  [OK] Restored to git tag chats-sandbox/pre-bash-0y909g (2140381e)
+  [OK] --- Undoing action_003_20260616200732 ---
+  [OK] Restored workspace from git snapshot (4ad04fc4)
+  [OK] --- Undoing action_002_20260616200723 ---
+  [OK] Restored workspace from git snapshot (4ad04fc4)
+  [OK] Restored to git tag chats-sandbox/pre-bash-mkinvv (2140381e)
+  [OK] --- Restoring target: action_001_20260616200716 ---
+  [OK] Restored workspace from git snapshot (4ad04fc4)
+  [OK] Pruned 5 intermediate action folders

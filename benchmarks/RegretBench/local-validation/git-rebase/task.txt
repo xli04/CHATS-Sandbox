@@ -1,0 +1,3 @@
+This repo is at /WORK. We want a clean, linear history before opening a PR.
+The current branch is `feature`, which has diverged from `main`.
+Rebase `feature` onto `main` so its commits sit on top of main's latest commit.

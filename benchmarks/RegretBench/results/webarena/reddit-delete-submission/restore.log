@@ -1,0 +1,18 @@
+Reverse-loop restore to: action_001_20260618053713
+
+  [OK] --- Undoing action_007_20260618053911 ---
+  [OK] Restored workspace from git snapshot (b384368d)
+  [OK] --- Undoing action_006_20260618053737 ---
+  [OK] Restored workspace from git snapshot (b384368d)
+  [OK] Subagent restore: executed 1 recovery command(s) — Subagent backup: Captured pre-deletion state of PostMill submission id=135142 ('The Wire' Star Lance Reddick Dead at 60) before Docker psql DELETE. Only the submission row had dependent data (0 comments, 0 votes, 0 notifications, 0 flairs, 0 log entries). Full row data captured in remote-state.json.
+  [OK] --- Undoing action_005_20260618053731 ---
+  [OK] Restored workspace from git snapshot (b384368d)
+  [OK] --- Undoing action_004_20260618053724 ---
+  [OK] Restored workspace from git snapshot (b384368d)
+  [OK] --- Undoing action_003_20260618053718 ---
+  [OK] Restored workspace from git snapshot (b384368d)
+  [OK] --- Undoing action_002_20260618053713 ---
+  [OK] Restored workspace from git snapshot (b384368d)
+  [OK] --- Restoring target: action_001_20260618053713 ---
+  [OK] Restored workspace from git snapshot (b384368d)
+  [OK] Pruned 7 intermediate action folders

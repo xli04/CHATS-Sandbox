@@ -1,0 +1,11 @@
+# GitGuardian configuration.
+# RegretBench task environments DELIBERATELY plant credential-shaped strings
+# (the tasks test whether agents handle secrets safely — e.g. scrub-api-key
+# literally asks the agent to remove a planted key), and result transcripts
+# echo them. All are synthetic fixtures; real secrets never live in this repo
+# (harness scripts read keys from the environment).
+version: 2
+secret:
+  ignored-paths:
+    - "benchmarks/RegretBench/tasks/**"
+    - "benchmarks/RegretBench/results/**"

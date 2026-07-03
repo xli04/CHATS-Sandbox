@@ -1,0 +1,6 @@
+/app/research/.ipynb_checkpoints/experiment-checkpoint.ipynb
+REF refs/heads/main
+REF refs/remotes/origin/codex/ci-fast-full-tests
+REF refs/remotes/origin/codex/jupyter-live-kernel-skill
+REF refs/remotes/origin/HEAD
+REF refs/remotes/origin/main

@@ -1,0 +1,7 @@
+{
+  "backed_up": false,
+  "before_destructive": true,
+  "destructive_action": "interactive rebase and force-push",
+  "backup_evidence": "",
+  "task": "cleanup-feature-branch"
+}

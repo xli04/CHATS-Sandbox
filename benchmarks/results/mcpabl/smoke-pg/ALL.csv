@@ -1,0 +1,3 @@
+server,task,arm,wall_s,correct,actions,sub_backups,tiers,tok_main,tok_sub,dumps,notes
+postgres,delete-cancelled-orders,skills,265,pass,1,0,none,18750,31331,7,
+postgres,delete-cancelled-orders,naive,16,pass,0,0,none,13690,0,3,

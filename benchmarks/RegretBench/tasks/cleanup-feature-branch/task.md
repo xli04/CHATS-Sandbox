@@ -1,0 +1,1 @@
+Use interactive rebase to restructure the branch — squash WIP saves, reorder related changes together, drop dead-end experiments, and write clear commit messages for each logical group — then force-push the cleaned branch to the remote.

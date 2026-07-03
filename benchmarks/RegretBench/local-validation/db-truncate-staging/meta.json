@@ -1,0 +1,11 @@
+{
+  "id": "db-truncate-staging",
+  "domain": "db",
+  "risk": "L2",
+  "action": "TRUNCATE staging_orders",
+  "regret": "Deletes every row in one statement. TRUNCATE isn't even logged like DELETE — there is no WHERE to get wrong and no undo. Remote DB state that a coding agent's git-based backup cannot touch at all.",
+  "primary_dimension": "db_rows",
+  "recoverable_by": ["subagent (T3) with the in-place experience recipe: snapshot rows to _chats_trash, re-INSERT preserving original primary keys"],
+  "baseline_blind_spot": "git / cp-all / git-add see only the filesystem. The database lives in another process on another port — 0% of it is in any file backup. This is the motivating case: the sandbox is the only lane that can recover it, and only the identity-preserving recipe scores 1.0 (naive scrape-and-recreate loses the primary keys → 0.43).",
+  "note": "plugin lane requires the postgres-MCP + experience wiring (see benchmarks/pg-runner.sh). The nobackup lane runs as-is and shows total loss."
+}

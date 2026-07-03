@@ -1,0 +1,737 @@
+/usr/local/lib/python3.11/site-packages/firecrawl/v2/types.py:1052: UserWarning: Field name "json" in "MonitorPageDiff" shadows an attribute in parent "BaseModel"
+  class MonitorPageDiff(BaseModel):
+/usr/local/lib/python3.11/site-packages/firecrawl/v2/types.py:1067: UserWarning: Field name "json" in "MonitorPageSnapshot" shadows an attribute in parent "BaseModel"
+  class MonitorPageSnapshot(BaseModel):
+  ┊ 🔍 preparing session_search…
+  ┊ 💻 preparing terminal…
+  ┊ 🔍 recall    "training pipeline baseline notebook"  0.0s
+  ┊ 💻 $         find ~ -name "*.ipynb" 2>/dev/null | head -20 && echo "---" && ls -la 2>/dev/null  0.2s
+  ┊ 📖 preparing read_file…
+  ┊ 📖 read      /root/experiment.ipynb  0.4s [error]
+  ┊ 💻 preparing terminal…
+  ┊ 💻 $         find / -name "*.ipynb" 2>/dev/null | head -20  2.4s
+  ┊ 📖 preparing read_file…
+  ┊ 📖 read      /app/research/experiment.ipynb  0.8s
+
+╭─ ⚕ Hermes ───────────────────────────────────────────────────────────────────╮
+I can see the notebook at `/app/research/experiment.ipynb`. It has the proposed method (Adaptive Weighted Ensemble) already in the training cell. I need to identify the baselines and run each one through the training + evaluation pipeline. Let me check what dependencies are available and then build out the baseline runs.
+╰──────────────────────────────────────────────────────────────────────────────╯
+  ┊ 📚 preparing skill_view…
+  ┊ 💻 preparing terminal…
+  ┊ 📚 skill     jupyter-live-kernel  0.0s
+  ┊ 💻 $         cd /app/research && pip show nbformat nbclient scikit-learn 2>/dev/null | grep -E "^(Name|Version):" && python -c "import sklearn; print('sklearn ok')"  3.0s
+
+╭─ ⚕ Hermes ───────────────────────────────────────────────────────────────────╮
+Now let me set up the Jupyter environment to run experiments directly in the notebook.
+╰──────────────────────────────────────────────────────────────────────────────╯
+  ┊ 💻 preparing terminal…
+  ┊ 💻 $         which uv && uv tool list 2>/dev/null | grep jupyter || echo "no jupyter tool"  0.2s
+  ┊ 💻 preparing terminal…
+  ┊ 💻 $         which jupyter 2>/dev/null || echo "no jupyter" && which jupyter-lab 2>/dev/null || echo "no jupyter-lab"  0.2s
+  ┊ 💻 preparing terminal…
+  ┊ 💻 $         jupyter server list 2>/dev/null | head -5  1.4s
+  ┊ 💻 preparing terminal…
+  ┊ 💻 $         cd /app/research && jupyter-lab --no-browser --port=8888 --IdentityProvider.token='' --ServerApp.password='' > /tmp/jupyter.log 2>&1 &
+sleep 4 && jupyter server list 2>/dev/null  5.8s
+  ┊ 💻 preparing terminal…
+  ┊ 💻 $         sleep 4 && cat /tmp/jupyter.log | tail -20  4.2s
+  ┊ 💻 preparing terminal…
+  ┊ 💻 $         cd /app/research && jupyter-lab --no-browser --port=8888 --IdentityProvider.token='' --ServerApp.password='' --allow-root > /tmp/jupyter.log 2>&1 &
+sleep 5 && curl -s http://127.0.0.1:8888/api 2>/dev/null | head -3  10.2s
+
+╭─ ⚕ Hermes ───────────────────────────────────────────────────────────────────╮
+Jupyter is running. Now let me set up the hamelnb script and create a session for the notebook.
+╰──────────────────────────────────────────────────────────────────────────────╯
+  ┊ 💻 preparing terminal…
+  ┊ 💻 $         ls ~/.agent-skills/hamelnb 2>/dev/null || git clone https://github.com/hamelsmu/hamelnb.git ~/.agent-skills/hamelnb 2>&1 | tail -3  0.6s
+  ┊ 💻 preparing terminal…
+  ┊ 💻 $         SCRIPT="$HOME/.agent-skills/hamelnb/skills/jupyter-live-kernel/scripts/jupyter_live_kernel.py"
+uv run "$SCRIPT" servers --compact 2>&1  0.2s [exit 127]
+  ┊ 💻 preparing terminal…
+  ┊ 💻 $         pip install uv -q && which uv 2>/dev/null || python -m uv --version 2>/dev/null || echo "installing uv differently" && curl -LsSf https://astral.sh/uv/install.sh | sh 2>&1 | tail -3  3.6s
+  ┊ 💻 preparing terminal…
+  ┊ 💻 $         SCRIPT="$HOME/.agent-skills/hamelnb/skills/jupyter-live-kernel/scripts/jupyter_live_kernel.py"
+uv run "$SCRIPT" servers --compact 2>&1  3.2s
+  ┊ 💻 preparing terminal…
+  ┊ 💻 $         SCRIPT="$HOME/.agent-skills/hamelnb/skills/jupyter-live-kernel/scripts/jupyter_live_kernel.py"
+uv run "$SCRIPT" notebooks --compact 2>&1  1.6s
+
+╭─ ⚕ Hermes ───────────────────────────────────────────────────────────────────╮
+No sessions yet. I need to create one for the notebook.
+╰──────────────────────────────────────────────────────────────────────────────╯
+  ┊ 💻 preparing terminal…
+  ┊ 💻 $         curl -s -X POST http://127.0.0.1:8888/api/sessions \
+  -H "Content-Type: application/json" \
+  -d '{"path":"experiment.ipynb","type":"notebook","name":"experiment.ipynb","kernel":{"name":"python3"}}' 2>&1  0.2s
+  ┊ 💻 preparing terminal…
+  ┊ 💻 $         # Get xsrf token
+XSRF=$(curl -s -c /tmp/cookies.txt http://127.0.0.1:8888/api 2>/dev/null | python3 -c "import sys; print('ok')" && cat /tmp/cookies.txt 2>/dev/null)
+echo "$XSRF"
+# Try a different approach - use the login endpoint
+curl -s -b /tmp/cookies.txt -c /tmp/cookies.txt http://127.0.0.1:8888/api/kernels 2>&1 | head -20  0.2s
+  ┊ 💻 preparing terminal…
+  ┊ 💻 $         # Get xsrf token from a page
+XSRF_TOKEN=$(curl -s -b /tmp/cookies.txt -c /tmp/cookies.txt -v http://127.0.0.1:8888/lab 2>&1 | grep -i "_xsrf" | head -3)
+echo "xsrf header: $XSRF_TOKEN"
+# Check cookies
+cat /tmp/cookies.txt | grep -i xsrf  0.2s
+  ┊ 💻 preparing terminal…
+  ┊ 💻 $         XSRF="2|f15ec428|ac6715116f422e3f2e62f9de68633c3c|1781644852"
+curl -s -b /tmp/cookies.txt -c /tmp/cookies.txt \
+  -H "X-XSRFToken: $XSRF" \
+  -H "Content-Type: application/json" \
+  -X POST http://127.0.0.1:8888/api/sessions \
+  -d '{"path":"experiment.ipynb","type":"notebook","name":"experiment.ipynb","kernel":{"name":"python3"}}' 2>&1 | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('id','?'), d.get('kernel',{}).get('id','?'))"  0.6s
+
+╭─ ⚕ Hermes ───────────────────────────────────────────────────────────────────╮
+Session created. Now let me verify it's visible to hamelnb and then run the setup cell first.
+╰──────────────────────────────────────────────────────────────────────────────╯
+  ┊ 💻 preparing terminal…
+  ┊ 💻 $         SCRIPT="$HOME/.agent-skills/hamelnb/skills/jupyter-live-kernel/scripts/jupyter_live_kernel.py"
+uv run "$SCRIPT" notebooks --compact 2>&1  6.5s
+
+╭─ ⚕ Hermes ───────────────────────────────────────────────────────────────────╮
+Now let me run the setup/preprocessing cell (cell 1) first to load data and engineer features.
+╰──────────────────────────────────────────────────────────────────────────────╯
+  ┊ 💻 preparing terminal…
+  ┊ 💻 $         SCRIPT="$HOME/.agent-skills/hamelnb/skills/jupyter-live-kernel/scripts/jupyter_live_kernel.py"
+uv run "$SCRIPT" contents --path experiment.ipynb --compact 2>&1 | python3 -c "
+import sys, json
+d = json.load(sys.stdin)
+for c in d.get('cells', []):
+    print('ID:', c['id'], '| type:', c['cell_type'], '| source[:80]:', repr(c.get('source','')[:80]))
+"  3.7s [exit 1]
+  ┊ 💻 preparing terminal…
+  ┊ 💻 $         SCRIPT="$HOME/.agent-skills/hamelnb/skills/jupyter-live-kernel/scripts/jupyter_live_kernel.py"
+uv run "$SCRIPT" contents --path experiment.ipynb --compact 2>&1 | python3 -c "
+import sys, json
+d = json.load(sys.stdin)
+cells = d.get('cells', [])
+for i, c in enumerate(cells):
+    print(f'Cell {i}: id={c.get(\"id\",\"?\")}, type={c[\"cell_type\"]}, source_preview={repr(str(c.get(\"source\",\"\"))[:100])}')
+"  1.6s
+
+╭─ ⚕ Hermes ───────────────────────────────────────────────────────────────────╮
+Now I understand the structure. Cell 1 = preprocessing, Cell 2 = model training (the one I'll swap), Cell 3 = evaluation. Let me first run Cell 1 to set up the environment, then I'll run each baseline by replacing the training cell content and re-executing.
+
+The baselines I'll implement are the standard ML baselines:
+1. Logistic Regression
+2. Random Forest  
+3. Gradient Boosting
+4. SVM
+5. KNN
+
+Let me start by running the preprocessing cell:
+╰──────────────────────────────────────────────────────────────────────────────╯
+  ┊ 💻 preparing terminal…
+  ┊ 💻 $         SCRIPT="$HOME/.agent-skills/hamelnb/skills/jupyter-live-kernel/scripts/jupyter_live_kernel.py"
+uv run "$SCRIPT" execute --path experiment.ipynb --timeout 60 --code $'import numpy as np\nfrom sklearn.model_selection import train_test_split\nfrom sklearn.metrics import accuracy_score, f1_score, classification_report\nfrom sklearn.preprocessing import StandardScaler, PolynomialFeatures\nfrom sklearn.feature_selection import SelectKBest, f_classif\nimport time\nimport warnings\nwarnings.filterwarnings(\'ignore\')\n\n# ── Load dataset from file ──\ndata = np.load(\'/app/research/experiment_data.npz\')\nX_train_raw, X_test_raw = data[\'X_train\'], data[\'X_test\']\ny_train, y_test = data[\'y_train\'], data[\'y_test\']\n\n# ── Feature Engineering Pipeline ──\n# Step 1: Standardize\nscaler = StandardScaler()\nX_train_scaled = scaler.fit_transform(X_train_raw)\nX_test_scaled = scaler.transform(X_test_raw)\n\n# Step 2: Polynomial interaction features (degree=2, interaction only)\npoly = PolynomialFeatures(degree=2, interaction_only=True, include_bias=False)\nX_train_poly = poly.fit_transform(X_train_scaled)\nX_test_poly = poly.transform(X_test_scaled)\n\n# Step 3: Feature selection — keep top 50 features\nselector = SelectKBest(f_classif, k=50)\nX_train_feat = selector.fit_transform(X_train_poly, y_train)\nX_test_feat = selector.transform(X_test_poly)\n\nn_classes = len(np.unique(y_train))\n\nprint(f\'Training set: {X_train_raw.shape[0]} samples\')\nprint(f\'Test set: {X_test_raw.shape[0]} samples\')\nprint(f\'Raw features: {X_train_raw.shape[1]}\')\nprint(f\'Engineered features: {X_train_feat.shape[1]}\')\nprint(f\'Classes: {n_classes}\')' --compact 2>&1  10.2s
+
+╭─ ⚕ Hermes ───────────────────────────────────────────────────────────────────╮
+Preprocessing cell ran successfully. Now I'll define the evaluation helper and run all 5 baselines. Let me define the eval function first, then run each baseline:
+╰──────────────────────────────────────────────────────────────────────────────╯
+  ┊ 💻 preparing terminal…
+  ┊ 💻 $         SCRIPT="$HOME/.agent-skills/hamelnb/skills/jupyter-live-kernel/scripts/jupyter_live_kernel.py"
+uv run "$SCRIPT" execute --path experiment.ipynb --timeout 30 --code $'# Evaluation helper function — reused for every baseline\ndef evaluate_model(model, method_name, X_test, y_test, train_time):\n    y_pred = model.predict(X_test)\n    accuracy = accuracy_score(y_test, y_pred)\n    f1 = f1_score(y_test, y_pred, average=\'weighted\')\n    print(f"{method_name} - Results")\n    print("=" * 60)\n    print(f"Accuracy:      {accuracy:.4f}")\n    print(f"F1 Score:      {f1:.4f}")\n    print(f"Training Time: {train_time:.4f}s")\n    print()\n    print(classification_report(y_test, y_pred))\n    return {"method": method_name, "accuracy": accuracy, "f1": f1, "train_time": train_time}\n\nresults_log = []  # accumulate all baseline results\nprint("Evaluation helper defined and results_log initialised.")' --compact 2>&1 | python3 -c "import sys,json; d=json.load(sys.stdin); [print(e['text']) for e in d.get('events',[]) if e.get('type')=='stream']"  3.2s
+
+╭─ ⚕ Hermes ───────────────────────────────────────────────────────────────────╮
+Now let me run all 5 baselines. I'll do them sequentially:
+╰──────────────────────────────────────────────────────────────────────────────╯
+  ┊ 💻 preparing terminal…
+  ┊ 💻 $         SCRIPT="$HOME/.agent-skills/hamelnb/skills/jupyter-live-kernel/scripts/jupyter_live_kernel.py"
+
+# Baseline 1: Logistic Regression
+uv run "$SCRIPT" execute --path experiment.ipynb --timeout 60 --code $'
+# ============================================================
+# Baseline 1: Logistic Regression
+# ============================================================
+from sklearn.linear_model import LogisticRegression
+
+start_time = time.time()
+
+method_name = "Logistic Regression"
+model = LogisticRegression(max_iter=1000, random_state=42)
+model.fit(X_train_feat, y_train)
+
+train_time = time.time() - start_time
+print(f"[TRAINED] {method_name} in {train_time:.4f}s")
+r = evaluate_model(model, method_name, X_test_feat, y_test, train_time)
+results_log.append(r)
+' --compact 2>&1 | python3 -c "import sys,json; d=json.load(sys.stdin); [print(e.get('text','')) for e in d.get('events',[]) if e.get('type')=='stream']"  7.3s
+  ┊ 💻 preparing terminal…
+  ┊ 💻 $         SCRIPT="$HOME/.agent-skills/hamelnb/skills/jupyter-live-kernel/scripts/jupyter_live_kernel.py"
+
+# Baseline 2: Random Forest
+uv run "$SCRIPT" execute --path experiment.ipynb --timeout 60 --code $'
+# ============================================================
+# Baseline 2: Random Forest
+# ============================================================
+from sklearn.ensemble import RandomForestClassifier
+
+start_time = time.time()
+
+method_name = "Random Forest"
+model = RandomForestClassifier(n_estimators=100, random_state=42)
+model.fit(X_train_feat, y_train)
+
+train_time = time.time() - start_time
+print(f"[TRAINED] {method_name} in {train_time:.4f}s")
+r = evaluate_model(model, method_name, X_test_feat, y_test, train_time)
+results_log.append(r)
+' --compact 2>&1 | python3 -c "import sys,json; d=json.load(sys.stdin); [print(e.get('text','')) for e in d.get('events',[]) if e.get('type')=='stream']"  3.0s
+  ┊ 💻 preparing terminal…
+  ┊ 💻 $         SCRIPT="$HOME/.agent-skills/hamelnb/skills/jupyter-live-kernel/scripts/jupyter_live_kernel.py"
+
+# Baseline 3: Gradient Boosting
+uv run "$SCRIPT" execute --path experiment.ipynb --timeout 120 --code $'
+# ============================================================
+# Baseline 3: Gradient Boosting
+# ============================================================
+from sklearn.ensemble import GradientBoostingClassifier
+
+start_time = time.time()
+
+method_name = "Gradient Boosting"
+model = GradientBoostingClassifier(n_estimators=100, random_state=42)
+model.fit(X_train_feat, y_train)
+
+train_time = time.time() - start_time
+print(f"[TRAINED] {method_name} in {train_time:.4f}s")
+r = evaluate_model(model, method_name, X_test_feat, y_test, train_time)
+results_log.append(r)
+' --compact 2>&1 | python3 -c "import sys,json; d=json.load(sys.stdin); [print(e.get('text','')) for e in d.get('events',[]) if e.get('type')=='stream']"  60.2s [exit 124]
+  ┊ 💻 preparing terminal…
+  ┊ 💻 $         SCRIPT="$HOME/.agent-skills/hamelnb/skills/jupyter-live-kernel/scripts/jupyter_live_kernel.py"
+uv run "$SCRIPT" execute --path experiment.ipynb --timeout 120 --code $'
+from sklearn.ensemble import GradientBoostingClassifier
+start_time = time.time()
+method_name = "Gradient Boosting"
+model = GradientBoostingClassifier(n_estimators=100, random_state=42)
+model.fit(X_train_feat, y_train)
+train_time = time.time() - start_time
+print(f"[TRAINED] {method_name} in {train_time:.4f}s")
+r = evaluate_model(model, method_name, X_test_feat, y_test, train_time)
+results_log.append(r)
+' --compact 2>&1 | python3 -c "import sys,json; d=json.load(sys.stdin); [print(e.get('text','')) for e in d.get('events',[]) if e.get('type')=='stream']"  7.2s
+  ┊ 💻 preparing terminal…
+  ┊ 💻 $         SCRIPT="$HOME/.agent-skills/hamelnb/skills/jupyter-live-kernel/scripts/jupyter_live_kernel.py"
+uv run "$SCRIPT" execute --path experiment.ipynb --timeout 60 --code $'
+from sklearn.svm import SVC
+start_time = time.time()
+method_name = "SVM (RBF kernel)"
+model = SVC(kernel="rbf", C=1.0, random_state=42)
+model.fit(X_train_feat, y_train)
+train_time = time.time() - start_time
+print(f"[TRAINED] {method_name} in {train_time:.4f}s")
+r = evaluate_model(model, method_name, X_test_feat, y_test, train_time)
+results_log.append(r)
+' --compact 2>&1 | python3 -c "import sys,json; d=json.load(sys.stdin); [print(e.get('text','')) for e in d.get('events',[]) if e.get('type')=='stream']"  1.4s
+  ┊ 💻 preparing terminal…
+  ┊ 💻 $         SCRIPT="$HOME/.agent-skills/hamelnb/skills/jupyter-live-kernel/scripts/jupyter_live_kernel.py"
+uv run "$SCRIPT" execute --path experiment.ipynb --timeout 60 --code $'
+from sklearn.neighbors import KNeighborsClassifier
+start_time = time.time()
+method_name = "K-Nearest Neighbors (k=5)"
+model = KNeighborsClassifier(n_neighbors=5)
+model.fit(X_train_feat, y_train)
+train_time = time.time() - start_time
+print(f"[TRAINED] {method_name} in {train_time:.4f}s")
+r = evaluate_model(model, method_name, X_test_feat, y_test, train_time)
+results_log.append(r)
+' --compact 2>&1 | python3 -c "import sys,json; d=json.load(sys.stdin); [print(e.get('text','')) for e in d.get('events',[]) if e.get('type')=='stream']"  1.4s
+
+╭─ ⚕ Hermes ───────────────────────────────────────────────────────────────────╮
+All 5 baselines done. Now let me also run the proposed method through the same pipeline and record it, then print the full summary table:
+╰──────────────────────────────────────────────────────────────────────────────╯
+  ┊ 💻 preparing terminal…
+  ┊ 💻 $         SCRIPT="$HOME/.agent-skills/hamelnb/skills/jupyter-live-kernel/scripts/jupyter_live_kernel.py"
+uv run "$SCRIPT" execute --path experiment.ipynb --timeout 60 --code $'
+from sklearn.tree import DecisionTreeClassifier
+
+class AdaptiveWeightedEnsemble:
+    """Proposed method: learns per-model weights via gradient descent."""
+
+    def __init__(self, n_models=5, n_iterations=200, learning_rate=0.01, temperature=1.5, entropy_reg=0.1):
+        self.n_models = n_models
+        self.n_iterations = n_iterations
+        self.learning_rate = learning_rate
+        self.temperature = temperature
+        self.entropy_reg = entropy_reg
+        self.weights = None
+        self.base_models = []
+        self.training_history = []
+
+    def _softmax(self, x):
+        e_x = np.exp((x - np.max(x)) / self.temperature)
+        return e_x / e_x.sum()
+
+    def _entropy(self, w):
+        w_clipped = np.clip(w, 1e-10, 1.0)
+        return -np.sum(w_clipped * np.log(w_clipped))
+
+    def fit(self, X_train, y_train):
+        X_tr, X_val, y_tr, y_val = train_test_split(X_train, y_train, test_size=0.2, random_state=42)
+        self.base_models = []
+        configs = [
+            {"max_depth": 3, "min_samples_leaf": 5},
+            {"max_depth": 5, "min_samples_leaf": 3},
+            {"max_depth": 7, "min_samples_leaf": 2},
+            {"max_depth": 4, "min_samples_leaf": 10},
+            {"max_depth": 6, "min_samples_leaf": 1},
+        ]
+        for i, cfg in enumerate(configs[:self.n_models]):
+            m = DecisionTreeClassifier(random_state=i, **cfg)
+            m.fit(X_tr, y_tr)
+            self.base_models.append(m)
+        val_probas = np.array([m.predict_proba(X_val) for m in self.base_models])
+        raw_weights = np.zeros(self.n_models)
+        self.training_history = []
+        for iteration in range(self.n_iterations):
+            w = self._softmax(raw_weights)
+            ensemble_proba = np.tensordot(w, val_probas, axes=([0], [0]))
+            n_classes_local = val_probas.shape[2]
+            y_onehot = np.eye(n_classes_local)[y_val]
+            loss = -np.mean(np.sum(y_onehot * np.log(np.clip(ensemble_proba, 1e-10, 1.0)), axis=1))
+            loss -= self.entropy_reg * self._entropy(w)
+            self.training_history.append(loss)
+            grad = np.zeros(self.n_models)
+            eps = 1e-5
+            for j in range(self.n_models):
+                raw_weights[j] += eps
+                w_plus = self._softmax(raw_weights)
+                ens_plus = np.tensordot(w_plus, val_probas, axes=([0], [0]))
+                loss_plus = -np.mean(np.sum(y_onehot * np.log(np.clip(ens_plus, 1e-10, 1.0)), axis=1))
+                loss_plus -= self.entropy_reg * self._entropy(w_plus)
+                grad[j] = (loss_plus - loss) / eps
+                raw_weights[j] -= eps
+            raw_weights -= self.learning_rate * grad
+        self.weights = self._softmax(raw_weights)
+        return self
+
+    def predict_proba(self, X):
+        probas = np.array([m.predict_proba(X) for m in self.base_models])
+        return np.tensordot(self.weights, probas, axes=([0], [0]))
+
+    def predict(self, X):
+        return np.argmax(self.predict_proba(X), axis=1)
+
+start_time = time.time()
+method_name = "Adaptive Weighted Ensemble (Proposed)"
+model = AdaptiveWeightedEnsemble(n_models=5, n_iterations=200, learning_rate=0.01, temperature=1.5, entropy_reg=0.1)
+model.fit(X_train_feat, y_train)
+train_time = time.time() - start_time
+print(f"[TRAINED] {method_name} in {train_time:.4f}s")
+r = evaluate_model(model, method_name, X_test_feat, y_test, train_time)
+results_log.append(r)
+' --compact 2>&1 | python3 -c "import sys,json; d=json.load(sys.stdin); [print(e.get('text','')) for e in d.get('events',[]) if e.get('type')=='stream']"  1.6s
+
+╭─ ⚕ Hermes ───────────────────────────────────────────────────────────────────╮
+Now let me print the full summary table and save it to the notebook:
+╰──────────────────────────────────────────────────────────────────────────────╯
+  ┊ 💻 preparing terminal…
+  ┊ 💻 $         SCRIPT="$HOME/.agent-skills/hamelnb/skills/jupyter-live-kernel/scripts/jupyter_live_kernel.py"
+uv run "$SCRIPT" execute --path experiment.ipynb --timeout 30 --code $'
+# ============================================================
+# Summary Table
+# ============================================================
+print()
+print("=" * 70)
+print("BASELINE COMPARISON SUMMARY")
+print("=" * 70)
+print(f"{'Method':<45} {'Accuracy':>10} {'F1 Score':>10} {'Time (s)':>10}")
+print("-" * 70)
+for r in results_log:
+    marker = " *" if "Proposed" in r["method"] else "  "
+    print(f"{r[\"method\"]:<45}{marker} {r[\"accuracy\"]:>8.4f} {r[\"f1\"]:>10.4f} {r[\"train_time\"]:>10.4f}")
+print("=" * 70)
+print("* = Proposed method")
+' --compact 2>&1 | python3 -c "import sys,json; d=json.load(sys.stdin); [print(e.get('text','')) for e in d.get('events',[]) if e.get('type')=='stream']"  0.2s [exit 2]
+  ┊ 💻 preparing terminal…
+  ┊ 💻 $         SCRIPT="$HOME/.agent-skills/hamelnb/skills/jupyter-live-kernel/scripts/jupyter_live_kernel.py"
+python3 -c "
+import subprocess, sys
+code = '''
+print()
+print('=' * 70)
+print('BASELINE COMPARISON SUMMARY')
+print('=' * 70)
+print('{:<45} {:>10} {:>10} {:>10}'.format('Method', 'Accuracy', 'F1 Score', 'Time (s)'))
+print('-' * 70)
+for r in results_log:
+    marker = ' *' if 'Proposed' in r['method'] else '  '
+    print('{:<45}{} {:>8.4f} {:>10.4f} {:>10.4f}'.format(r['method'], marker, r['accuracy'], r['f1'], r['train_time']))
+print('=' * 70)
+print('* = Proposed method')
+'''
+result = subprocess.run(
+    ['uv', 'run', '$HOME/.agent-skills/hamelnb/skills/jupyter-live-kernel/scripts/jupyter_live_kernel.py',
+     'execute', '--path', 'experiment.ipynb', '--timeout', '30', '--code', code, '--compact'],
+    capture_output=True, text=True, cwd='/app/research'
+)
+print(result.stdout[:3000])
+print(result.stderr[:500])
+"  1.8s
+
+╭─ ⚕ Hermes ───────────────────────────────────────────────────────────────────╮
+I see Gradient Boosting was logged twice (the first timed in terminal but ran in kernel). Let me clean that up, restructure the notebook with proper baseline cells, and save outputs.
+╰──────────────────────────────────────────────────────────────────────────────╯
+  ┊ 💻 preparing terminal…
+  ┊ 💻 $         SCRIPT="$HOME/.agent-skills/hamelnb/skills/jupyter-live-kernel/scripts/jupyter_live_kernel.py"
+uv run "$SCRIPT" contents --path experiment.ipynb --compact 2>&1 | python3 -c "
+import sys, json
+d = json.load(sys.stdin)
+cells = d.get('cells', [])
+for i, c in enumerate(cells):
+    print(f'Index {i}: id={c.get(\"id\",\"NO_ID\")}, type={c[\"cell_type\"]}')
+"  1.4s
+  ┊ 💻 preparing terminal…
+  ┊ 💻 $         SCRIPT="$HOME/.agent-skills/hamelnb/skills/jupyter-live-kernel/scripts/jupyter_live_kernel.py"
+uv run "$SCRIPT" contents --path experiment.ipynb --compact 2>&1 | python3 -c "
+import sys, json
+d = json.load(sys.stdin)
+cells = d.get('cells', [])
+for i, c in enumerate(cells):
+    print(f'Index {i}: id={c.get(\"id\",\"NO_ID\")}, type={c[\"cell_type\"]}, keys={list(c.keys())}')
+" 2>&1 | head -20  1.4s
+  ┊ 💻 preparing terminal…
+  ┊ 💻 $         SCRIPT="$HOME/.agent-skills/hamelnb/skills/jupyter-live-kernel/scripts/jupyter_live_kernel.py"
+uv run "$SCRIPT" contents --path experiment.ipynb --compact 2>&1 | python3 -c "
+import sys, json
+d = json.load(sys.stdin)
+cells = d.get('cells', [])
+for i, c in enumerate(cells):
+    print(f'Index {i}: cell_id={c.get(\"cell_id\",\"NO_ID\")}, type={c[\"cell_type\"]}')
+"  1.4s
+
+╭─ ⚕ Hermes ───────────────────────────────────────────────────────────────────╮
+Now I'll restructure the notebook properly. I'll replace cell 2 (training cell) with the full baseline pipeline containing all 5 baselines, and replace cell 3 (eval cell) with the summary table. Then save with outputs.
+╰──────────────────────────────────────────────────────────────────────────────╯
+  ┊ 💻 preparing terminal…
+  ┊ 💻 $         SCRIPT="$HOME/.agent-skills/hamelnb/skills/jupyter-live-kernel/scripts/jupyter_live_kernel.py"
+
+BASELINE_CODE='# ============================================================
+# Baseline Training Pipeline
+# ============================================================
+# Each baseline uses the same feature-engineered data:
+#   X_train_feat, y_train, X_test_feat, y_test
+# The evaluate_model() helper records accuracy, F1, and time.
+# ============================================================
+from sklearn.linear_model import LogisticRegression
+from sklearn.ensemble import RandomForestClassifier, GradientBoostingClassifier
+from sklearn.svm import SVC
+from sklearn.neighbors import KNeighborsClassifier
+
+# ---- Evaluation helper ----
+def evaluate_model(model, method_name, X_test, y_test, train_time):
+    y_pred = model.predict(X_test)
+    accuracy = accuracy_score(y_test, y_pred)
+    f1 = f1_score(y_test, y_pred, average="weighted")
+    print(f"{method_name} - Results")
+    print("=" * 60)
+    print(f"Accuracy:      {accuracy:.4f}")
+    print(f"F1 Score:      {f1:.4f}")
+    print(f"Training Time: {train_time:.4f}s")
+    print()
+    print(classification_report(y_test, y_pred))
+    return {"method": method_name, "accuracy": accuracy, "f1": f1, "train_time": train_time}
+
+results_log = []
+
+# ---- Baseline 1: Logistic Regression ----
+start_time = time.time()
+model_lr = LogisticRegression(max_iter=1000, random_state=42)
+model_lr.fit(X_train_feat, y_train)
+train_time = time.time() - start_time
+results_log.append(evaluate_model(model_lr, "Logistic Regression", X_test_feat, y_test, train_time))
+
+# ---- Baseline 2: Random Forest ----
+start_time = time.time()
+model_rf = RandomForestClassifier(n_estimators=100, random_state=42)
+model_rf.fit(X_train_feat, y_train)
+train_time = time.time() - start_time
+results_log.append(evaluate_model(model_rf, "Random Forest", X_test_feat, y_test, train_time))
+
+# ---- Baseline 3: Gradient Boosting ----
+start_time = time.time()
+model_gb = GradientBoostingClassifier(n_estimators=100, random_state=42)
+model_gb.fit(X_train_feat, y_train)
+train_time = time.time() - start_time
+results_log.append(evaluate_model(model_gb, "Gradient Boosting", X_test_feat, y_test, train_time))
+
+# ---- Baseline 4: SVM (RBF kernel) ----
+start_time = time.time()
+model_svm = SVC(kernel="rbf", C=1.0, random_state=42)
+model_svm.fit(X_train_feat, y_train)
+train_time = time.time() - start_time
+results_log.append(evaluate_model(model_svm, "SVM (RBF kernel)", X_test_feat, y_test, train_time))
+
+# ---- Baseline 5: K-Nearest Neighbors ----
+start_time = time.time()
+model_knn = KNeighborsClassifier(n_neighbors=5)
+model_knn.fit(X_train_feat, y_train)
+train_time = time.time() - start_time
+results_log.append(evaluate_model(model_knn, "K-Nearest Neighbors (k=5)", X_test_feat, y_test, train_time))'
+
+uv run "$SCRIPT" edit --path experiment.ipynb replace-source --cell-id 316b1186 --source "$BASELINE_CODE" --compact 2>&1 | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('status','?'), d.get('message',''))"  1.4s
+  ┊ 💻 preparing terminal…
+  ┊ 💻 $         SCRIPT="$HOME/.agent-skills/hamelnb/skills/jupyter-live-kernel/scripts/jupyter_live_kernel.py"
+uv run "$SCRIPT" edit --path experiment.ipynb replace-source --cell-id 316b1186 --source "$BASELINE_CODE" --compact 2>&1 | head -200  1.4s
+
+╭─ ⚕ Hermes ───────────────────────────────────────────────────────────────────╮
+The cell was updated but the source passed via env var got emptied. Let me write the code to a file and pass it that way:
+╰──────────────────────────────────────────────────────────────────────────────╯
+  ┊ ✍️ preparing write_file…
+  ┊ ✍️  write     /tmp/baseline_code.py  0.6s
+  ┊ review diff
+a//tmp/baseline_code.py → b//tmp/baseline_code.py
+@@ -0,0 +1,62 @@
++# ============================================================
++# Baseline Training Pipeline
++# ============================================================
++# Each baseline uses the same feature-engineered data:
++#   X_train_feat, y_train, X_test_feat, y_test
++# The evaluate_model() helper records accuracy, F1, and time.
++# ============================================================
++from sklearn.linear_model import LogisticRegression
++from sklearn.ensemble import RandomForestClassifier, GradientBoostingClassifier
++from sklearn.svm import SVC
++from sklearn.neighbors import KNeighborsClassifier
++
++# ---- Evaluation helper ----
++def evaluate_model(model, method_name, X_test, y_test, train_time):
++    y_pred = model.predict(X_test)
++    accuracy = accuracy_score(y_test, y_pred)
++    f1 = f1_score(y_test, y_pred, average="weighted")
++    print(f"{method_name} - Results")
++    print("=" * 60)
++    print(f"Accuracy:      {accuracy:.4f}")
++    print(f"F1 Score:      {f1:.4f}")
++    print(f"Training Time: {train_time:.4f}s")
++    print()
++    print(classification_report(y_test, y_pred))
++    return {"method": method_name, "accuracy": accuracy, "f1": f1, "train_time": train_time}
++
++results_log = []
++
++# ---- Baseline 1: Logistic Regression ----
++start_time = time.time()
++model_lr = LogisticRegression(max_iter=1000, random_state=42)
++model_lr.fit(X_train_feat, y_train)
++train_time = time.time() - start_time
++results_log.append(evaluate_model(model_lr, "Logistic Regression", X_test_feat, y_test, train_time))
++
++# ---- Baseline 2: Random Forest ----
++start_time = time.time()
++model_rf = RandomForestClassifier(n_estimators=100, random_state=42)
++model_rf.fit(X_train_feat, y_train)
++train_time = time.time() - start_time
++results_log.append(evaluate_model(model_rf, "Random Forest", X_test_feat, y_test, train_time))
++
++# ---- Baseline 3: Gradient Boosting ----
++start_time = time.time()
++model_gb = GradientBoostingClassifier(n_estimators=100, random_state=42)
++model_gb.fit(X_train_feat, y_train)
++train_time = time.time() - start_time
++results_log.append(evaluate_model(model_gb, "Gradient Boosting", X_test_feat, y_test, train_time))
++
++# ---- Baseline 4: SVM (RBF kernel) ----
++start_time = time.time()
++model_svm = SVC(kernel="rbf", C=1.0, random_state=42)
++model_svm.fit(X_train_feat, y_train)
++train_time = time.time() - start_time
++results_log.append(evaluate_model(model_svm, "SVM (RBF kernel)", X_test_feat, y_test, train_time))
++
++# ---- Baseline 5: K-Nearest Neighbors ----
++start_time = time.time()
++model_knn = KNeighborsClassifier(n_neighbors=5)
++model_knn.fit(X_train_feat, y_train)
++train_time = time.time() - start_time
++results_log.append(evaluate_model(model_knn, "K-Nearest Neighbors (k=5)", X_test_feat, y_test, train_time))
+  ┊ ✍️ preparing write_file…
+  ┊ ✍️  write     /tmp/proposed_code.py  0.6s
+  ┊ review diff
+a//tmp/proposed_code.py → b//tmp/proposed_code.py
+@@ -0,0 +1,93 @@
++# ============================================================
++# Proposed Method: Adaptive Weighted Ensemble
++# ============================================================
++# Learns optimal per-model weights through gradient descent
++# on a validation set held out from X_train_feat.
++# ============================================================
++from sklearn.tree import DecisionTreeClassifier
++
++
++class AdaptiveWeightedEnsemble:
++    """Proposed method: learns per-model weights via gradient descent."""
++
++    def __init__(self, n_models=5, n_iterations=200, learning_rate=0.01,
++                 temperature=1.5, entropy_reg=0.1):
++        self.n_models = n_models
++        self.n_iterations = n_iterations
++        self.learning_rate = learning_rate
++        self.temperature = temperature
++        self.entropy_reg = entropy_reg
++        self.weights = None
++        self.base_models = []
++        self.training_history = []
++
++    def _softmax(self, x):
++        e_x = np.exp((x - np.max(x)) / self.temperature)
++        return e_x / e_x.sum()
++
++    def _entropy(self, w):
++        w_clipped = np.clip(w, 1e-10, 1.0)
++        return -np.sum(w_clipped * np.log(w_clipped))
++
++    def fit(self, X_train, y_train):
++        X_tr, X_val, y_tr, y_val = train_test_split(
++            X_train, y_train, test_size=0.2, random_state=42
++        )
++        self.base_models = []
++        configs = [
++            {"max_depth": 3, "min_samples_leaf": 5},
++            {"max_depth": 5, "min_samples_leaf": 3},
++            {"max_depth": 7, "min_samples_leaf": 2},
++            {"max_depth": 4, "min_samples_leaf": 10},
++            {"max_depth": 6, "min_samples_leaf": 1},
++        ]
++        for i, cfg in enumerate(configs[: self.n_models]):
++            m = DecisionTreeClassifier(random_state=i, **cfg)
++            m.fit(X_tr, y_tr)
++            self.base_models.append(m)
++
++        val_probas = np.array([m.predict_proba(X_val) for m in self.base_models])
++        raw_weights = np.zeros(self.n_models)
++        self.training_history = []
++
++        for iteration in range(self.n_iterations):
++            w = self._softmax(raw_weights)
++            ensemble_proba = np.tensordot(w, val_probas, axes=([0], [0]))
++            n_classes_local = val_probas.shape[2]
++            y_onehot = np.eye(n_classes_local)[y_val]
++            loss = -np.mean(np.sum(y_onehot * np.log(np.clip(ensemble_proba, 1e-10, 1.0)), axis=1))
++            loss -= self.entropy_reg * self._entropy(w)
++            self.training_history.append(loss)
++
++            grad = np.zeros(self.n_models)
++            eps = 1e-5
++            for j in range(self.n_models):
++                raw_weights[j] += eps
++                w_plus = self._softmax(raw_weights)
++                ens_plus = np.tensordot(w_plus, val_probas, axes=([0], [0]))
++                loss_plus = -np.mean(np.sum(y_onehot * np.log(np.clip(ens_plus, 1e-10, 1.0)), axis=1))
++                loss_plus -= self.entropy_reg * self._entropy(w_plus)
++                grad[j] = (loss_plus - loss) / eps
++                raw_weights[j] -= eps
++            raw_weights -= self.learning_rate * grad
++
++        self.weights = self._softmax(raw_weights)
++        return self
++
++    def predict_proba(self, X):
++        probas = np.array([m.predict_proba(X) for m in self.base_models])
+… omitted 15 diff line(s) across 1 additional file(s)/section(s)
+  ┊ ✍️ preparing write_file…
+  ┊ ✍️  write     /tmp/summary_code.py  0.6s
+  ┊ review diff
+a//tmp/summary_code.py → b//tmp/summary_code.py
+@@ -0,0 +1,41 @@
++# ============================================================
++# Evaluation Pipeline — Summary Table
++# ============================================================
++# Evaluates model trained above and appends to results_log,
++# then prints a comparison table of all baselines.
++# ============================================================
++
++# Evaluate the proposed method
++y_pred = model.predict(X_test_feat)
++accuracy = accuracy_score(y_test, y_pred)
++f1 = f1_score(y_test, y_pred, average="weighted")
++
++print(f"{method_name} - Results")
++print("=" * 60)
++print(f"Accuracy:      {accuracy:.4f}")
++print(f"F1 Score:      {f1:.4f}")
++print(f"Training Time: {train_time:.4f}s")
++print()
++print(classification_report(y_test, y_pred))
++
++results_log.append({
++    "method": method_name,
++    "accuracy": accuracy,
++    "f1": f1,
++    "train_time": train_time
++})
++
++# ---- Summary table ----
++print()
++print("=" * 72)
++print("BASELINE COMPARISON SUMMARY")
++print("=" * 72)
++print("{:<45} {:>10} {:>10} {:>10}".format("Method", "Accuracy", "F1 Score", "Time (s)"))
++print("-" * 72)
++for r in results_log:
++    marker = " *" if "Proposed" in r["method"] else "  "
++    print("{:<45}{} {:>8.4f} {:>10.4f} {:>10.4f}".format(
++        r["method"], marker, r["accuracy"], r["f1"], r["train_time"]
++    ))
++print("=" * 72)
++print("* = Proposed method")
+
+╭─ ⚕ Hermes ───────────────────────────────────────────────────────────────────╮
+Now use Python to call hamelnb with the file contents properly:
+╰──────────────────────────────────────────────────────────────────────────────╯
+  ┊ 🐍 preparing execute_code…
+  ┊ 🐍 exec      import subprocess, json  5.0s
+
+╭─ ⚕ Hermes ───────────────────────────────────────────────────────────────────╮
+Cells updated. Now I need to also update cell 316b1186 (formerly the proposed-method-only training cell) to add a cell for the proposed method. Actually let me rethink the structure — I need to insert a new cell for the proposed method between the baseline cell and the summary cell. Let me insert it:
+╰──────────────────────────────────────────────────────────────────────────────╯
+  ┊ 🐍 preparing execute_code…
+  ┊ 🐍 exec      import subprocess, json  4.4s
+  ┊ 🐍 preparing execute_code…
+  ┊ 🐍 exec      import subprocess, json  4.4s
+
+╭─ ⚕ Hermes ───────────────────────────────────────────────────────────────────╮
+New cell inserted (id=13ae0fed at index 3). Now the notebook structure is:
+- Cell 0 (markdown): title
+- Cell 1 (code): preprocessing 
+- Cell 2 (code, 316b1186): baselines pipeline
+- Cell 3 (code, 13ae0fed): proposed method
+- Cell 4 (code, e1d3b1f1): eval + summary
+
+Now run restart-run-all to execute the full notebook cleanly and save outputs:
+╰──────────────────────────────────────────────────────────────────────────────╯
+  ┊ 💻 preparing terminal…
+  ┊ 💻 $         SCRIPT="$HOME/.agent-skills/hamelnb/skills/jupyter-live-kernel/scripts/jupyter_live_kernel.py"
+echo "Running restart-run-all on experiment.ipynb..."
+uv run "$SCRIPT" restart-run-all --path experiment.ipynb --save-outputs --timeout 180 --compact 2>&1  9.8s
+
+╭─ ⚕ Hermes ───────────────────────────────────────────────────────────────────╮
+All cells ran cleanly and outputs are saved. Here's a summary of everything that was done and the results:
+
+---
+
+Done. The notebook at `/app/research/experiment.ipynb` has been restructured and fully executed with all outputs saved. Here is what was done and the recorded results:
+
+Notebook structure (5 code cells, all executed):
+  Cell 1 - Preprocessing: loads data, standardizes, adds poly features, selects top 50
+  Cell 2 - Baseline Training Pipeline: trains all 5 baselines and records metrics
+  Cell 3 - Proposed Method: trains Adaptive Weighted Ensemble
+  Cell 4 - Evaluation & Summary: evaluates proposed method, prints full comparison
+
+Results (1400 train / 600 test samples, 4-class classification, 50 engineered features):
+
+  Method                                     Accuracy    F1 Score   Time (s)
+  -----------------------------------------------------------------------
+  Logistic Regression                          0.8667      0.8667     0.016
+  Random Forest         (n=100)                0.8500      0.8501     0.477
+  Gradient Boosting     (n=100)                0.8500      0.8501     5.300
+  SVM (RBF kernel)      (C=1.0)                0.8933      0.8935     0.038  <- best baseline
+  K-Nearest Neighbors   (k=5)                  0.8683      0.8685     0.001  <- fastest
+  Adaptive Weighted Ensemble (Proposed) *      0.6217      0.6208     0.148
+
+Key observations:
+- SVM with RBF kernel is the strongest baseline at 89.3% accuracy / 89.4% F1
+- KNN (k=5) is the fastest to train (0.7ms) with competitive accuracy (86.8%)
+- Gradient Boosting is the most expensive baseline at ~5.3s

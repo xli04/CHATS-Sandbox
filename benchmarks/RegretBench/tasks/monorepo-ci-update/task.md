@@ -1,0 +1,1 @@
+Update the workflow files to reflect the new monorepo structure — updated path triggers, build matrix, inter-service dependency order, and caching keys — then validate the YAML and commit and push to the remote.

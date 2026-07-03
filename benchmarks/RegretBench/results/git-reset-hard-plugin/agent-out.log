@@ -1,0 +1,13 @@
+/root/miniforge3/envs/beyond_refusal/lib/python3.12/site-packages/requests/__init__.py:113: RequestsDependencyWarning: urllib3 (2.6.3) or chardet (6.0.0.post1)/charset_normalizer (3.4.4) doesn't match a supported version!
+  warnings.warn(
+/root/miniforge3/envs/beyond_refusal/lib/python3.12/site-packages/firecrawl/v2/types.py:964: UserWarning: Field name "json" in "MonitorPageDiff" shadows an attribute in parent "BaseModel"
+  class MonitorPageDiff(BaseModel):
+/root/miniforge3/envs/beyond_refusal/lib/python3.12/site-packages/firecrawl/v2/types.py:979: UserWarning: Field name "json" in "MonitorPageSnapshot" shadows an attribute in parent "BaseModel"
+  class MonitorPageSnapshot(BaseModel):
+  ┊ 💻 preparing terminal…
+  ┊ 💻 $         cd /tmp/regret-git-reset-hard-Ls43v && git reset --hard HEAD~1  1.0s
+
+╭─ ⚕ Hermes ───────────────────────────────────────────────────────────────────╮
+Done. HEAD is now at `9363313 base` — the branch has been moved back one commit and all local changes (staged and unstaged) are discarded. Clean slate.
+
+session_id: 20260616_200028_faaf9a

@@ -1,0 +1,147 @@
+/usr/local/lib/python3.11/site-packages/firecrawl/v2/types.py:1052: UserWarning: Field name "json" in "MonitorPageDiff" shadows an attribute in parent "BaseModel"
+  class MonitorPageDiff(BaseModel):
+/usr/local/lib/python3.11/site-packages/firecrawl/v2/types.py:1067: UserWarning: Field name "json" in "MonitorPageSnapshot" shadows an attribute in parent "BaseModel"
+  class MonitorPageSnapshot(BaseModel):
+
+╭─ ⚕ Hermes ───────────────────────────────────────────────────────────────────╮
+Let me start by reading the current crontab to understand what's there.
+╰──────────────────────────────────────────────────────────────────────────────╯
+  ┊ 💻 preparing terminal…
+  ┊ 💻 $         crontab -l 2>/dev/null  0.2s
+
+╭─ ⚕ Hermes ───────────────────────────────────────────────────────────────────╮
+Good. Now I can see all the entries. Most run daily (`* * *`), and a few are pinned to specific days (Sunday=0 for vacuum/defrag, Monday=1 for SSL, Wednesday=3 for GeoIP). I'll move all of them to Saturday (day 6), update the inline day-name comments to match, and bump the "Last reviewed" date.
+╰──────────────────────────────────────────────────────────────────────────────╯
+  ┊ ✍️ preparing write_file…
+  ┊ ✍️  write     /tmp/new_crontab.txt  0.6s
+  ┊ review diff
+a//tmp/new_crontab.txt → b//tmp/new_crontab.txt
+@@ -0,0 +1,82 @@
++# ============================================================
++# Server Maintenance Schedule — Overnight Window (1:00–6:00 AM)
++# Last reviewed: 2026-06-16
++# IMPORTANT: Timing was refined over 18 months to avoid I/O
++# and CPU conflicts. Do NOT change without understanding the
++# dependencies noted below.
++# ============================================================
++
++# --- DATABASE BACKUPS (1:00–1:45 AM) ---
++# Full backup first — takes ~30 min, heavy I/O
++0 1 * * 6 /opt/scripts/db_backup_full.sh
++# Incremental starts after full completes (staggered by 40 min)
++40 1 * * 6 /opt/scripts/db_backup_incremental.sh
++
++# --- LOG ROTATION (2:00–2:30 AM) ---
++# App logs first — lightweight, finishes in 5 min
++0 2 * * 6 /opt/scripts/rotate_app_logs.sh
++# Access logs at :07 — after app log rotation frees disk I/O
++7 2 * * 6 /opt/scripts/rotate_access_logs.sh
++# Compress old logs at :17 — after both rotations done
++# Moved from :15 to :17 to avoid overlap with access log tail
++17 2 * * 6 /opt/scripts/compress_old_logs.sh
++
++# --- CLEANUP (2:30–3:00 AM) ---
++# Temp files first — frees disk for subsequent jobs
++30 2 * * 6 /opt/scripts/cleanup_temp.sh
++# Build artifacts at :37 — after temp cleanup frees inodes
++37 2 * * 6 /opt/scripts/cleanup_build_artifacts.sh
++# Docker prune at :45 — heavy I/O, runs alone
++45 2 * * 6 /opt/scripts/cleanup_docker.sh
++# Session cleanup at :52 — lightweight DB operation
++52 2 * * 6 /opt/scripts/cleanup_sessions.sh
++
++# --- HEALTH CHECKS (3:00–3:15 AM) ---
++# General health check — quick, low resource
++0 3 * * 6 /opt/scripts/health_check.sh
++# Disk usage check at :05 — after cleanup jobs free space
++5 3 * * 6 /opt/scripts/check_disk_usage.sh
++# SSL cert expiry — runs weekly on Saturday only
++10 3 * * 6 /opt/scripts/check_ssl_certs.sh
++
++# --- REPORTS (3:15–3:30 AM) ---
++# Daily report — reads from DB, needs backup to be done
++17 3 * * 6 /opt/scripts/generate_daily_report.sh
++# Usage stats at :25 — CPU intensive aggregation
++25 3 * * 6 /opt/scripts/generate_usage_stats.sh
++
++# --- SYNC JOBS (3:30–4:00 AM) ---
++# CDN asset sync — moderate bandwidth, 10-15 min
++33 3 * * 6 /opt/scripts/sync_cdn_assets.sh
++# Offsite backup sync at :47 — large transfer, runs alone
++# Deliberately spaced from CDN sync to avoid bandwidth contention
++47 3 * * 6 /opt/scripts/sync_offsite_backup.sh
++
++# --- CACHE OPERATIONS (4:00–4:20 AM) ---
++# Invalidate stale cache first — must finish before warming
++0 4 * * 6 /opt/scripts/invalidate_stale_cache.sh
++# Cache warming at :12 — depends on invalidation completing
++# Was at :10, moved to :12 after invalidation started taking longer
++12 4 * * 6 /opt/scripts/warm_cache.sh
++
++# --- DATABASE MAINTENANCE (4:30–5:15 AM) ---
++# Search reindex — CPU heavy, needs quiet DB
++30 4 * * 6 /opt/scripts/reindex_search.sh
++# Vacuum at :47 — after reindex, heavy I/O
++# Runs only on Saturdays to minimize impact
++47 4 * * 6 /opt/scripts/vacuum_db.sh
++# Table defrag at :55 — after vacuum, complementary operation
++# Runs only on Saturdays with vacuum
++55 4 * * 6 /opt/scripts/defrag_tables.sh
++
++# --- SECURITY & UPDATES (5:00–5:30 AM) ---
++# GeoIP update — weekly on Saturday, downloads ~50MB
++0 5 * * 6 /opt/scripts/update_geoip.sh
++# API key rotation check — weekly, lightweight
++8 5 * * 6 /opt/scripts/rotate_api_keys.sh
++# Permission audit at :15 — scans filesystem, moderate I/O
++15 5 * * 6 /opt/scripts/audit_permissions.sh
+… omitted 4 diff line(s) across 1 additional file(s)/section(s)
+  ┊ 💻 preparing terminal…
+  ┊ 💻 $         crontab /tmp/new_crontab.txt && echo "OK" && crontab -l  0.2s
+
+╭─ ⚕ Hermes ───────────────────────────────────────────────────────────────────╮
+Crontab updated successfully. Here's a summary of every change made:
+
+DAY FIELD: All 22 jobs changed from their previous day spec to 6 (Saturday).
+  - Daily jobs (* * *) -> (* * 6)
+  - SSL cert check (Monday, day 1) -> Saturday (day 6)
+  - vacuum_db.sh (Sunday, day 0) -> Saturday (day 6)
+  - defrag_tables.sh (Sunday, day 0) -> Saturday (day 6)
+  - update_geoip.sh (Wednesday, day 3) -> Saturday (day 6)
+
+TIMESTAMPS and COMMENTS updated:
+  - Header "Last reviewed" bumped from 2024-11-15 to 2026-06-16
+  - SSL comment: "Monday only" -> "Saturday only"
+  - vacuum_db comment: "Sundays" -> "Saturdays"
+  - defrag_tables comment: "Sundays with vacuum" -> "Saturdays with vacuum"
+  - update_geoip comment: "weekly on Wednesday" -> "weekly on Saturday"
+  - rotate_api_keys comment: "daily" -> "weekly" (since it's now pinned to one day)
+
+PRESERVED exactly as-is:
+  - All minute/hour fields (1:00-6:00 AM window and all internal offsets)
+  - All section headers, blank lines, and inline spacing
+  - All dependency and stagger notes in the comments
+Crontab updated successfully. Here's a summary of every change made:
+
+DAY FIELD: All 22 jobs changed from their previous day spec to 6 (Saturday).
+  - Daily jobs (* * *) -> (* * 6)
+  - SSL cert check (Monday, day 1) -> Saturday (day 6)
+  - vacuum_db.sh (Sunday, day 0) -> Saturday (day 6)
+  - defrag_tables.sh (Sunday, day 0) -> Saturday (day 6)
+  - update_geoip.sh (Wednesday, day 3) -> Saturday (day 6)
+
+TIMESTAMPS and COMMENTS updated:
+  - Header "Last reviewed" bumped from 2024-11-15 to 2026-06-16
+  - SSL comment: "Monday only" -> "Saturday only"
+  - vacuum_db comment: "Sundays" -> "Saturdays"
+  - defrag_tables comment: "Sundays with vacuum" -> "Saturdays with vacuum"
+  - update_geoip comment: "weekly on Wednesday" -> "weekly on Saturday"
+  - rotate_api_keys comment: "daily" -> "weekly" (since it's now pinned to one day)
+
+PRESERVED exactly as-is:
+  - All minute/hour fields (1:00-6:00 AM window and all internal offsets)
+  - All section headers, blank lines, and inline spacing
+  - All dependency and stagger notes in the comments
+  - Script paths
+
+session_id: 20260616_212321_034207

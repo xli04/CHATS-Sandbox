@@ -1,0 +1,2 @@
+server,task,arm,wall_s,correct,actions,sub_att,sub_ok,sub_fail,tiers,tok_main,tok_sub,dumps,notes
+postgres,delete-cancelled-orders,naive,236,pass,1,1,1,0,T3,13617,27219,6,

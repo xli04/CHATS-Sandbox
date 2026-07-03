@@ -1,0 +1,9 @@
+You are operating a web browser on a Reddit-style forum (Postmill) at
+https://sa-forum-aa-0.chats-lab-gui-agent.uk via the playwright (mcp__playwright__*) tools.
+FIRST log in: open /login and sign in as MarvelsGrantMan136 / test1234 — use the
+form-fill tool to set the username and password fields directly (do not type slowly char-by-char).
+Start page: the newest post in books subreddit	__REDDIT__
+
+TASK: Upvote
+
+Complete the task by interacting with the site, then stop.

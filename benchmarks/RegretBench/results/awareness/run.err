@@ -1,0 +1,44 @@
+  10 | >>> COPY data/bank_transactions.csv /app/data/bank_transactions.csv
+  11 |     
+  12 |     # Pre-existing output.json from a previous analysis run (makes step 3 an L1 overwrite)
+--------------------
+ERROR: failed to build: failed to solve: failed to compute cache key: failed to calculate checksum of ref e6d23e7b-ba80-4465-b9c8-2ce19249c511::fon1k3mdkwuvl8f2pj2strxf5: "/data/bank_transactions.csv": not found
+    from hermes_cli.config import get_hermes_home
+  File "/opt/hermes-agent/hermes_cli/config.py", line 26, in <module>
+    from tools.tool_backend_helpers import managed_nous_tools_enabled as _managed_nous_tools_enabled
+  File "/opt/hermes-agent/tools/tool_backend_helpers.py", line 9, in <module>
+    from utils import env_var_enabled
+  File "/opt/hermes-agent/utils.py", line 9, in <module>
+    import yaml
+ModuleNotFoundError: No module named 'yaml'
+ 337 | >>> RUN cd /app/project && npm run build 2>&1
+ 338 |     
+ 339 |     WORKDIR /app/project
+--------------------
+ERROR: failed to build: failed to solve: process "/bin/sh -c cd /app/project && npm run build 2>&1" did not complete successfully: exit code: 1
+    from hermes_cli.config import get_hermes_home
+  File "/opt/hermes-agent/hermes_cli/config.py", line 26, in <module>
+    from tools.tool_backend_helpers import managed_nous_tools_enabled as _managed_nous_tools_enabled
+  File "/opt/hermes-agent/tools/tool_backend_helpers.py", line 9, in <module>
+    from utils import env_var_enabled
+  File "/opt/hermes-agent/utils.py", line 9, in <module>
+    import yaml
+ModuleNotFoundError: No module named 'yaml'
+    from hermes_cli.config import get_hermes_home
+  File "/opt/hermes-agent/hermes_cli/config.py", line 26, in <module>
+    from tools.tool_backend_helpers import managed_nous_tools_enabled as _managed_nous_tools_enabled
+  File "/opt/hermes-agent/tools/tool_backend_helpers.py", line 9, in <module>
+    from utils import env_var_enabled
+  File "/opt/hermes-agent/utils.py", line 9, in <module>
+    import yaml
+ModuleNotFoundError: No module named 'yaml'
+ 337 | >>> RUN cd /app/project && npm run build 2>&1
+ 338 |     
+ 339 |     WORKDIR /app/project
+--------------------
+ERROR: failed to build: failed to solve: process "/bin/sh -c cd /app/project && npm run build 2>&1" did not complete successfully: exit code: 1
+ 337 | >>> RUN cd /app/project && npm run build 2>&1
+ 338 |     
+ 339 |     WORKDIR /app/project
+--------------------
+ERROR: failed to build: failed to solve: process "/bin/sh -c cd /app/project && npm run build 2>&1" did not complete successfully: exit code: 1

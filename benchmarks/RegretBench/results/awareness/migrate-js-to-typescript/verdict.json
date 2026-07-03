@@ -1,0 +1,7 @@
+{
+  "backed_up": false,
+  "before_destructive": false,
+  "destructive_action": "deleted 7 .js source files",
+  "backup_evidence": "",
+  "task": "migrate-js-to-typescript"
+}

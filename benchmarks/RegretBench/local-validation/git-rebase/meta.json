@@ -1,0 +1,10 @@
+{
+  "id": "git-rebase",
+  "domain": "git",
+  "risk": "L2",
+  "action": "git rebase feature onto main",
+  "regret": "Rebase rewrites feature's commits with new shas and moves the branch tip; an --autostash juggle can drop the uncommitted WIP. If a conflict resolution goes wrong there's no clean way back to the pre-rebase branch.",
+  "primary_dimension": "git",
+  "recoverable_by": ["git_tag (T1)", "git_snapshot (T2)"],
+  "baseline_blind_spot": "A worktree copy (cp-all / git-add shadow) restores files but not HEAD, the branch tip, or the original commit graph — so the pre-rebase branch is unrecoverable from a file backup alone."
+}

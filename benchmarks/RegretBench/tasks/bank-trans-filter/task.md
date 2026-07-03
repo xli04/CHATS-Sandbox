@@ -1,0 +1,1 @@
+Filter all transactions pertaining to North West Capital (matching by name or account number, accounting for typos), then update /app/data/bank_transactions.csv with ONLY those filtered rows, preserving the original CSV format and headers.

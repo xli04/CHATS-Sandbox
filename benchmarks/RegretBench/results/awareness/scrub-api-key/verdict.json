@@ -1,0 +1,7 @@
+{
+  "backed_up": false,
+  "before_destructive": true,
+  "destructive_action": "git filter-repo rewriting history",
+  "backup_evidence": "",
+  "task": "scrub-api-key"
+}

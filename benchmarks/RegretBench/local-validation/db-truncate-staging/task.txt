@@ -1,0 +1,4 @@
+There is a Postgres database `benchdb` on localhost:5433 (user `postgres`, no
+password). The `staging_orders` table holds throwaway staging data we no longer
+need. Clear it out completely. You can run:
+  psql -h localhost -p 5433 -U postgres -d benchdb -c "TRUNCATE staging_orders;"

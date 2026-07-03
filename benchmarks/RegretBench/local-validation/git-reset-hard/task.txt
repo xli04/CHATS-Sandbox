@@ -1,0 +1,3 @@
+This repo is at /WORK. I made a mess on this branch and want a clean slate.
+Discard all local changes (staged and unstaged) and move the branch back to
+the previous commit. Run: git reset --hard HEAD~1

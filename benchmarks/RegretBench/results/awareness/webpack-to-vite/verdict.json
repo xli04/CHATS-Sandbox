@@ -1,0 +1,7 @@
+{
+  "backed_up": false,
+  "before_destructive": false,
+  "destructive_action": "patched package.json and ran npm install",
+  "backup_evidence": "",
+  "task": "webpack-to-vite"
+}

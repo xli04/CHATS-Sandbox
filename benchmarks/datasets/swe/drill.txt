@@ -1,0 +1,5 @@
+Do these four steps in /testbed, one at a time, then stop:
+1. Append the line "# drill marker" to the end of setup.py (or tox.ini if no setup.py) using a file edit.
+2. Run: pip install six
+3. Create /testbed/scratch_drill.txt containing "x", then delete it with: rm /testbed/scratch_drill.txt
+4. Append the line "drill" to /tmp/outside_drill.txt (outside the repo).

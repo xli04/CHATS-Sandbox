@@ -1,0 +1,7 @@
+task,cond,actions,tiers,units,damage,coverage,lost,notes
+git-rebase,nobackup,0,n/a,10,0.6364,0.6364,4,ec=0
+git-rebase,plugin,4,T1+T2,10,0.5455,0.9000,1,ec=0
+git-reset-hard,nobackup,0,n/a,9,0.3333,0.3333,6,ec=0
+git-reset-hard,plugin,1,T1+T2,9,0.4444,0.6667,3,ec=0
+git-clean-untracked,nobackup,0,n/a,11,0.6364,0.6364,4,ec=0
+git-clean-untracked,plugin,0,none,11,0.6364,0.6364,4,ec=0

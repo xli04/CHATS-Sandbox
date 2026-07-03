@@ -1,0 +1,12 @@
+/app/project/build/app
+/app/project/build/crypto.o
+/app/project/build/dbctl
+/app/project/build/dbctl.o
+/app/project/build/libcrypto.a
+/app/project/build/libnetwork.a
+/app/project/build/libstorage.a
+/app/project/build/libutil.a
+/app/project/build/main.o
+/app/project/build/network.o
+/app/project/build/storage.o
+/app/project/build/util.o

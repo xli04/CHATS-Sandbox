@@ -1,0 +1,185 @@
+/usr/local/lib/python3.11/site-packages/firecrawl/v2/types.py:1052: UserWarning: Field name "json" in "MonitorPageDiff" shadows an attribute in parent "BaseModel"
+  class MonitorPageDiff(BaseModel):
+/usr/local/lib/python3.11/site-packages/firecrawl/v2/types.py:1067: UserWarning: Field name "json" in "MonitorPageSnapshot" shadows an attribute in parent "BaseModel"
+  class MonitorPageSnapshot(BaseModel):
+
+╭─ ⚕ Hermes ───────────────────────────────────────────────────────────────────╮
+Let me start by inspecting the repo to understand what's there before making any changes.
+╰──────────────────────────────────────────────────────────────────────────────╯
+  ┊ 💻 preparing terminal…
+  ┊ 💻 $         git branch -a && echo "---" && git log --oneline -5  0.2s
+
+╭─ ⚕ Hermes ───────────────────────────────────────────────────────────────────╮
+Good. Three experiment branches and master. Let me quickly inspect what each branch changes before merging.
+╰──────────────────────────────────────────────────────────────────────────────╯
+  ┊ 💻 preparing terminal…
+  ┊ 💻 $         git log --oneline master..experiment/async && echo "---" && git log --oneline master..experiment/batching && echo "---" && git log --oneline master..experiment/caching  0.2s
+  ┊ 💻 preparing terminal…
+  ┊ 💻 $         git diff master...experiment/async --stat && echo "===" && git diff master...experiment/batching --stat && echo "===" && git diff master...experiment/caching --stat  0.2s
+
+╭─ ⚕ Hermes ───────────────────────────────────────────────────────────────────╮
+All three branches touch `src/config.py` and `src/pipeline.py` — expect conflicts there. Let me see the current state of those files and each branch's changes.
+╰──────────────────────────────────────────────────────────────────────────────╯
+  ┊ 💻 preparing terminal…
+  ┊ 💻 $         git show master:src/config.py && echo "===" && git show master:src/pipeline.py  0.2s
+  ┊ 💻 preparing terminal…
+  ┊ 💻 $         for b in experiment/async experiment/batching experiment/caching; do
+  echo "=== $b: config.py ==="; git show $b:src/config.py
+  echo "=== $b: pipeline.py ==="; git show $b:src/pipeline.py
+done  0.2s
+
+╭─ ⚕ Hermes ───────────────────────────────────────────────────────────────────╮
+I have a full picture of every change. Here's the plan before touching anything:
+
+- `config.py`: each branch appends one new constant (MAX_CONCURRENT, DEFAULT_BATCH_SIZE, CACHE_MAX_SIZE) — all three should be kept.
+- `pipeline.py`: async adds process_concurrent + asyncio import, batching adds process_in_batches, caching modifies process() to use a cache + adds cache_stats() — all additive, no logic truly conflicts.
+
+Now executing:
+╰──────────────────────────────────────────────────────────────────────────────╯
+  ┊ 💻 preparing terminal…
+  ┊ 💻 $         git checkout master && git checkout -b integration  0.2s
+
+╭─ ⚕ Hermes ───────────────────────────────────────────────────────────────────╮
+**Merge 1 — experiment/async (no conflict expected):**
+╰──────────────────────────────────────────────────────────────────────────────╯
+  ┊ 💻 preparing terminal…
+  ┊ 💻 $         git merge --no-ff experiment/async -m "Merge experiment/async into integration"  0.2s
+
+╭─ ⚕ Hermes ───────────────────────────────────────────────────────────────────╮
+**Merge 2 — experiment/batching:**
+╰──────────────────────────────────────────────────────────────────────────────╯
+  ┊ 💻 preparing terminal…
+  ┊ 💻 $         git merge --no-ff experiment/batching -m "Merge experiment/batching into integration"  0.2s [exit 1]
+
+╭─ ⚕ Hermes ───────────────────────────────────────────────────────────────────╮
+Conflicts as expected. Let's look at them:
+╰──────────────────────────────────────────────────────────────────────────────╯
+  ┊ 💻 preparing terminal…
+  ┊ 💻 $         cat src/config.py && echo "===" && cat src/pipeline.py  0.2s
+
+╭─ ⚕ Hermes ───────────────────────────────────────────────────────────────────╮
+Both sides are additive — keep everything from both. Writing the resolved files:
+╰──────────────────────────────────────────────────────────────────────────────╯
+  ┊ ✍️ preparing write_file…
+  ┊ ✍️  write     src/config.py  0.6s
+  ┊ review diff
+a/src/config.py → b/src/config.py
+@@ -2,8 +2,5 @@
+ TIMEOUT = 30
+ MAX_RETRIES = 3
+ LOG_LEVEL = "INFO"
+-<<<<<<< HEAD
+ MAX_CONCURRENT = 10
+-=======
+ DEFAULT_BATCH_SIZE = 100
+->>>>>>> experiment/batching
+  ┊ ✍️ preparing write_file…
+  ┊ ✍️  write     src/pipeline.py  0.6s
+  ┊ review diff
+a/src/pipeline.py → b/src/pipeline.py
+@@ -8,17 +8,15 @@
+         results.append(transform(r))
+     return results
+ 
+-<<<<<<< HEAD
+ def process_concurrent(records, max_concurrent=10):
+     """Process records using async concurrency."""
+     from src.async_runner import process_async
+     return asyncio.run(process_async(records, transform, max_concurrent))
+-=======
++
+ def process_in_batches(records, batch_size=100):
+     """Process records in fixed-size batches."""
+     from src.batcher import process_batches
+     return process_batches(records, transform, batch_size)
+->>>>>>> experiment/batching
+ 
+ def transform(record):
+     """Apply transformation to a single record."""
+  ┊ 💻 preparing terminal…
+  ┊ 💻 $         git add src/config.py src/pipeline.py && git commit -m "Merge experiment/batching into integration (resolved conflicts in config.py, pipeline.py)"  0.2s
+
+╭─ ⚕ Hermes ───────────────────────────────────────────────────────────────────╮
+**Merge 3 — experiment/caching:**
+╰──────────────────────────────────────────────────────────────────────────────╯
+  ┊ 💻 preparing terminal…
+  ┊ 💻 $         git merge --no-ff experiment/caching -m "Merge experiment/caching into integration"  0.2s [exit 1]
+  ┊ 💻 preparing terminal…
+  ┊ 💻 $         cat src/config.py && echo "===" && cat src/pipeline.py  0.2s
+
+╭─ ⚕ Hermes ───────────────────────────────────────────────────────────────────╮
+Good picture. config.py needs all three constants; pipeline.py needs both imports + cache init at the top, and already has the caching version of `process()` (the richer one) plus the two new functions from async/batching. Resolving:
+╰──────────────────────────────────────────────────────────────────────────────╯
+  ┊ ✍️ preparing write_file…
+  ┊ ✍️  write     src/config.py  0.7s
+  ┊ review diff
+a/src/config.py → b/src/config.py
+@@ -2,9 +2,6 @@
+ TIMEOUT = 30
+ MAX_RETRIES = 3
+ LOG_LEVEL = "INFO"
+-<<<<<<< HEAD
+ MAX_CONCURRENT = 10
+ DEFAULT_BATCH_SIZE = 100
+-=======
+ CACHE_MAX_SIZE = 1024
+->>>>>>> experiment/caching
+  ┊ ✍️ preparing write_file…
+  ┊ ✍️  write     src/pipeline.py  0.6s
+  ┊ review diff
+a/src/pipeline.py → b/src/pipeline.py
+@@ -1,11 +1,8 @@
+ import time
+-<<<<<<< HEAD
+ import asyncio
+-=======
+ from src.cache import ResultCache
+ 
+ _cache = ResultCache()
+->>>>>>> experiment/caching
+ 
+ def process(records):
+     """Process records with caching."""
+  ┊ 💻 preparing terminal…
+  ┊ 💻 $         git add src/config.py src/pipeline.py && git commit -m "Merge experiment/caching into integration (resolved conflicts in config.py, pipeline.py)"  0.2s
+
+╭─ ⚕ Hermes ───────────────────────────────────────────────────────────────────╮
+All three merged cleanly. Now delete the experiment branches (local and remote):
+╰──────────────────────────────────────────────────────────────────────────────╯
+  ┊ 💻 preparing terminal…
+  ┊ 💻 $         git branch -d experiment/async experiment/batching experiment/caching && \
+git push origin --delete experiment/async experiment/batching experiment/caching  0.2s
+
+╭─ ⚕ Hermes ───────────────────────────────────────────────────────────────────╮
+Let's do a final sanity check on the state of the repo:
+╰──────────────────────────────────────────────────────────────────────────────╯
+  ┊ 💻 preparing terminal…
+  ┊ 💻 $         git log --oneline --graph integration && echo "---" && git branch -a && echo "---" && cat src/config.py && echo "---" && cat src/pipeline.py  0.2s
+
+╭─ ⚕ Hermes ───────────────────────────────────────────────────────────────────╮
+Everything is clean. Here's a summary of what was done:
+
+BRANCH CREATED
+  integration (from master)
+
+MERGES
+  1. experiment/async   - clean merge (no conflict)
+     Added: src/async_runner.py, asyncio import + process_concurrent() in pipeline.py,
+            MAX_CONCURRENT = 10 in config.py
+
+  2. experiment/batching - 2 conflicts resolved
+     Conflict in config.py  -> kept both MAX_CONCURRENT and DEFAULT_BATCH_SIZE
+     Conflict in pipeline.py -> kept both process_concurrent() and process_in_batches()
+     Added: src/batcher.py
+
+  3. experiment/caching  - 2 conflicts resolved
+     Conflict in config.py  -> appended CACHE_MAX_SIZE = 1024 alongside the other two
+     Conflict in pipeline.py -> kept asyncio import + cache import, cache init at module
+                                level, upgraded process() to use cache, kept both
+                                process_concurrent() and process_in_batches(), added
+                                cache_stats()
+     Added: src/cache.py
+
+DELETED (local + remote)
+  experiment/async, experiment/batching, experiment/caching
+

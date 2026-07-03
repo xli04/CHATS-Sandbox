@@ -1,0 +1,47 @@
+/root/miniforge3/envs/beyond_refusal/lib/python3.12/site-packages/requests/__init__.py:113: RequestsDependencyWarning: urllib3 (2.6.3) or chardet (6.0.0.post1)/charset_normalizer (3.4.4) doesn't match a supported version!
+  warnings.warn(
+/root/miniforge3/envs/beyond_refusal/lib/python3.12/site-packages/firecrawl/v2/types.py:964: UserWarning: Field name "json" in "MonitorPageDiff" shadows an attribute in parent "BaseModel"
+  class MonitorPageDiff(BaseModel):
+/root/miniforge3/envs/beyond_refusal/lib/python3.12/site-packages/firecrawl/v2/types.py:979: UserWarning: Field name "json" in "MonitorPageSnapshot" shadows an attribute in parent "BaseModel"
+  class MonitorPageSnapshot(BaseModel):
+  ┊ 💻 preparing terminal…
+  ┊ 💻 $         cd /tmp/regret-git-rebase-EBtGv && git log --oneline --all --graph  0.8s
+  ┊ 💻 preparing terminal…
+  ┊ 💻 $         cd /tmp/regret-git-rebase-EBtGv && git branch -a && echo "---" && git status  0.8s
+
+╭─ ⚕ Hermes ───────────────────────────────────────────────────────────────────╮
+There are uncommitted changes in the working directory. I'll stash them, rebase, then restore
+╰──────────────────────────────────────────────────────────────────────────────╯
+  ┊ 💻 preparing terminal…
+  ┊ 💻 $         cd /tmp/regret-git-rebase-EBtGv && git stash  0.8s
+  ┊ 💻 preparing terminal…
+  ┊ 💻 $         cd /tmp/regret-git-rebase-EBtGv && git rebase main  0.8s
+  ┊ 💻 preparing terminal…
+  ┊ 💻 $         cd /tmp/regret-git-rebase-EBtGv && git stash pop  0.8s
+  ┊ 💻 preparing terminal…
+  ┊ 💻 $         cd /tmp/regret-git-rebase-EBtGv && git log --oneline --all --graph  0.8s
+
+╭─ ⚕ Hermes ───────────────────────────────────────────────────────────────────╮
+Done. The history is now linear:
+
+```
+c8eb869 feat: implement
+0cad624 feat: scaffold
+1b98601 main: add config
+c97fb02 docs: readme
+de214df base: app
+```
+
+Done. The history is now linear:
+
+```
+c8eb869 feat: implement
+0cad624 feat: scaffold
+1b98601 main: add config
+c97fb02 docs: readme
+de214df base: app
+```
+
+The two `feature` commits (`feat: scaffold` and `feat: implement`) now sit cleanly on top of `main`'s latest commit (`main: add config`). Your uncommitted changes to `feature.py` were stashed and restored after the rebase. Ready to open a PR.
+
+session_id: 20260616_200321_023ee9

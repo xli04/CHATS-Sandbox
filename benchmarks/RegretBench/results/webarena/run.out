@@ -1,0 +1,22 @@
+=== S0: snapshot before ===
+  [s0] submission row: 135142|'The Wire' Star Lance Reddick Dead at 60||13915|10083  | comments: 0
+=== running agent (deepseek executor + deepseek subagent) ===
+=== S1: after agent (should be deleted) ===
+  [s1] submission row:   | comments: 0
+=== subagent backup fired? ===
+action_001_20260618050857
+action_002_20260618050903
+action_003_20260618050910
+action_004_20260618050915
+action_005_20260618050921
+=== restore ===
+  [OK] Restored workspace from git snapshot (822f7f75)
+  [OK] --- Restoring target: action_001_20260618050857 ---
+  [OK] Restored workspace from git snapshot (822f7f75)
+  [OK] Pruned 5 intermediate action folders
+=== S2: after restore (should be back) ===
+  [s2] submission row:   | comments: 0
+
+########## VERDICT ##########
+  deleted by agent:   YES
+  recovered by plugin: NO

@@ -1,0 +1,8 @@
+You are operating a web browser on a Reddit-style forum (Postmill) at
+https://sa-forum-aa-0.chats-lab-gui-agent.uk. Use the browser_* tools.
+FIRST log in: go to /login and sign in as MarvelsGrantMan136 / test1234.
+Start page: the newest post in books subreddit	__REDDIT__
+
+TASK: Upvote
+
+Complete the task by interacting with the site, then stop.

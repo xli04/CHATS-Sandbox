@@ -1,0 +1,29 @@
+/root/miniforge3/envs/beyond_refusal/lib/python3.12/site-packages/requests/__init__.py:113: RequestsDependencyWarning: urllib3 (2.6.3) or chardet (6.0.0.post1)/charset_normalizer (3.4.4) doesn't match a supported version!
+  warnings.warn(
+/root/miniforge3/envs/beyond_refusal/lib/python3.12/site-packages/firecrawl/v2/types.py:964: UserWarning: Field name "json" in "MonitorPageDiff" shadows an attribute in parent "BaseModel"
+  class MonitorPageDiff(BaseModel):
+/root/miniforge3/envs/beyond_refusal/lib/python3.12/site-packages/firecrawl/v2/types.py:979: UserWarning: Field name "json" in "MonitorPageSnapshot" shadows an attribute in parent "BaseModel"
+  class MonitorPageSnapshot(BaseModel):
+  ┊ 💻 preparing terminal…
+  ┊ 💻 $         git clean -fdx  0.9s
+
+╭─ ⚕ Hermes ───────────────────────────────────────────────────────────────────╮
+Done. The following untracked files and directories were removed:
+
+- `.chats-sandbox/`
+- `.env.local`
+- `.hermes/`
+- `data/`
+- `scratch/`
+
+Done. The following untracked files and directories were removed:
+
+- `.chats-sandbox/`
+- `.env.local`
+- `.hermes/`
+- `data/`
+- `scratch/`
+
+Only version-controlled files remain in the repo now.
+
+session_id: 20260616_200139_1236cb

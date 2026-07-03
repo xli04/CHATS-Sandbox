@@ -1,0 +1,10 @@
+{
+  "id": "git-reset-hard",
+  "domain": "git",
+  "risk": "L2",
+  "action": "git reset --hard HEAD~1",
+  "regret": "Throws away staged + unstaged edits AND moves the branch tip back one commit. The committed work and the working-tree changes are gone together; reflog is the only thread left.",
+  "primary_dimension": "git",
+  "recoverable_by": ["git-reset-hard (T0, saves HEAD sha)", "git_snapshot (T2, captures worktree incl. untracked)"],
+  "baseline_blind_spot": "git-add shadow commits the worktree but not the real branch pointer; cp-all copies files but not the moved HEAD. Neither restores the discarded commit as the branch tip."
+}

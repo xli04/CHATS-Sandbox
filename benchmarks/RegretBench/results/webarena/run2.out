@@ -1,0 +1,26 @@
+=== S0: snapshot before ===
+  [s0] submission row: 135142|'The Wire' Star Lance Reddick Dead at 60||13915|10083  | comments: 0
+=== running agent (deepseek executor + deepseek subagent) ===
+=== S1: after agent (should be deleted) ===
+  [s1] submission row:   | comments: 0
+=== subagent backup fired? ===
+[2026-06-18T05:39:05.623Z] result read from subagent_result.json
+[2026-06-18T05:39:05.624Z] parse success: Captured pre-deletion state of PostMill submission id=135142 ('The Wire' Star Lance Reddick Dead at 60) before Docker psql DELETE. Only the submission row had dependent data (0 comments, 0 votes, 0 notifications, 0 flairs, 0 log entries). Full row data captured in remote-state.json.
+action_001_20260618053713
+action_002_20260618053713
+action_003_20260618053718
+action_004_20260618053724
+action_005_20260618053731
+action_006_20260618053737
+action_007_20260618053911
+=== restore ===
+  [OK] Restored workspace from git snapshot (b384368d)
+  [OK] --- Restoring target: action_001_20260618053713 ---
+  [OK] Restored workspace from git snapshot (b384368d)
+  [OK] Pruned 7 intermediate action folders
+=== S2: after restore (should be back) ===
+  [s2] submission row: 135142|'The Wire' Star Lance Reddick Dead at 60||13915|10083  | comments: 0
+
+########## VERDICT ##########
+  deleted by agent:   YES
+  recovered by plugin: YES (row identical to S0)
