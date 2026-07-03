@@ -385,6 +385,14 @@ function printRestoreResults(results: Array<{
     const icon = r.success ? "OK" : "FAIL";
     console.log(`  [${icon}] ${r.description}`);
 
+    // Surface the UNVERIFIED caveat prominently: these artifacts were recorded
+    // WITHOUT the MCP access needed to verify them (a runner that couldn't
+    // load the action's server), so the recovery was re-derived live rather
+    // than trusted — the user should confirm the reversal actually landed.
+    if (/UNVERIFIED/i.test(r.description)) {
+      console.log("       ^ UNVERIFIED backup — recovery re-derived from live state, not a captured snapshot. Verify the result.");
+    }
+
     if (r.subagentPrompt) {
       console.log("\n  --- Subagent restore needed ---");
       console.log("  The following prompt should be sent to a subagent:\n");
@@ -407,16 +415,24 @@ async function restoreCommand(projectRoot: string, actionArg?: string, fileArg?:
     return;
   }
 
-  // Default: restore to the action BEFORE the latest
-  // ("undo the last thing"). Requires at least 2 actions.
+  // No argument = LIST (matching `--help`: "restore  List restorable
+  // actions"). The previous no-arg behavior silently REWOUND the workspace —
+  // a destructive default that contradicted the help. To undo, name the
+  // target: `restore <N>` or `restore last`.
   let idx: number;
   if (!actionArg) {
+    console.log(`Restorable actions (newest last) — run 'chats-sandbox restore <N>' to reverse-loop to one, or 'restore last' to undo the last step:\n`);
+    actions.forEach((a, i) => console.log(`  ${String(i + 1).padStart(3)}  ${a.name}`));
+    console.log(`\nNothing was changed. This command only lists; pass an action number to restore.`);
+    return;
+  }
+  if (actionArg === "last") {
     if (actions.length < 2) {
       console.log("Only one action exists — nothing to undo. Use 'history' to list.");
       return;
     }
-    idx = actions.length - 2; // second-to-last (0-indexed)
-    console.log(`No argument — defaulting to previous action (undo last step).\n`);
+    idx = actions.length - 2; // second-to-last (0-indexed) = undo the last step
+    console.log(`Undoing the last step (reverse-loop to ${actions[idx].name}).\n`);
   } else {
     idx = parseInt(actionArg, 10) - 1;
     if (isNaN(idx) || idx < 0 || idx >= actions.length) {
@@ -699,7 +715,7 @@ function historyCommand(projectRoot: string, countArg?: string): void {
 
 // ── Clear ────────────────────────────────────────────────────────────
 
-function clearCommand(projectRoot: string, _args: string[]): void {
+function clearCommand(projectRoot: string, args: string[]): void {
   const config = loadConfig(projectRoot);
   const backupRoot = path.resolve(config.backupDir);
   const shadowRoot = path.join(path.dirname(backupRoot), "shadow-repo");
@@ -713,6 +729,18 @@ function clearCommand(projectRoot: string, _args: string[]): void {
 
   if (!hasBackups && !hasShadow && !hasEffects) {
     console.log("Nothing to clear — no backups, shadow repo, or effect log found.");
+    return;
+  }
+
+  // Destructive + irreversible (deletes every backup, the shadow repo, and the
+  // effect log) — require an explicit --yes, matching the `--help` contract
+  // ("clear [--yes]"). Without it, show what WOULD be deleted and stop.
+  if (!args.includes("--yes") && !args.includes("-y")) {
+    console.log("This will PERMANENTLY delete all recorded backups and history:");
+    if (hasBackups) console.log(`  - action backups under ${backupRoot}`);
+    if (hasShadow)  console.log(`  - the shadow git repo at ${shadowRoot}`);
+    if (hasEffects) console.log(`  - the effect log at ${effectsLog}`);
+    console.log("\nNothing was deleted. Re-run with --yes to confirm:  chats-sandbox clear --yes");
     return;
   }
 

@@ -77,15 +77,46 @@ function execFileArgs(bin: string, args: string[], cwd?: string): { ok: boolean;
  * for the worst forms — not a substitute for a typed recovery plan, but
  * it blocks the commands that turn a restore into a wipe/exfil.
  */
-export function isDangerousRecoveryCommand(cmd: string): boolean {
+export function isDangerousRecoveryCommand(cmd: string, _depth = 0): boolean {
   const c = cmd.toLowerCase();
+  // Recurse into interpreter wrappers so `bash -c "rm -rf /"` is judged by its
+  // INNER command, not the harmless-looking `bash -c` shell (the old denylist
+  // matched the outer form only). Unwrap one quoted level — enough for the
+  // realistic single-wrap case without a full shell parser. Depth-capped so a
+  // pathologically nested string can't overflow the stack (this runs at
+  // restore time, not on the gate — but cheap insurance).
+  if (_depth < 6) {
+    const wrapped = c.match(/\b(?:sh|bash|zsh|dash|ksh|env)\b[^'"]*(['"])([\s\S]*)\1/);
+    if (wrapped && wrapped[2] && wrapped[2] !== c && isDangerousRecoveryCommand(wrapped[2], _depth + 1)) return true;
+  }
+
+  // Flag order/spelling-independent rm of a root-ish path: gather ALL flags
+  // (short clusters -rf AND long --recursive/--force/--no-preserve-root, in
+  // any order/position) up to the first non-flag token, then require a
+  // catastrophic target. The old regex demanded one short cluster immediately
+  // before the path, so `rm --recursive --force /` and `rm -rf --no-preserve-root /`
+  // both slipped through.
+  const rmMatch = c.match(/\brm\b((?:\s+-[a-z]+|\s+--[a-z-]+)*)\s+(\S+)/);
+  if (rmMatch) {
+    const flags = rmMatch[1];
+    const recursive = /(-[a-z]*r|--recursive)/.test(flags);
+    const target = rmMatch[2];
+    const rootish = /^(\/(\s|$|\*)?|~(\/|$)?|\$\{?home\}?|\/\*)$/.test(target) ||
+                    /^\/(etc|usr|bin|boot|lib|var|root|home|opt|sys|dev)(\/|$)/.test(target);
+    if (recursive && rootish) return true;
+    if (/--no-preserve-root/.test(flags)) return true; // only ever used to force a root wipe
+  }
+
   return (
-    /\brm\s+-[a-z]*\s*(\/(\s|$)|\/\*|~(\/|\s|$)|\$home|\$\{home\})/.test(c) || // rm -rf / | ~ | $HOME
     /\|\s*(sh|bash|zsh|dash|python[0-9.]*|perl|ruby|node)\b/.test(c) ||        // pipe into an interpreter
     /\b(curl|wget|fetch)\b[\s\S]*\|\s*(sh|bash|zsh)\b/.test(c) ||              // curl … | sh
     /:\s*\(\s*\)\s*\{/.test(cmd) ||                                            // fork bomb :(){ …
     /\bmkfs\b|\bdd\s+[\s\S]*of=\/dev\//.test(c) ||                             // disk wipe
-    />\s*\/dev\/sd[a-z]/.test(c)                                               // overwrite a raw disk
+    />\s*\/dev\/sd[a-z]/.test(c) ||                                            // overwrite a raw disk
+    /\bfind\b[\s\S]*\s-delete\b/.test(c) ||                                    // find … -delete
+    /\bfind\b[\s\S]*-exec\s+rm\b/.test(c) ||                                   // find … -exec rm
+    /\bshred\b/.test(c) ||                                                     // secure-erase a file
+    /\btruncate\b\s+(-s\s*0|--size[= ]0)/.test(c)                             // truncate -s0 (zero a file)
   );
 }
 

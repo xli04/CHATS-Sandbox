@@ -62,33 +62,45 @@ function teardown(workspace: string, originalCwd: string): void {
   try { fs.rmSync(workspace, { recursive: true, force: true }); } catch { /* */ }
 }
 
-describe("restore CLI: no-arg default (undo last step)", () => {
-  it("restore with no arg undoes the last action", () => {
+describe("restore CLI: no-arg LISTS (matches --help), 'last' undoes", () => {
+  it("restore with no arg LISTS and changes nothing (was a destructive default)", () => {
     const { workspace, config, originalCwd } = setupWorkspace();
     try {
       resetAction();
       const filePath = path.join(workspace, "data.txt");
-
-      // Step 1: create file
       fs.writeFileSync(filePath, "original\n");
       runBackup(makeCtx("Write", { path: filePath, content: "original" }), config);
+      resetAction();
+      fs.writeFileSync(filePath, "modified\n");
+      runBackup(makeCtx("Write", { path: filePath, content: "modified" }), config);
+      assert.equal(fs.readFileSync(filePath, "utf-8"), "modified\n");
 
-      // Step 2: modify file
+      // No-arg restore must LIST (the help says "List restorable actions") and
+      // leave the workspace untouched — the old no-arg default silently rewound.
+      const result = runCli(["restore"], workspace);
+      assert.equal(result.exitCode, 0, `restore failed: ${result.stdout}`);
+      assert.ok(/only lists|Restorable actions/i.test(result.stdout),
+        `Expected a listing, got: ${result.stdout.slice(0, 300)}`);
+      assert.equal(fs.readFileSync(filePath, "utf-8"), "modified\n",
+        "No-arg restore must NOT modify the workspace");
+    } finally {
+      teardown(workspace, originalCwd);
+    }
+  });
+
+  it("restore last undoes the last step → back to 'original'", () => {
+    const { workspace, config, originalCwd } = setupWorkspace();
+    try {
+      resetAction();
+      const filePath = path.join(workspace, "data.txt");
+      fs.writeFileSync(filePath, "original\n");
+      runBackup(makeCtx("Write", { path: filePath, content: "original" }), config);
       resetAction();
       fs.writeFileSync(filePath, "modified\n");
       runBackup(makeCtx("Write", { path: filePath, content: "modified" }), config);
 
-      // Verify current state
-      assert.equal(fs.readFileSync(filePath, "utf-8"), "modified\n");
-
-      // restore (no arg) should undo the last step → back to "original"
-      const result = runCli(["restore"], workspace);
-      assert.equal(result.exitCode, 0, `restore failed: ${result.stdout}`);
-      assert.ok(
-        result.stdout.includes("Reverse-loop restore") || result.stdout.includes("defaulting"),
-        `Expected restore output, got: ${result.stdout.slice(0, 300)}`
-      );
-
+      const result = runCli(["restore", "last"], workspace);
+      assert.equal(result.exitCode, 0, `restore last failed: ${result.stdout}`);
       assert.equal(fs.readFileSync(filePath, "utf-8"), "original\n",
         "File should be restored to pre-step-2 state");
     } finally {
@@ -96,14 +108,14 @@ describe("restore CLI: no-arg default (undo last step)", () => {
     }
   });
 
-  it("restore with no arg and only 1 action shows helpful message", () => {
+  it("restore last with only 1 action shows helpful message", () => {
     const { workspace, config, originalCwd } = setupWorkspace();
     try {
       resetAction();
       fs.writeFileSync(path.join(workspace, "x.txt"), "x\n");
       runBackup(makeCtx("Write", { path: "x.txt", content: "x" }), config);
 
-      const result = runCli(["restore"], workspace);
+      const result = runCli(["restore", "last"], workspace);
       assert.ok(
         result.stdout.toLowerCase().includes("only one") ||
           result.stdout.toLowerCase().includes("nothing"),

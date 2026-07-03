@@ -141,7 +141,20 @@ export default definePluginEntry({
           tool_name: mapToolName(name),
           tool_input: hookInput(name, params),
         });
-        const upd = out && out.hookSpecificOutput && out.hookSpecificOutput.updatedInput;
+        const hso = (out && out.hookSpecificOutput) || {};
+        // SURFACE backup feedback: the Node hook reports a failed / UNVERIFIED
+        // / needed tier-3 backup via additionalContext, and a deny via
+        // permissionDecision. The OpenClaw plugin cannot inject agent context
+        // or block a tool, so at minimum log to stderr — otherwise a
+        // destructive action whose backup FAILED proceeds with no signal.
+        if (typeof hso.additionalContext === "string" && hso.additionalContext.trim()) {
+          try { process.stderr.write("[CHATS-Sandbox] " + hso.additionalContext.trim() + "\\n"); } catch { /* */ }
+        }
+        if (hso.permissionDecision === "deny") {
+          try { process.stderr.write("[CHATS-Sandbox] hook requested DENY of " + name +
+            " but the OpenClaw plugin cannot block a tool call — it will run.\\n"); } catch { /* */ }
+        }
+        const upd = hso.updatedInput;
         // Apply ALL updatedInput keys (today's tier-0 rules only rewrite
         // "command", but the hook contract allows any key — mirror the
         // Claude Code adapter instead of silently dropping the rest). Only

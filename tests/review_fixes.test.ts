@@ -186,10 +186,12 @@ describe("destructive floor scans executable payloads (rawDesc) — unexplored s
       assert.equal(touchesOutsideWorkspace(sqlCtx(s)), false));
   }
 
-  // The DELIBERATE floor gap: UPDATE/INSERT-class verbs are too common for an
-  // unsuppressible floor — covering them is what self-exploration is FOR.
-  it("UPDATE on unexplored server → NOT floored (needs exploration)", () =>
-    assert.equal(touchesOutsideWorkspace(sqlCtx("UPDATE users SET tier='x' WHERE tier='free'")), false));
+  // UPDATE/INSERT-class verbs are not in the DESTRUCTIVE floor (too common to
+  // be unsuppressible), but the generic FALLBACK now scans the sql payload
+  // with IRREVERSIBLE_VERB, so an irreversible UPDATE on an unexplored server
+  // is still backed up (logic-audit C1 fix — an unprotected UPDATE was the bug).
+  it("UPDATE on unexplored server → backed up via the payload fallback", () =>
+    assert.equal(touchesOutsideWorkspace(sqlCtx("UPDATE users SET tier='x' WHERE tier='free'")), true));
 
   // Accepted false positive: a bare floor verb in a read-only query's string
   // literal forces a backup (the floor only ever errs TOWARD backing up).

@@ -817,7 +817,26 @@ function isBackupWorthyRemote(ctx: HookContext, config?: SandboxConfig): boolean
   // ── FALLBACK (no server / no experience profile / matched none of the
   //    three): the generic verb-list heuristic. ──
   if (/\blink\b/.test(desc)) return false;
+  // `desc` (underscore-normalized) catches verbs in the tool name / UI fields.
   if (IRREVERSIBLE_VERB.test(desc)) return true;
+  // The executable PAYLOAD (sql / query) also carries the verb — WITHOUT this,
+  // an UPDATE / INSERT / REPLACE through an unknown-verb MCP tool on an
+  // unexplored server escaped backup entirely. But scan it with QUOTED STRING
+  // LITERALS BLANKED: a SQL verb is always a keyword OUTSIDE quotes, so
+  // stripping literals loses no real mutation while dropping the broad-verb
+  // false positives IRREVERSIBLE_VERB would otherwise hit inside read-query
+  // literals (`SELECT 'please add later'`, `SELECT 'call center'`). The narrow
+  // destructive FLOOR above deliberately keeps its literal FP (safety net);
+  // this softer fallback is made precise. sql/query only (never desc/element)
+  // so a browser nav click's label can't fire it.
+  const sqlPayload = [input.sql, input.query].filter(Boolean).map(String).join(" ").toLowerCase();
+  const sqlNoLiterals = sqlPayload.replace(/'[^']*'/g, "' '").replace(/"[^"]*"/g, '" "');
+  if (sqlNoLiterals && (IRREVERSIBLE_VERB.test(sqlNoLiterals) ||
+      // SQL-specific mutations absent from IRREVERSIBLE_VERB (MERGE / UPSERT /
+      // GRANT / VACUUM / REINDEX / CLUSTER / REFRESH / CALL / LOAD / COMMENT ON).
+      /\b(merge|upsert|grant|vacuum|reindex|cluster|refresh|call|load|comment\s+on)\b/.test(sqlNoLiterals))) {
+    return true;
+  }
   return false; // reversible toggle / unknown / read → ignore (allowlist default)
 }
 
@@ -892,10 +911,10 @@ export function touchesOutsideWorkspace(ctx: HookContext, config?: SandboxConfig
       /\bssh\s/i,                               // remote commands
       /\bscp\s/i,                               // remote file copy
       /\bdocker\s+(run|stop|rm|build|push|cp|kill|restart|commit)/i, // container state
-      // DB-client MUTATION (direct or tunneled through `docker exec`/`ssh`):
-      // the remote DB is outside-workspace state git can't capture. Keyed on
-      // the mutating verb so read-only psql SELECT / \dt does NOT escalate.
-      /\b(psql|mysql|mariadb|mongo|mongosh|redis-cli|sqlite3)\b[\s\S]*\b(delete|update|drop|truncate|insert|alter|create\s+table|flushall|flushdb)\b/i,
+      // (DB-client MUTATION is handled separately below as TWO independent
+      // linear tests — a single `client[\s\S]*verb` regex backtracks
+      // quadratically on a large no-verb command, freezing this synchronous
+      // gate.)
       /\bkubectl\s+(apply|delete|create|patch|replace|scale|edit|drain|cordon|rollout|set|annotate|label|taint)\b/i, // k8s state
       /\bsystemctl\s+(start|stop|restart|enable|disable)/i, // services
       /\bexport\s+\w+=/i,                       // env vars
@@ -924,6 +943,21 @@ export function touchesOutsideWorkspace(ctx: HookContext, config?: SandboxConfig
 
     for (const pattern of outsidePatterns) {
       if (pattern.test(cmd)) return true;
+    }
+
+    // DB-client MUTATION (direct or via `docker exec`/`ssh`): the remote DB is
+    // outside-workspace state git can't capture. TWO independent tests (a DB
+    // client token AND a mutating verb, anywhere in the command) instead of
+    // one `client[\s\S]*verb` regex — the combined form backtracks O(n²) on a
+    // large no-verb command (e.g. a 100KB `psql -c "SELECT …"`) and this gate
+    // runs synchronously on every tool call. Both halves are linear. Verb list
+    // is a SUPERSET (a missed mutation is unrecoverable; a wasted spawn on a
+    // read-shaped `COPY (SELECT…) TO` is cheap). A read-only SELECT/\dt/SHOW
+    // has a client token but no verb → does not escalate.
+    if (/\b(psql|mysql|mariadb|mongo|mongosh|redis-cli|sqlite3)\b/i.test(cmd) &&
+        (/\b(delete|update|drop|truncate|insert|alter|replace|upsert|merge|grant|revoke|call|load|reindex|cluster|vacuum|refresh|rename|create|comment\s+on|flushall|flushdb|hset|hdel|lpush|rpush|sadd|zadd|expire|copy)\b/i.test(cmd) ||
+         /\\copy/i.test(cmd))) {
+      return true;
     }
 
     // Scan for absolute paths outside the workspace. The one token we
@@ -1540,6 +1574,21 @@ export function tryPatternCreateReverter(
     } catch { /* optional */ }
   }
   if (pinned === null) return null;                  // unresolved → fall through to subagent
+
+  // INJECTION GUARD: the pinned value comes from live tool_input (agent- and,
+  // via prompt-injection from remote content, attacker-influenceable). It is
+  // spliced verbatim into the recorded args below — for a SQL reverter that
+  // means into a query STRING. A value like `x'; DROP TABLE posts; --` would
+  // turn a one-row DELETE reverter into a DROP at restore. A legitimate pin is
+  // a stable identifier (id, uuid, plain title) with no string-breaking chars;
+  // anything with a quote / statement separator / comment marker / backslash /
+  // newline is refused here and falls through to the subagent, which reverses
+  // through the live MCP safely. Conservative (a title with an apostrophe also
+  // falls through) but never guesses an escaping context we cannot know.
+  if (/['"`;\\\n\r\x00]|--|\/\*|\*\//.test(pinned)) {
+    if (config.verbose) process.stderr.write("[CHATS-Sandbox] create reverter: pin has injection-prone chars — deferring to subagent\n");
+    return null;
+  }
 
   // MCP-call inverse (preferred): substitute the pinned value into the recorded
   // args wherever the explorer left a "<...>" placeholder, then replay verbatim

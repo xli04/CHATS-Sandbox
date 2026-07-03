@@ -156,16 +156,18 @@ async function main(): Promise<void> {
       );
     }
 
-    // If subagent is needed, add instructions for Claude to see
+    // If subagent is needed, add instructions for Claude to see. No
+    // "[CHATS-Sandbox]" prefix here — the whole string is prefixed ONCE below
+    // (the double prefix "[CHATS-Sandbox] [CHATS-Sandbox] SUBAGENT…" was a bug).
     if (backupResult.needsSubagent) {
       contextParts.push(
-        `[CHATS-Sandbox] SUBAGENT BACKUP NEEDED: ${backupResult.subagentReason}`
+        `SUBAGENT BACKUP NEEDED: ${backupResult.subagentReason}`
       );
     }
 
     const contextMsg = contextParts.length > 0
       ? `[CHATS-Sandbox] ${contextParts.join("; ")}`
-      : `[CHATS-Sandbox] Backup attempted for ${ctx.tool_name}, no artifact created.`;
+      : `[CHATS-Sandbox] No backup needed for ${ctx.tool_name} (judged not to change state outside the workspace).`;
 
     if (config.verbose) {
       process.stderr.write(contextMsg + "\n");

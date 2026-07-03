@@ -233,13 +233,29 @@ def _pre_hook(tool_name: str, args: dict) -> None:
     # Only keys already present in args are touched: the hook rewrites
     # existing inputs, it does not invent new parameters for the tool.
     try:
-        upd = (out or {}).get("hookSpecificOutput", {}).get("updatedInput")
+        hso = (out or {}).get("hookSpecificOutput", {}) or {}
+        upd = hso.get("updatedInput")
         if isinstance(upd, dict):
             for k, v in upd.items():
                 if k in args and args[k] != v:
                     logger.debug("chats-sandbox: tier-0 rewrite %s: %r -> %r",
                                  k, args[k], v)
                     args[k] = v
+        # SURFACE backup feedback. The Node hook reports a failed / UNVERIFIED
+        # / needed tier-3 backup via additionalContext, and a deny decision via
+        # permissionDecision. The Hermes plugin API cannot inject context into
+        # the agent's turn or block the tool, so at minimum LOG it at WARNING —
+        # otherwise a destructive action whose backup FAILED (or that we wanted
+        # to deny) proceeds with no signal anywhere. (Claude Code / Cursor get
+        # this natively via additionalContext / permission:deny.)
+        ctx = hso.get("additionalContext")
+        if isinstance(ctx, str) and ctx.strip():
+            logger.warning("chats-sandbox: %s", ctx.strip())
+        if hso.get("permissionDecision") == "deny":
+            logger.warning("chats-sandbox: hook requested DENY of %s but the "
+                           "Hermes plugin cannot block a tool call — it will "
+                           "run. Reason: %s", mapped,
+                           hso.get("permissionDecisionReason", "(none)"))
     except Exception:
         pass  # never block the tool
 

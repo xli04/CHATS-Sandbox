@@ -1212,15 +1212,39 @@ export function runSubagentBackup(
   // is at best guessed, at worst fabricated. Downgrade, don't drop: force
   // live_restore so restore re-derives against live state, and mark the
   // description UNVERIFIED so humans and the restore agent see the caveat.
-  // EXEMPT deterministic recovery_mcp_calls: the no-MCP prompt directive
-  // explicitly permits recording a CREATE inverse derived from the ACTION
-  // ARGS alone (delete-by-pinned-id), and the harness replays those calls
-  // IN-PROCESS at restore (callMcpTool) — forcing live_restore would skip
-  // that working path in favor of a restore subagent on the same MCP-less
-  // runner. Fires only when the runner PROVABLY lacks MCP (codex/openclaw;
-  // hermes with no config at all) — never on uncertainty (claude user scope).
+  //
+  // recovery_mcp_calls are exempted ONLY for a CONSTRUCTIVE triggering action.
+  // The no-MCP directive permits recording a CREATE inverse derived from the
+  // ACTION ARGS alone (delete the just-created entity, pinned by an id in the
+  // args) — the harness replays that in-process at restore. But for a
+  // DESTRUCTIVE/MUTATING trigger (delete/update), the inverse REQUIRES the
+  // pre-state the runner could not read, so any recovery_mcp_calls it emitted
+  // are fabricated — including a "reversal" that merely replays the same
+  // destructive call (observed: a codex mock "reversing" a DELETE by emitting
+  // the identical DELETE). Those must be distrusted like prose: force
+  // live_restore (restore then routes to a subagent instead of replaying the
+  // call blindly against the live server). Fires only when the runner PROVABLY
+  // lacks MCP (codex/openclaw; hermes with no config) — never on uncertainty.
+  // Classify the ACTION VERB, not the whole args — a free-text scan wrongly
+  // trusts `DELETE FROM new_orders` or `UPDATE t SET note='please add later'`
+  // because a schema name / literal contains a constructive word, re-opening
+  // the fabrication hole. The verb is the tool-name action segment PLUS the
+  // leading keyword of the SQL/command payload; table names and string
+  // literals never enter it. A destructive verb anywhere (action verb OR the
+  // full payload) vetoes — over-distrust is the safe direction.
+  const _payload = (`${String(ctx.tool_input.command ?? "")} ` +
+    `${String((ctx.tool_input as { sql?: unknown }).sql ?? "")} ` +
+    `${String((ctx.tool_input as { query?: unknown }).query ?? "")}`).toLowerCase();
+  const _toolSeg = (ctx.tool_name.split("__").pop() || "").toLowerCase().replace(/_/g, " ");
+  const _leadingVerb = _payload.match(/[a-z]+/)?.[0] ?? ""; // first alpha token of the statement
+  const _actionVerb = `${_toolSeg} ${_leadingVerb}`;
+  const _CONSTRUCTIVE = /\b(create|insert|post|add|new|upload|submit|send|append|publish|register|generate)\b/;
+  const _DESTRUCTIVE = /\b(delete|update|drop|truncate|alter|remove|purge|replace|merge|upsert|revoke|wipe|erase|clear)\b/;
+  const _isConstructive = _CONSTRUCTIVE.test(_actionVerb)
+    && !_DESTRUCTIVE.test(_actionVerb) && !_DESTRUCTIVE.test(_payload);
+  const _trustworthyMcpCalls = _isConstructive && (parsed.recovery_mcp_calls ?? []).length > 0;
   if (!_mcpAvailable && ctx.tool_name.startsWith("mcp__") && !durableArtifact
-      && !(parsed.recovery_mcp_calls ?? []).length) {
+      && !_trustworthyMcpCalls) {
     logDebug(
       `no-MCP distrust: runner=${config.subagentRunner ?? "claude"} had no MCP for ` +
       `${_server ?? "?"}, no durable artifact, prose-only recovery — forcing live_restore + UNVERIFIED.`,
