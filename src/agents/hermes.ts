@@ -224,17 +224,22 @@ def _pre_hook(tool_name: str, args: dict) -> None:
         "tool_input": _hook_payload_input(tool_name, args),
     })
     # Tier-0 run-and-rewrite: the hook already executed the destructive
-    # command reversibly and rewrote it to a no-op. Hermes pre-hooks
-    # share the args dict with the tool handler, so applying the
-    # rewritten command here is what stops the original from running a
-    # second time. Only "command" is ever rewritten by tier-0 rules.
+    # command reversibly and rewrote the input. Hermes pre-hooks share the
+    # args dict with the tool handler, so applying the rewrite here is what
+    # stops the original from running a second time. ALL updatedInput keys
+    # are applied (today's tier-0 rules only ever rewrite "command", but the
+    # hook contract allows any key — dropping the rest would silently
+    # diverge from the Claude Code adapter, which applies the whole object).
+    # Only keys already present in args are touched: the hook rewrites
+    # existing inputs, it does not invent new parameters for the tool.
     try:
         upd = (out or {}).get("hookSpecificOutput", {}).get("updatedInput")
-        if isinstance(upd, dict) and "command" in upd and "command" in args:
-            if upd["command"] != args["command"]:
-                logger.debug("chats-sandbox: tier-0 rewrite %r -> %r",
-                             args["command"], upd["command"])
-                args["command"] = upd["command"]
+        if isinstance(upd, dict):
+            for k, v in upd.items():
+                if k in args and args[k] != v:
+                    logger.debug("chats-sandbox: tier-0 rewrite %s: %r -> %r",
+                                 k, args[k], v)
+                    args[k] = v
     except Exception:
         pass  # never block the tool
 

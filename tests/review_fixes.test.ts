@@ -427,7 +427,10 @@ describe("matchPattern: MIXED-tool ambiguity — verb decides, not first-pattern
 });
 
 describe("reconcileCaptureTools: skill prose tools must be in capture_tools", () => {
-  const { reconcileCaptureTools } = require("../self-exploration/tree_generation.js");
+  const pathM2 = require("node:path");
+  // self-exploration compiles to dist/ (its own tsconfig), not dist-test/ —
+  // resolve the compiled copy relative to this compiled test file.
+  const { reconcileCaptureTools } = require(pathM2.join(__dirname, "../../dist/self-exploration/tree_generation.js"));
   const LIVE = ["execute_sql", "get_object_details", "list_directory", "list_directory_with_sizes"];
 
   it("widens capture_tools with a live tool the recipe references", () => {
@@ -467,5 +470,117 @@ describe("CHATS_SANDBOX_NAIVE_GATE: no-knowledge baseline escalates by default",
   }));
   it("knob off → learned/allowlist gate unchanged (SELECT skips without spawning)", () => {
     assert.equal(touchesOutsideWorkspace(sqlCtx("SELECT count(*) FROM orders")), false);
+  });
+});
+
+describe("runner alignment: caps table, claude MCP fallback + narrowing, no-MCP degradation", () => {
+  const fsM = require("node:fs"), osM = require("node:os"), pathM = require("node:path");
+  const { capabilitiesFor, mcpAvailableFor, mcpConfigSource } = require("../src/backup/runner_caps.js");
+  const { buildBackupGuidance } = require("../src/backup/subagent.js");
+
+  // Mock bins so isCommandAvailable passes for every runner on any machine
+  // (same PATH-prepend pattern as tests/subagent.test.ts).
+  const MOCK = fsM.mkdtempSync(pathM.join(osM.tmpdir(), "chats-mockbin-"));
+  for (const b of ["claude", "codex", "openclaw", "hermes"]) {
+    fsM.writeFileSync(pathM.join(MOCK, b), "#!/bin/sh\nexit 0\n"); fsM.chmodSync(pathM.join(MOCK, b), 0o755);
+  }
+  const withMockPath = (fn: () => void) => {
+    const prev = process.env.PATH;
+    process.env.PATH = `${MOCK}:${prev}`;
+    try { fn(); } finally { process.env.PATH = prev; }
+  };
+  // Workspace with a .mcp.json (claude fallback source) + a tool registry.
+  const withWorkspace = (fn: (config: any, ws: string) => void) => {
+    const ws = fsM.mkdtempSync(pathM.join(osM.tmpdir(), "chats-runner-ws-"));
+    const prevCwd = process.cwd();
+    try {
+      fsM.writeFileSync(pathM.join(ws, ".mcp.json"),
+        JSON.stringify({ mcpServers: { postgres: { command: "/bin/true" } } }));
+      fsM.mkdirSync(pathM.join(ws, ".chats-sandbox"), { recursive: true });
+      fsM.writeFileSync(pathM.join(ws, ".chats-sandbox", "tool-registry.json"),
+        JSON.stringify({ postgres: ["execute_sql", "get_object_details", "list_schemas", "list_objects"] }));
+      process.chdir(ws);
+      fn({ ...DEFAULT_CONFIG, backupDir: pathM.join(ws, ".chats-sandbox", "backups") }, ws);
+    } finally { process.chdir(prevCwd); fsM.rmSync(ws, { recursive: true, force: true }); }
+  };
+
+  it("caps: hermes/claude can wire MCP, codex/openclaw cannot", () => {
+    assert.equal(capabilitiesFor("hermes").mcp, "filtered-home");
+    assert.equal(capabilitiesFor("claude").mcp, "config-flag");
+    assert.equal(capabilitiesFor("codex").mcp, "none");
+    assert.equal(capabilitiesFor("openclaw").mcp, "none");
+    assert.equal(capabilitiesFor(undefined).mcp, "config-flag"); // default = claude
+  });
+
+  it("mcpAvailableFor: codex/openclaw false for MCP actions; claude true via workspace .mcp.json fallback", () => withWorkspace((config) => {
+    assert.equal(mcpAvailableFor("codex", config, "postgres"), false);
+    assert.equal(mcpAvailableFor("openclaw", config, "postgres"), false);
+    assert.equal(mcpAvailableFor("claude", config, "postgres"), true);   // .mcp.json in cwd
+    assert.equal(mcpAvailableFor("codex", config, null), true);          // no server needed
+    assert.equal(mcpConfigSource(config), pathM.join(process.cwd(), ".mcp.json"));
+  }));
+
+  it("claude branch: .mcp.json fallback + --strict-mcp-config + --disallowedTools complement + ToolSearch preamble", () => withWorkspace((config) => withMockPath(() => {
+    const inv = buildSubagentInvocation("BACKUP THIS", { ...config, subagentRunner: "claude" },
+      { withMcp: true, neededServer: "postgres", toolAllow: ["execute_sql"] });
+    assert.ok(inv, "invocation built");
+    const a = inv!.args;
+    assert.ok(a.includes("--strict-mcp-config"), "strict mcp");
+    assert.ok(a.includes("--mcp-config"), "mcp config passed (fallback source)");
+    const di = a.indexOf("--disallowedTools");
+    assert.ok(di >= 0, "disallowedTools present");
+    const denied = a[di + 1].split(",");
+    assert.ok(denied.includes("mcp__postgres__get_object_details"), "complement denied");
+    assert.ok(!denied.includes("mcp__postgres__execute_sql"), "allowed tool NOT denied");
+    assert.ok(a[1].startsWith("Before your first MCP call"), "ToolSearch preamble prepended");
+  })));
+
+  it("claude branch: no toolAllow → no --disallowedTools (unfiltered server)", () => withWorkspace((config) => withMockPath(() => {
+    const inv = buildSubagentInvocation("B", { ...config, subagentRunner: "claude" },
+      { withMcp: true, neededServer: "postgres" });
+    assert.ok(!inv!.args.includes("--disallowedTools"));
+  })));
+
+  it("fallback .mcp.json WITHOUT the needed server → NO MCP flags (user scope must keep working)", () => withWorkspace((config) => withMockPath(() => {
+    // Regression (review finding): pairing the fallback with --strict-mcp-config
+    // when the workspace .mcp.json lacks the server would strict-filter to an
+    // EMPTY server set — hard-blocking a user-scope server that loaded before.
+    const inv = buildSubagentInvocation("B", { ...config, subagentRunner: "claude" },
+      { withMcp: true, neededServer: "notion" });   // .mcp.json defines only postgres
+    assert.ok(inv);
+    assert.ok(!inv!.args.includes("--mcp-config"), "no mcp-config flag");
+    assert.ok(!inv!.args.includes("--strict-mcp-config"), "no strict flag");
+    assert.ok(!inv!.args[1].startsWith("Before your first MCP call"), "no preamble either");
+  })));
+
+  it("disallowedTools preserves registry casing (camelCase tools stay matchable)", () => withWorkspace((config, ws) => withMockPath(() => {
+    const fsL = require("node:fs"), pathL = require("node:path");
+    fsL.writeFileSync(pathL.join(ws, ".chats-sandbox", "tool-registry.json"),
+      JSON.stringify({ postgres: ["listTables", "dropTable"] }));
+    const inv = buildSubagentInvocation("B", { ...config, subagentRunner: "claude" },
+      { withMcp: true, neededServer: "postgres", toolAllow: ["listtables"] });
+    const di = inv!.args.indexOf("--disallowedTools");
+    assert.ok(di >= 0);
+    assert.deepEqual(inv!.args[di + 1].split(","), ["mcp__postgres__dropTable"],
+      "emitted name keeps registry casing; allow matched case-insensitively");
+  })));
+
+  it("codex/openclaw branches: no MCP flags ever", () => withWorkspace((config) => withMockPath(() => {
+    for (const runner of ["codex", "openclaw"] as const) {
+      const inv = buildSubagentInvocation("B", { ...config, subagentRunner: runner },
+        { withMcp: true, neededServer: "postgres", toolAllow: ["execute_sql"] });
+      assert.ok(inv, runner);
+      assert.ok(!inv!.args.some((x: string) => /mcp/i.test(x)), `${runner} has no mcp args`);
+    }
+  })));
+
+  it("prompt: mcpAvailable=false + MCP action → explicit no-MCP directive; true → capture guidance only", () => {
+    const base = { mode: "subagent" as const, toolName: "mcp__postgres__execute_sql",
+      command: "", args: "{}", actionDir: "/tmp/x" };
+    const without = buildBackupGuidance({ ...base, mcpAvailable: false });
+    const withMcp = buildBackupGuidance({ ...base, mcpAvailable: true });
+    assert.ok(without.includes("YOU HAVE NO MCP ACCESS"), "directive present when unavailable");
+    assert.ok(without.includes("UNVERIFIED: no MCP access"), "UNVERIFIED instruction present");
+    assert.ok(!withMcp.includes("YOU HAVE NO MCP ACCESS"), "directive absent when available");
   });
 });

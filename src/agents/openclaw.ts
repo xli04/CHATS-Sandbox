@@ -142,10 +142,22 @@ export default definePluginEntry({
           tool_input: hookInput(name, params),
         });
         const upd = out && out.hookSpecificOutput && out.hookSpecificOutput.updatedInput;
-        if (upd && typeof upd.command === "string" &&
-            typeof params.command === "string" &&
-            upd.command !== params.command) {
-          return { params: { ...params, command: upd.command } };
+        // Apply ALL updatedInput keys (today's tier-0 rules only rewrite
+        // "command", but the hook contract allows any key — mirror the
+        // Claude Code adapter instead of silently dropping the rest). Only
+        // keys already present in params are touched: the hook rewrites
+        // existing inputs, it does not invent new tool parameters.
+        if (upd && typeof upd === "object") {
+          let changed = false;
+          const next = Object.assign({}, params);
+          for (const k of Object.keys(upd)) {
+            // Own keys only ("k in next" would match prototype-chain names
+            // like toString and create a NEW own property).
+            if (Object.prototype.hasOwnProperty.call(next, k) && next[k] !== upd[k]) {
+              next[k] = upd[k]; changed = true;
+            }
+          }
+          if (changed) return { params: next };
         }
       } catch { /* never block the tool */ }
       return undefined;

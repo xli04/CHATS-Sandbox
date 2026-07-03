@@ -224,6 +224,71 @@ describe("subagent: runSubagentBackup with mock claude CLI", () => {
     }
   });
 
+  it("no-MCP distrust (codex runner): remote recovery without MCP access is downgraded to UNVERIFIED live_restore", () => {
+    // Same shadow-copy claim, but on a runner that PROVABLY cannot wire MCP
+    // (runner_caps: codex mcp="none"). The deterministic-looking recovery
+    // cannot have been verified against remote state — runner_caps forces
+    // live_restore and marks the description UNVERIFIED (closes the
+    // confident-empty fabrication hole for MCP-less runners). The claude
+    // runner is deliberately NOT distrusted (user-scope MCP may exist), so
+    // the RESPECTS test above keeps its original behavior.
+    const responseFile = path.join(MOCK_DIR, "codex-response.txt");
+    fs.writeFileSync(responseFile, JSON.stringify({
+      description: "shadow-copied rows before DELETE",
+      backup_commands: ["INSERT INTO _chats_trash.orders SELECT ..."],
+      recovery_commands: ["INSERT INTO orders SELECT * FROM _chats_trash.orders WHERE ckpt='x'"],
+      live_restore: false,
+    }), "utf-8");
+    const mockCodex = path.join(MOCK_DIR, "codex");
+    fs.writeFileSync(mockCodex, `#!/bin/sh\ncat > /dev/null\ncat "${responseFile}"\n`);
+    fs.chmodSync(mockCodex, 0o755);
+    const { workspace, config, originalCwd } = setup();
+    try {
+      const dir = path.join(config.backupDir, "action_mcp_codex");
+      fs.mkdirSync(dir, { recursive: true });
+      const a = art(runSubagentBackup(
+        makeCtx("mcp__postgres__execute_sql", { sql: "DELETE FROM orders WHERE id<=30" }),
+        dir, { ...config, subagentRunner: "codex" }));
+      assert.equal(a.liveRestore, true, "forced live_restore without MCP access");
+      assert.ok(/UNVERIFIED: no MCP access/.test(a.description), "description marked UNVERIFIED");
+    } finally {
+      try { fs.rmSync(mockCodex, { force: true }); } catch { /* keep MOCK_DIR clean for other tests */ }
+      teardown(workspace, originalCwd);
+    }
+  });
+
+  it("no-MCP distrust EXEMPTS deterministic recovery_mcp_calls (args-derived create inverse)", () => {
+    // The no-MCP directive permits a CREATE inverse recorded as
+    // recovery_mcp_calls pinned by an identifier from the ACTION ARGS; the
+    // harness replays those in-process at restore, which works regardless of
+    // the runner's MCP — so the distrust rule must NOT force live_restore.
+    const responseFile = path.join(MOCK_DIR, "codex-response2.txt");
+    fs.writeFileSync(responseFile, JSON.stringify({
+      description: "create inverse pinned by args title",
+      backup_commands: [],
+      recovery_commands: [],
+      recovery_mcp_calls: [{ tool: "delete_page", args: { title: "probe-title" } }],
+      live_restore: false,
+    }), "utf-8");
+    const mockCodex = path.join(MOCK_DIR, "codex");
+    fs.writeFileSync(mockCodex, `#!/bin/sh\ncat > /dev/null\ncat "${responseFile}"\n`);
+    fs.chmodSync(mockCodex, 0o755);
+    const { workspace, config, originalCwd } = setup();
+    try {
+      const dir = path.join(config.backupDir, "action_mcp_codex2");
+      fs.mkdirSync(dir, { recursive: true });
+      const a = art(runSubagentBackup(
+        makeCtx("mcp__notion__create_page", { title: "probe-title" }),
+        dir, { ...config, subagentRunner: "codex" }));
+      assert.equal(a.liveRestore, false, "deterministic mcp_calls replay preserved");
+      assert.ok(!/UNVERIFIED: no MCP access/.test(a.description), "not marked UNVERIFIED");
+      assert.equal(a.recoveryMcpCalls?.length, 1);
+    } finally {
+      try { fs.rmSync(mockCodex, { force: true }); } catch { /* */ }
+      teardown(workspace, originalCwd);
+    }
+  });
+
   it("KEEPS the model's live_restore=false for local/deterministic actions", () => {
     installMockClaude(JSON.stringify({
       description: "saved file copy",

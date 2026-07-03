@@ -36,6 +36,7 @@ import type { BackupArtifact, HookContext, SandboxConfig } from "../types.js";
 import { describeToolAction } from "../types.js";
 import { extractJsonObject } from "../util/extract_json.js";
 import { serverFromToolName } from "../explore/experiences.js";
+import { mcpAvailableFor, mcpConfigSource } from "./runner_caps.js";
 
 /** Shape of the JSON the subagent is instructed to return */
 interface SubagentResponse {
@@ -64,7 +65,7 @@ interface SubagentResponse {
   no_backup_needed?: boolean;
 }
 
-function isCommandAvailable(cmd: string): boolean {
+export function isCommandAvailable(cmd: string): boolean {
   try {
     execSync(`command -v ${cmd}`, { stdio: "pipe", timeout: 5_000 });
     return true;
@@ -212,17 +213,54 @@ export function buildSubagentInvocation(
   // is still live, so a shared browser profile would collide on the
   // single-instance lock; isolateBrowserProfile gives the subagent its own
   // (auth-seeded) copy. Non-browser MCP servers have no such collision.
-  if (opts?.withMcp && config.subagentMcpConfig) {
-    if (opts.neededServer) {
+  // Config SOURCE comes from runner_caps.mcpConfigSource: the explicit
+  // subagentMcpConfig knob, else the workspace's own .mcp.json — so a
+  // claude-code user gets MCP-wired backups out of the box (the knob is
+  // unset in DEFAULT_CONFIG, which used to leave subagents silently MCP-less).
+  const mcpSource = opts?.withMcp ? mcpConfigSource(config, opts?.neededServer) : null;
+  if (mcpSource) {
+    if (opts?.neededServer) {
       // Dynamic MCP loading: only this action's server, and ignore every
       // other MCP source (--strict-mcp-config).
       args.push("--mcp-config",
-        filteredClaudeMcpConfig(config.subagentMcpConfig, opts.neededServer, !!opts.isolateBrowserProfile));
+        filteredClaudeMcpConfig(mcpSource, opts.neededServer, !!opts.isolateBrowserProfile));
       args.push("--strict-mcp-config");
+      // Tool narrowing to the learned capture_tools, as the COMPLEMENT of the
+      // server's registered tool list: --disallowedTools hard-blocks a call
+      // (verbatim "No such tool available", verified live on 2.1.199) and
+      // removes the tool from ToolSearch discovery. This is the claude analog
+      // of hermes' tools.include — permission narrowing, not token savings
+      // (schemas are ToolSearch-deferred in this claude version regardless).
+      // No registry entry for the server → skip narrowing (never guess a
+      // complement; an over-broad deny list could block the capture itself).
+      if (opts.toolAllow && opts.toolAllow.length) {
+        try {
+          // eslint-disable-next-line @typescript-eslint/no-require-imports
+          const { loadToolRegistry } = require("../explore/tool_registry.js");
+          const serverTools: string[] = (loadToolRegistry(config)[opts.neededServer] ?? []);
+          // Compare case-insensitively, but EMIT the registry's own casing —
+          // a lowercased name would not match a camelCase tool and the deny
+          // would silently fail open.
+          const bare = (t: string) => (t.split("__").pop() || t);
+          const allowed = new Set(opts.toolAllow.map((t) => bare(t).toLowerCase()));
+          const denied = serverTools
+            .filter((t) => !allowed.has(bare(t).toLowerCase()))
+            .map((t) => `mcp__${opts.neededServer}__${bare(t)}`);
+          if (denied.length) args.push("--disallowedTools", denied.join(","));
+        } catch { /* registry unavailable → unfiltered server, the safe default */ }
+      }
     } else {
       args.push("--mcp-config",
-        opts.isolateBrowserProfile ? isolatedMcpConfig(config.subagentMcpConfig) : config.subagentMcpConfig);
+        opts?.isolateBrowserProfile ? isolatedMcpConfig(mcpSource) : mcpSource);
     }
+  }
+  // NOTE claude 2.1.199 has no --max-turns flag; the result watcher + timeout
+  // bound the run instead (runner_caps.maxTurns=false).
+  if (mcpSource && opts?.neededServer) {
+    // This claude version DEFERS MCP tool schemas behind ToolSearch: a direct
+    // call before loading fails with "No such tool available". One static
+    // preamble line teaches the subagent to load the server's tools first.
+    args[1] = `Before your first MCP call: load the "${opts.neededServer}" server's tools with ToolSearch (query "${opts.neededServer}").\n\n` + args[1];
   }
   return { bin: "claude", args, runner };
 }
@@ -410,6 +448,7 @@ function buildSubagentPrompt(
   ctx: HookContext,
   actionDir: string,
   config?: SandboxConfig,
+  mcpAvailable?: boolean,
 ): string {
   return buildBackupGuidance({
     mode: "subagent",
@@ -419,6 +458,7 @@ function buildSubagentPrompt(
     cwd: process.cwd(),
     actionDir,
     config,
+    mcpAvailable,
   });
 }
 
@@ -435,6 +475,12 @@ export interface BackupGuidanceOpts {
   server?: string | null;
   /** Explicit experience to inject (else derived from the server). */
   experienceName?: string;
+  /** Whether the subagent will actually HAVE the action's MCP server
+   *  (runner_caps.mcpAvailableFor). false → the remote-capture guidance is
+   *  replaced with an explicit no-MCP directive so the subagent is told not
+   *  to fabricate reads it cannot perform. undefined → assume available
+   *  (browser actions, inline mode, legacy callers). */
+  mcpAvailable?: boolean;
 }
 
 /** SHARED backup knowledge for BOTH the tier-3 subagent and the inline-backup
@@ -634,11 +680,25 @@ If the MCP exposes no clean read-side counterpart, save what you can (URL/DOM) a
     return "";
   };
   const picked = pickCategory();
+  // HONEST DEGRADATION for MCP-less runners: CAT_F's capture instructions
+  // ("with the SAME MCP, read the affected entity") are unfollowable when the
+  // runner cannot wire the action's MCP server (runner_caps). Telling the
+  // subagent to do the impossible makes it flail (burning its turn budget) or
+  // fabricate a confident recovery from nothing — observed live in the codex/
+  // openclaw gap audit and in the ablations' stale-instruction failures. So
+  // when mcpAvailable === false the remote guidance carries an explicit
+  // directive instead; the verification gate additionally distrusts whatever
+  // comes back (see runSubagentBackup).
+  const noMcpDirective = (picked === CAT_F && opts.mcpAvailable === false) ? `
+
+**YOU HAVE NO MCP ACCESS.** This runner could not load the action's MCP server, so you **cannot read the remote pre-state and cannot verify anything remotely**. Do NOT pretend to read remote state, do NOT invent captured data, and do NOT emit recovery_mcp_calls you have not derived from the ACTION ARGS themselves. What you may still do:
+- For a CONSTRUCTIVE action (create/insert/post): the inverse is derivable from the action args alone — record it, pinned by the identifier IN the args (never by position).
+- Otherwise: set live_restore:true, leave recovery_mcp_calls empty, and begin description with EXACTLY "UNVERIFIED: no MCP access" so restore re-derives against live state instead of trusting this record.` : "";
   const categoryGuidance = mode === "inline" ? `## HOW TO BACK UP EACH ACTION
 Apply the strategy that matches each action. The common case in this task is a remote / MCP / browser mutation:
 ${CAT_F}
 For other action types — a local file write outside the project, a package install (pip/npm/apt/brew), or an env change — apply the analogous "capture the prior state, then record the exact inverse" strategy. If an action only READS (mutates nothing outside the workspace), it needs no backup.` : `## HOW TO BACK UP THIS ACTION
-${picked ? `\n${picked}\n` : ""}
+${picked ? `\n${picked}\n` : ""}${noMcpDirective}
 If the action is READ-ONLY (only reads/inspects, mutates nothing outside the workspace) return no_backup_needed:true with empty backup_commands/recovery_commands — be conservative, only when CERTAIN it mutates nothing. If nothing above fits, capture whatever recoverable state you can into <STORAGE_DIR> or clearly document what cannot be recovered.`;
 
   if (mode === "inline") {
@@ -873,16 +933,10 @@ export function runSubagentBackup(
     }
   };
 
-  const prompt = buildSubagentPrompt(ctx, actionDir, config);
-  const timeoutMs = Math.max(10_000, config.subagentTimeoutSeconds * 1000);
-
-  // Build the runner invocation — claude -p or hermes chat — see
-  // buildSubagentInvocation. Returns null when the runner's CLI is
-  // missing, in which case we skip the backup (graceful degradation).
-  // BACKUP needs the remote tools too: to recover a delete/edit we must
-  // READ the pre-state BEFORE the agent's action runs. Give the subagent
-  // the same MCP, with an isolated browser profile so it doesn't collide
-  // with the agent's live browser lock.
+  // Resolve the action's server BEFORE the prompt: the prompt must know
+  // whether this runner can actually wire that server's MCP (runner_caps) —
+  // an MCP-less runner gets the explicit no-MCP directive instead of capture
+  // instructions it cannot follow.
   const _server = serverFromToolName(ctx.tool_name);
   // SIMPLEST backup design: a BROWSER action's backup subagent gets NO browser.
   // The main agent already took a browser_snapshot before its mutation; the hook
@@ -894,6 +948,20 @@ export function runSubagentBackup(
   // Non-browser servers (e.g. postgres) keep their MCP — capture there IS a
   // remote read/insert, not a snapshot replay.
   const _isBrowser = _server === "playwright";
+  const _mcpAvailable = _isBrowser
+    ? true // browser path is MCP-less BY DESIGN (PAGE_STATE), not degraded
+    : mcpAvailableFor(config.subagentRunner, config, _server);
+
+  const prompt = buildSubagentPrompt(ctx, actionDir, config, _mcpAvailable);
+  const timeoutMs = Math.max(10_000, config.subagentTimeoutSeconds * 1000);
+
+  // Build the runner invocation — claude -p or hermes chat — see
+  // buildSubagentInvocation. Returns null when the runner's CLI is
+  // missing, in which case we skip the backup (graceful degradation).
+  // BACKUP needs the remote tools too: to recover a delete/edit we must
+  // READ the pre-state BEFORE the agent's action runs. Give the subagent
+  // the same MCP, with an isolated browser profile so it doesn't collide
+  // with the agent's live browser lock.
   const invocation = buildSubagentInvocation(prompt, config, {
     withMcp: !_isBrowser,
     isolateBrowserProfile: true,
@@ -920,7 +988,10 @@ export function runSubagentBackup(
   }
   const { bin, args } = invocation;
 
-  logDebug(`invoking: ${bin} [runner=${invocation.runner}] [prompt=${prompt.length} chars] ${args.filter((a) => a !== prompt).join(" ")} (timeout=${timeoutMs}ms)`);
+  // Filter by CONTAINMENT, not equality: the claude branch may prepend a
+  // ToolSearch preamble to the prompt arg, and an equality check would dump
+  // the whole multi-KB prompt (incl. PAGE_STATE) into the log line.
+  logDebug(`invoking: ${bin} [runner=${invocation.runner}] [prompt=${prompt.length} chars] ${args.filter((a) => !a.includes(prompt)).join(" ")} (timeout=${timeoutMs}ms)`);
 
   // Tell the user what we're about to do — claude -p can take 5-30s and
   // there's otherwise no signal that anything is happening.
@@ -1118,7 +1189,7 @@ export function runSubagentBackup(
   // — the fast path for simple cases like a SQL reversal). live_restore=true
   // → spawn a fresh agent that re-reads live state (the dynamic cases like a
   // browser/UI reversal where the page has changed).
-  const liveRestore = modelLiveRestore;
+  let liveRestore = modelLiveRestore;
 
   if (!verified) {
     logDebug(
@@ -1132,6 +1203,37 @@ export function runSubagentBackup(
       "be unprotected; proceed with caution.",
     );
     return null;
+  }
+
+  // NO-MCP DISTRUST (runner_caps) — sits AFTER the !verified refusal so a
+  // confident-empty response is still flatly refused (one message, not two).
+  // This call's runner could not wire the action's MCP server, so the
+  // subagent CANNOT have read remote pre-state — a prose recovery it emitted
+  // is at best guessed, at worst fabricated. Downgrade, don't drop: force
+  // live_restore so restore re-derives against live state, and mark the
+  // description UNVERIFIED so humans and the restore agent see the caveat.
+  // EXEMPT deterministic recovery_mcp_calls: the no-MCP prompt directive
+  // explicitly permits recording a CREATE inverse derived from the ACTION
+  // ARGS alone (delete-by-pinned-id), and the harness replays those calls
+  // IN-PROCESS at restore (callMcpTool) — forcing live_restore would skip
+  // that working path in favor of a restore subagent on the same MCP-less
+  // runner. Fires only when the runner PROVABLY lacks MCP (codex/openclaw;
+  // hermes with no config at all) — never on uncertainty (claude user scope).
+  if (!_mcpAvailable && ctx.tool_name.startsWith("mcp__") && !durableArtifact
+      && !(parsed.recovery_mcp_calls ?? []).length) {
+    logDebug(
+      `no-MCP distrust: runner=${config.subagentRunner ?? "claude"} had no MCP for ` +
+      `${_server ?? "?"}, no durable artifact, prose-only recovery — forcing live_restore + UNVERIFIED.`,
+    );
+    liveRestore = true;
+    if (!/^UNVERIFIED/i.test(parsed.description)) {
+      parsed.description = `UNVERIFIED: no MCP access — ${parsed.description}`;
+    }
+    tellUser(
+      "[CHATS-Sandbox] Backup recorded WITHOUT MCP access (runner cannot load " +
+      "the action's MCP server) — marked UNVERIFIED; restore will re-derive " +
+      "against live state instead of trusting it.",
+    );
   }
 
   // Persist the raw subagent response as a file alongside the artifact

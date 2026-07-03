@@ -18,6 +18,7 @@ import type { AgentAdapter, AgentInstallResult } from "./index.js";
 import { appendGitignore } from "./index.js";
 import { saveConfig, getConfigDir } from "../config/load.js";
 import { DEFAULT_CONFIG } from "../types.js";
+import { isCommandAvailable } from "../backup/subagent.js";
 
 const HOOKS_DIR = ".cursor";
 const HOOKS_FILE = "hooks.json";
@@ -91,6 +92,19 @@ export const cursorAdapter: AgentAdapter = {
     saveConfig(DEFAULT_CONFIG, projectRoot);
 
     appendGitignore(projectRoot, ".chats-sandbox/");
+
+    // Cursor has no tier-3 runner branch of its own: the backup subagent runs
+    // on DEFAULT_CONFIG.subagentRunner (claude). If that CLI is missing, every
+    // out-of-workspace backup silently degrades to a log-only skip — say so
+    // NOW, at install time, instead of letting the user discover it after a
+    // destructive action went unprotected.
+    if (!isCommandAvailable(DEFAULT_CONFIG.subagentRunner ?? "claude")) {
+      log.push("");
+      log.push(`WARNING: the tier-3 backup subagent runs on the "${DEFAULT_CONFIG.subagentRunner ?? "claude"}" CLI,`);
+      log.push("which is NOT installed — out-of-workspace/MCP backups will be");
+      log.push("SKIPPED. Install it, or set a runner you have:");
+      log.push("  chats-sandbox config set subagentRunner <claude|hermes|codex|openclaw>");
+    }
 
     log.push("CHATS-Sandbox installed successfully for Cursor!");
     log.push(`  Hooks wired into ${HOOKS_DIR}/${HOOKS_FILE}`);
