@@ -108,19 +108,15 @@ export interface ServerExperiences {
    *  ONE prose block injected into the backup subagent prompt instead of
    *  per-pattern one-liners. Derived data: rebuilt on every save. */
   skill?: string;
-  /** LEARNED "no backup needed" affordances for THIS environment, found in
-   *  the self-exploration phase (login, pagination, opening an item,
-   *  selecting a dropdown option, switching tabs…). Short keyword/affordance
-   *  phrases the gate matches in-process to skip the subagent for free.
-   *  SAFETY: these only EXTEND the benign skip-list — a destructive verb
-   *  (delete/remove/…) always overrides a match and still backs up. */
-  noBackupPatterns?: string[];
   /** LEARNED read-only TOOL NAMES for THIS environment — tools the explorer
    *  picked (from the actual provided tool list) as read/inspect-only. The gate
-   *  skips backup for these by tool NAME (complements noBackupPatterns, which
-   *  matches affordance KEYWORDS). SAFETY: the runtime still rejects any entry
-   *  whose name carries a mutating/destructive verb — learned data may only
-   *  EXTEND the read-only set. */
+   *  skips backup for these by tool NAME. This is the ONLY learned negative
+   *  signal (keyword-level no-backup patterns were removed: a learned keyword
+   *  that silently suppressed backups was the poisoning-prone direction, and
+   *  tool names — unlike keywords — are validated against the live tool
+   *  surface). SAFETY: the runtime still rejects any entry whose name carries
+   *  a mutating/destructive verb — learned data may only EXTEND the read-only
+   *  set. */
   readOnlyTools?: string[];
   /** The MCP SERVER(S) whose tools this experience covers — the key half of
    *  the {server → experience} dict. For a dedicated MCP it's just the server
@@ -204,12 +200,11 @@ export function experienceNameForServer(config: SandboxConfig, server: string): 
 }
 
 /** The compiled matchers for ONE server's learned experience:
- *    readOnlyTools — Non-Backup-ToolList (skip by tool name)
- *    noBackupRegex — Non-Backup-patterns (skip by keyword)
+ *    readOnlyTools — Non-Backup-ToolList (skip by tool name; the only learned
+ *                    negative signal — keyword-level suppression was removed)
  *    triggerRegex  — Backup-patterns (back up by keyword) */
 export interface ServerMatchers {
   readOnlyTools: Set<string>;
-  noBackupRegex: RegExp | null;
   triggerRegex: RegExp | null;
 }
 
@@ -225,7 +220,13 @@ const _buildKeywordRegex = (vals: Iterable<string>): RegExp | null => {
   }
   if (!pats.size) return null;
   const escaped = [...pats].map((s) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
-  return new RegExp(`\\b(${escaped.join("|")})`, "i");
+  // Boundaries on BOTH sides: a trigger must match as a whole word. A leading-
+  // only \b let `create` prefix-match the ubiquitous `created_at` (and
+  // `delete` → `deleted_at`), so every read-only SELECT naming a timestamp
+  // column on an explored server paid a spurious subagent spawn. SQL keywords
+  // are exact words, and browser triggers come from element labels — nothing
+  // legitimate relied on prefix matching.
+  return new RegExp(`\\b(${escaped.join("|")})\\b`, "i");
 };
 
 /**
@@ -242,7 +243,7 @@ export function serverMatchers(config: SandboxConfig, expName: string): ServerMa
   const cached = _serverMatcherCache.get(key);
   if (cached && cached.sig === sig) return cached.m;
 
-  const empty: ServerMatchers = { readOnlyTools: new Set(), noBackupRegex: null, triggerRegex: null };
+  const empty: ServerMatchers = { readOnlyTools: new Set(), triggerRegex: null };
   const data = loadExperiences(config, expName);
   if (!data) { _serverMatcherCache.set(key, { sig, m: empty }); return empty; }
 
@@ -256,7 +257,6 @@ export function serverMatchers(config: SandboxConfig, expName: string): ServerMa
   }
   const m: ServerMatchers = {
     readOnlyTools: tools,
-    noBackupRegex: _buildKeywordRegex(data.noBackupPatterns ?? []),
     triggerRegex: _buildKeywordRegex((data.patterns ?? []).map((x) => String(x.trigger ?? ""))),
   };
   _serverMatcherCache.set(key, { sig, m });
@@ -308,15 +308,31 @@ export function matchPattern(
   };
   const actionForms = new Set(tailSegments(seg));
 
-  // 1. applies_to tool-segment match (most reliable — tool identity). Prefer
-  //    the MOST SPECIFIC shared segment so e.g. move_file binds to the move
-  //    pattern, not whichever *_file pattern is listed first (write_file,
-  //    edit_file and move_file all share the generic trailing "file").
+  // 1. applies_to tool-segment match (tool identity). Only a form claimed by
+  //    EXACTLY ONE pattern may decide — tool identity is the strongest signal
+  //    precisely when it is unambiguous (move_file → the move pattern). For a
+  //    MIXED tool that many per-verb patterns share (all 7 postgres patterns
+  //    declare applies_to "execute_sql"), the tool name says nothing about
+  //    WHICH mutation this call performs; first-pattern-wins here handed every
+  //    SQL action the insert pattern's capture_tools (so a DROP's subagent got
+  //    a toolset its own playbook contradicted). Ambiguous forms are excluded
+  //    and the verb decides via the trigger match below. Among unambiguous
+  //    forms, the MOST SPECIFIC (longest) still wins so move_file binds to the
+  //    move pattern, not whichever *_file pattern shares the generic trailing
+  //    "file" (shared forms like that are ambiguous and excluded anyway).
+  const formOwners = new Map<string, number>();
+  for (const p of data.patterns) {
+    if (!p.applies_to) continue;
+    for (const form of tailSegments(p.applies_to)) {
+      formOwners.set(form, (formOwners.get(form) ?? 0) + 1);
+    }
+  }
   let bestP: RecoveryPattern | null = null;
   let bestFormLen = 0;
   for (const p of data.patterns) {
     if (!p.applies_to) continue;
     for (const form of tailSegments(p.applies_to)) {
+      if (formOwners.get(form) !== 1) continue;   // shared by several patterns → verb must decide
       if (actionForms.has(form) && form.length > bestFormLen) {
         bestP = p;
         bestFormLen = form.length;
@@ -331,7 +347,10 @@ export function matchPattern(
   for (const p of data.patterns) {
     const trig = String(p.trigger ?? "").trim().toLowerCase();
     if (trig.length < 3) continue;
-    const re = new RegExp(`\\b${trig.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`, "i");
+    // Whole-word match, both boundaries — mirrors _buildKeywordRegex so the
+    // gate and the pattern lookup can never disagree on what a trigger hits
+    // (`create` must not prefix-match `created_at`).
+    const re = new RegExp(`\\b${trig.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`, "i");
     if (re.test(desc) && trig.length > bestLen) { best = p; bestLen = trig.length; }
   }
   return best;

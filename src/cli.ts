@@ -197,7 +197,7 @@ function setConfigValue(
   console.log(`Set ${key} = ${value}`);
 }
 
-// ── Explore (self-exploration of easy-win reversal patterns) ──────────
+// ── Explore (self-exploration of the per-server backup skill) ─────────
 
 function exploreCommand(_projectRoot: string, ...rest: string[]): void {
   // Self-exploration is a STANDALONE, offline pipeline — NOT the runtime backup
@@ -214,13 +214,23 @@ function exploreCommand(_projectRoot: string, ...rest: string[]): void {
   let agentArg: string | undefined;
   let modelArg: string | undefined;
   let providerArg: string | undefined;
+  let experienceArg: string | undefined;
   for (let i = 0; i < rest.length; i++) {
     if (rest[i] === "--target") { targetArg = rest[++i]; }
     else if (rest[i] === "--agent") { agentArg = rest[++i]; }
     else if (rest[i] === "--model") { modelArg = rest[++i]; }
     else if (rest[i] === "--provider") { providerArg = rest[++i]; }
+    else if (rest[i] === "--experience") { experienceArg = rest[++i]; }
     else if (rest[i] === "--tools" || rest[i] === "--server") { serverArg = rest[++i]; }
     else if (!rest[i].startsWith("--")) { serverArg = rest[i]; }
+  }
+  // --experience names the SAVED experience (the SITE identity when a browser
+  // MCP drives many sites: file <name>.json, server:<name>, appliesTo:[server]).
+  // It only makes sense for ONE explicit server — exploring several servers
+  // under one experience name would merge unrelated tool surfaces.
+  if (experienceArg && !serverArg) {
+    console.log("--experience requires an explicit <server> argument (it names ONE server's saved experience).");
+    return;
   }
 
   const agent = (agentArg ?? "hermes") as SandboxConfig["subagentRunner"];
@@ -277,14 +287,14 @@ function exploreCommand(_projectRoot: string, ...rest: string[]): void {
 
   const modelLabel = config.subagentHermesModel;
   console.log(serverArg
-    ? `Exploring easy-win reversal patterns for "${serverArg}" (agent=${agent}, model=${modelLabel})…`
+    ? `Learning the backup skill for "${serverArg}" (agent=${agent}, model=${modelLabel})…`
     : `Exploring ${known.length} server(s): ${known.join(", ")} (agent=${agent}, model=${modelLabel})…`);
   console.log("Two stages per server: (1) a model PROPOSES candidate reversals,");
   console.log("(2) a live agent EXECUTES each against the real target to verify.");
   console.log("One model is used for both stages. One-time cost per server (a few minutes each).\n");
 
   const nowIso = new Date().toISOString();
-  const outcomes = runExplore(config, nowIso, serverArg, targetArg) as Array<{
+  const outcomes = runExplore(config, nowIso, serverArg, targetArg, experienceArg) as Array<{
     server: string; tools: string[]; target: string | null; saved: boolean; path?: string; proposed: number; verified: number; error?: string;
   }>;
 
@@ -899,7 +909,7 @@ switch (command) {
     console.log("  status                          Show sandbox state");
     console.log("  backups                         List recent backup artifacts");
     console.log("  explore <server> [--agent hermes] [--model <id>] [--provider <p>]");
-    console.log("                                  Self-exploration: learn easy-win reversal patterns (standalone, arg-driven)");
+    console.log("                                  Self-exploration: learn the per-server backup skill (standalone, arg-driven)");
     console.log("  history [N]                     Timeline of last N actions (default 10)");
     console.log("  restore                         List restorable actions");
     console.log("  restore <N>                     Reverse-loop restore to action N");

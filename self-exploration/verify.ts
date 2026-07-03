@@ -17,7 +17,7 @@ import type { McpTool } from "../dist/explore/list_mcp_tools.js";
 import type { RecoveryPattern } from "../dist/explore/experiences.js";
 import { subagent } from "./infra.js";
 import { buildVerificationPrompt } from "./prompts.js";
-import { parsePatterns } from "./tree_generation.js";
+import { parsePatterns, reconcileCaptureTools } from "./tree_generation.js";
 import { listToolsCliPath } from "./mcp_scan.js";
 import { serverProfile } from "./server_profiles.js";
 import type { McpServerDef, VerdictPattern } from "./types.js";
@@ -134,11 +134,17 @@ export function verifyAndAccumulate(
       fs.rmSync(resultFile, { force: true });
     } catch { /* best-effort */ }
     if (!parsed || !parsed.length) return [];
-    return parsed.map((pp) => (
+    const merged = parsed.map((pp) => (
       isEchoOf(pp, cand)
         ? { ...cand, ...pp, trigger: pp.trigger || cand.trigger }
         : pp
     ));
+    // Consistency invariant (same as stage 1): after the verifier's final
+    // skill/recipe wording lands, capture_tools must still cover every live
+    // tool that prose references — the runtime narrows the subagent to
+    // capture_tools, and a recipe step naming an excluded tool is unfollowable.
+    for (const pp of merged) reconcileCaptureTools(pp, liveTools.map((t) => t.name));
+    return merged;
   };
 
   // Merge key — MUST mirror keyOf in explore.ts (trigger else action, lowercased)

@@ -328,18 +328,17 @@ else if(m.id===3)process.stdout.write(JSON.stringify({jsonrpc:"2.0",id:3,result:
     assert.ok(r.subagentPrompt, "unresolved server must defer to the restore subagent");
   });
 
-  it("routes an HTTP server to the restore subagent (we don't dispatch HTTP ourselves)", async () => {
+  it("dispatches an HTTP server in-process via callMcpToolHttp (not the subagent)", async () => {
     const W = fs.mkdtempSync(path.join(os.tmpdir(), "mcp-http-"));
     try {
       const cfgPath = path.join(W, "mcp-config.json");
       fs.writeFileSync(cfgPath, JSON.stringify({
         mcpServers: { web: { url: "http://127.0.0.1:9/never" } },
       }), "utf-8");
-      // resolveServerDef returns an HTTP def for "web". We do NOT dispatch
-      // HTTP tools/call ourselves — it must route to the restore subagent.
-      // Use a runner whose CLI is absent (codex) so invokeRestoreSubagent
-      // returns "CLI not found" immediately — hermetic, no real spawn — while
-      // still exercising the real def.url branch in restoreSubagent.
+      // resolveServerDef returns an HTTP def for "web". We now DO dispatch
+      // HTTP tools/call ourselves via callMcpToolHttp — no subagent. The
+      // endpoint is dead, so the in-process replay fails with a network error.
+      // Assert it took the replay path (NOT routed to a subagent prompt).
       const cfg = {
         ...DEFAULT_CONFIG, subagentMcpConfig: cfgPath,
         subagentRunner: "codex", subagentTimeoutSeconds: 5,
@@ -350,10 +349,11 @@ else if(m.id===3)process.stdout.write(JSON.stringify({jsonrpc:"2.0",id:3,result:
         liveRestore: false,
         recoveryMcpCalls: [{ server: "web", tool: "do_thing", args: { x: 1 } }],
       }), cfg);
-      // Routed to the subagent (failed only because the runner CLI is absent),
-      // NOT replayed locally and NOT via any binary.
-      assert.ok(!r.description.includes("replayed"), `HTTP must not be replayed locally, got: ${r.description}`);
-      assert.ok(/subagent/i.test(r.description), `expected subagent routing, got: ${r.description}`);
+      // Dispatched in-process: failed because the endpoint is dead, NOT
+      // deferred to a subagent prompt.
+      assert.equal(r.success, false);
+      assert.equal(r.subagentPrompt, undefined, `HTTP must be dispatched in-process, not routed to subagent: ${r.description}`);
+      assert.ok(/MCP replay|failed/i.test(r.description), `expected an in-process replay failure, got: ${r.description}`);
     } finally {
       fs.rmSync(W, { recursive: true, force: true });
     }

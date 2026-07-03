@@ -690,7 +690,7 @@ const IRREVERSIBLE_VERB =
 // DESTRUCTIVE verbs — always back up, even rendered as a link (some apps
 // delete via an <a>). These override the link-is-navigation rule below.
 const STRONG_MUTATING =
-  /\b(delete|remove|destroy|ban|purge|drop|wipe|erase|deactivate|revoke)\b/i;
+  /\b(delete|remove|destroy|ban|purge|drop|truncate|wipe|erase|deactivate|revoke)\b/i;
 // Affordances that only NAVIGATE / read — a click here changes nothing
 // persistent (login, links, pagination, sort/filter, expand/collapse,
 // dropdown options…).
@@ -721,12 +721,14 @@ export function isMutatingBrowserClick(input: Record<string, unknown>): boolean 
  * stays "escalate unless known-safe"). Local actions never reach here.
  *
  * Order matters — most reliable signal first:
- *   SQL arg            → read vs mutating decides (execute_sql etc.)
  *   read-verb name     → MCP get/list/view → ignore
- *   destructive verb   → back up (floor; no learned entry may suppress it)
+ *   destructive verb   → back up (floor; no learned entry may suppress it;
+ *                        scans tool name + UI fields AND the executable
+ *                        payloads — sql/command/query — so a DELETE/DROP on
+ *                        a never-explored server is still covered)
  *   PER-SERVER learned → judge against THIS server's lists only:
- *                        Non-Backup-ToolList → ignore; Backup-patterns → back
- *                        up (checked FIRST); Non-Backup-patterns → ignore
+ *                        Non-Backup-ToolList (read-only tool NAMES) → ignore;
+ *                        Backup-patterns (triggers over the payload) → back up
  *   FALLBACK (no profile / no match): LINK → ignore; mutating verb → back up;
  *                        otherwise → ignore (allowlist default)
  */
@@ -734,9 +736,9 @@ function isBackupWorthyRemote(ctx: HookContext, config?: SandboxConfig): boolean
   const toolName = ctx.tool_name;
   const input = (ctx.tool_input ?? {}) as Record<string, unknown>;
 
-  // A SQL/query arg is NOT special-cased — it flows through the per-server
-  // learned lists like any other action (its text is part of rawDesc below,
-  // matched against that server's Backup-/Non-Backup-patterns).
+  // A SQL/query arg is NOT special-cased — its text is part of rawDesc below,
+  // scanned by the destructive floor (STRONG_MUTATING) and by that server's
+  // learned Backup-patterns.
 
   // Arbitrary-code browser tools (browser_run_code_unsafe, browser_evaluate,
   // *_evaluate) carry their real action in a `code`/`function` arg, NOT the
@@ -767,17 +769,26 @@ function isBackupWorthyRemote(ctx: HookContext, config?: SandboxConfig): boolean
   ].filter(Boolean).map(String).join(" ").toLowerCase();
 
   // Destructive floor: a clearly destructive op ALWAYS backs up — no learned
-  // entry may suppress it (learned data is attacker-influenceable).
-  if (STRONG_MUTATING.test(desc)) return true;
+  // entry may suppress it (learned data is attacker-influenceable). Tested
+  // against BOTH strings: `desc` catches verbs in tool names / UI fields
+  // (underscores normalized, so `delete_file` matches), `rawDesc` catches
+  // verbs inside executable payloads (sql/command/query) so a DELETE / DROP /
+  // TRUNCATE on a never-explored server is still covered. rawDesc is NOT
+  // underscore-normalized, so identifiers like `dropped_items` cannot trip
+  // the \b-bounded verbs; a bare floor verb in a read-only query's string
+  // literal is the accepted (backup-only-direction) false positive.
+  if (STRONG_MUTATING.test(desc) || STRONG_MUTATING.test(rawDesc)) return true;
 
   // ── PER-SERVER learned judgment (primary path): map the action to its server
   //    and judge ONLY against THAT server's lists, in this fixed order:
   //      1. Non-Backup-ToolList (read-only tools) → skip
   //      2. Reverter check (a creation-only pattern with a deterministic
   //         reverter) → back up via the cheap no-agent path
-  //      3. Backup-patterns → back up   (before Non-Backup, so a write wearing
-  //         a read keyword like `INSERT … SELECT` still backs up)
-  //      4. Non-Backup-patterns → skip
+  //      3. Backup-patterns → back up
+  //    (There is deliberately NO keyword-level suppress step: the only learned
+  //    negative signal is the read-only TOOL list above, which is validated
+  //    against the live tool surface. A learned keyword that silently skipped
+  //    backups was the poisoning-prone direction and nothing emits it anymore.)
   //    Anything matching none falls through to the fallback, whose default for
   //    remote actions is NON-backup. ──
   try {
@@ -800,7 +811,6 @@ function isBackupWorthyRemote(ctx: HookContext, config?: SandboxConfig): boolean
       const pat = matchPattern(config, expName, toolName, rawDesc);
       if (pat?.reverter) return true;
       if (m.triggerRegex && m.triggerRegex.test(rawDesc)) return true;   // 3. Backup-patterns
-      if (m.noBackupRegex && m.noBackupRegex.test(rawDesc)) return false; // 4. Non-Backup-patterns
     }
   } catch { /* fall through to the generic verb-list fallback */ }
 
@@ -838,6 +848,16 @@ export function touchesOutsideWorkspace(ctx: HookContext, config?: SandboxConfig
   // known-safe" default. The allowlist is scoped to the MCP/browser surface
   // the exploration actually learned.
   if (isBrowserActuationTool(toolName) || toolName.startsWith("mcp__")) {
+    // ABLATION KNOB: CHATS_SANDBOX_NAIVE_GATE=1 models the NO-KNOWLEDGE
+    // baseline — no learned triggers, no floor, no verb heuristics. Escalate
+    // every remote action the hardcoded read-only NAME filter can't clear and
+    // let the backup subagent judge (its prompt already allows returning
+    // no_backup_needed:true, handled as a clean read-only skip). Fail-safe but
+    // expensive: unknown-verb tools (execute_sql) spawn on every call incl.
+    // reads — the cost the learned gate exists to remove.
+    if (process.env.CHATS_SANDBOX_NAIVE_GATE === "1") {
+      return !isReadOnlyMcpTool(toolName);
+    }
     return isBackupWorthyRemote(ctx, config);
   }
 

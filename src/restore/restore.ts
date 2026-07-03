@@ -16,7 +16,7 @@ import type { BackupArtifact, SandboxConfig } from "../types.js";
 import { listActions } from "../backup/manifest.js";
 import { invokeRestoreSubagent } from "../backup/subagent.js";
 import { serverFromToolName } from "../explore/experiences.js";
-import { callMcpTool } from "../explore/list_mcp_tools.js";
+import { callMcpTool, callMcpToolHttp } from "../explore/list_mcp_tools.js";
 
 // ── Types ────────────────────────────────────────────────────────────
 
@@ -320,16 +320,19 @@ async function restoreSubagent(
     for (const call of mcpCalls) {
       const server = call.server ?? fallbackServer;
       const def = resolveServerDef(server, config);
-      // No def, or an HTTP server: we don't dispatch HTTP tools/call from
-      // here — route the whole artifact to the restore subagent, which
-      // reverses through the same MCP via the runner. Fail safe: never a
-      // direct binary/shell for a remote action.
-      if (!def || def.url) {
+      // No def at all → route to the restore subagent (it reverses through
+      // the same MCP via the runner). Fail safe: never a direct binary/shell
+      // for a remote action.
+      if (!def) {
         return runRestoreSubagentPath(artifact, config,
           `Deterministic MCP replay needs the restore subagent ` +
-          `(${!def ? `server "${server ?? "?"}" unresolved` : "HTTP server"}), but config is unavailable in this call path`);
+          `(server "${server ?? "?"}" unresolved), but config is unavailable in this call path`);
       }
-      const r = await callMcpTool(def.command!, def.args ?? [], call.tool, call.args);
+      // HTTP server: dispatch the tools/call in-process via the HTTP MCP
+      // transport (Streamable HTTP), same as a STDIO replay — no subagent.
+      const r = def.url
+        ? await callMcpToolHttp(def.url, call.tool, call.args)
+        : await callMcpTool(def.command!, def.args ?? [], call.tool, call.args);
       if (!r.ok) {
         return {
           success: false,
@@ -343,6 +346,42 @@ async function restoreSubagent(
     return {
       success: true,
       description: `Subagent restore: replayed ${replayed.length} MCP call(s) — ${artifact.description}`,
+    };
+  }
+
+  // Deterministic SHELL reverter (e.g. `rmdir` for an MCP create_directory).
+  // The backup tier compiled this from a verified pattern and validated it
+  // structurally (non-empty, passes isDangerousRecoveryCommand, minimal
+  // inverse). Run it locally via execSync — do NOT route an MCP-named action
+  // here to the restore subagent just because its tool resolves to a server.
+  const recoveryCommands = artifact.recoveryCommands ?? [];
+  if (recoveryCommands.length > 0) {
+    const cwd = process.cwd();
+    const ran: string[] = [];
+    for (const cmd of recoveryCommands) {
+      if (isDangerousRecoveryCommand(cmd)) {
+        return {
+          success: false,
+          description:
+            `Refused a dangerous recovery command (possible injection) — backup kept for manual review: "${cmd.slice(0, 120)}"`,
+        };
+      }
+      try {
+        execSync(cmd, { encoding: "utf-8", timeout: 60_000, cwd, stdio: ["pipe", "pipe", "pipe"] });
+        ran.push(cmd);
+      } catch (e: unknown) {
+        const msg = e instanceof Error ? e.message : String(e);
+        return {
+          success: false,
+          description:
+            `Deterministic shell reverter partially executed (${ran.length}/${recoveryCommands.length}): ` +
+            `failed on "${cmd.slice(0, 80)}": ${msg.slice(0, 200)}`,
+        };
+      }
+    }
+    return {
+      success: true,
+      description: `Subagent restore: ran ${ran.length} deterministic shell reverter command(s) — ${artifact.description}`,
     };
   }
 

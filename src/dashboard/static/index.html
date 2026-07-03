@@ -355,7 +355,7 @@
   .bk-log-row .outcome.ok  { color: var(--success); }
   .bk-log-row .outcome.bad { color: var(--danger); }
 
-  /* Patterns tab — learned easy-win reversals (self-exploration).
+  /* Patterns tab — learned backup skill / reversals (self-exploration).
      One card per MCP server; verified patterns lead. */
   .pat-card { border: 1px solid var(--line); margin-bottom: 12px; }
   .pat-head { display: flex; align-items: baseline; gap: 8px; padding: 8px 12px; background: var(--bg-soft); border-bottom: 1px solid var(--line); }
@@ -1845,7 +1845,7 @@ async function livePoll() {
 setInterval(livePoll, LIVE_POLL_MS);
 document.addEventListener("visibilitychange", () => { if (!document.hidden) livePoll(); });
 
-// ── Patterns tab — learned easy-win reversals (self-exploration) ─────
+// ── Patterns tab — learned backup skill / reversals (self-exploration) ─────
 let expData = null;
 
 async function loadExperiences() {
@@ -1911,7 +1911,7 @@ function renderPatterns() {
         ${patBadge(p)}
         <div>
           <div class="pat-action">${escapeHtml(p.action || "")}</div>
-          <div class="pat-win"><span class="ew">EASY-WIN →</span>${escapeHtml(p.easy_win || "")}</div>
+          <div class="pat-win"><span class="ew">SKILL →</span>${escapeHtml(p.skill || p.easy_win || "")}</div>
           ${p.verify_note ? `<div class="pat-note">${escapeHtml(p.verify_note)}</div>` : ""}
         </div>
       </div>`).join("")}

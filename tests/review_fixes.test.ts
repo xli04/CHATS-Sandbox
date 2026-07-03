@@ -25,8 +25,8 @@ describe("extract_json — balanced, non-greedy", () => {
   it("picks the LAST verdict object, not a merged first-to-last span", () => {
     // An echoed proposal (no verified flag) followed by the real verdict.
     const raw =
-      'Here is the proposal: {"patterns":[{"action":"a","easy_win":"x"}]}\n' +
-      'Final: {"patterns":[{"action":"a","easy_win":"x","verified":true}]}';
+      'Here is the proposal: {"patterns":[{"action":"a","skill":"x"}]}\n' +
+      'Final: {"patterns":[{"action":"a","skill":"x","verified":true}]}';
     const obj = extractJsonObject<{ patterns: { verified?: boolean }[] }>(
       raw, (o) => !!o && typeof o === "object" && Array.isArray((o as { patterns?: unknown }).patterns));
     assert.ok(obj, "found a patterns object");
@@ -66,23 +66,24 @@ describe("execute_sql backup decision via the per-server learned lists", () => {
   const fsM = require("node:fs"), osM = require("node:os"), pathM = require("node:path");
   const { saveExperiences } = require("../src/explore/experiences.js");
   // A postgres profile like self-exploration produces: write verbs are
-  // Backup-patterns (triggers), read verbs are Non-Backup-patterns. execute_sql
-  // is deliberately NOT in readOnlyTools, so the SQL text drives the verdict.
+  // Backup-patterns (triggers). execute_sql is deliberately NOT in
+  // readOnlyTools, so the SQL text drives the verdict; read-only SQL matches
+  // no trigger and falls through to the no-backup default (there is no
+  // keyword-level suppress list anymore).
   function withPg(fn: (config: any) => void) {
     const root = fsM.mkdtempSync(pathM.join(osM.tmpdir(), "chats-sql-"));
     const config = { backupDir: pathM.join(root, ".chats-sandbox", "backups") } as any;
     saveExperiences(config, {
       server: "postgres", generated: "now", observed_tools: ["execute_sql"],
       patterns: ["insert", "update", "delete", "drop", "truncate", "alter", "create"]
-        .map((t) => ({ action: t, easy_win: "snapshot", trigger: t })),
-      noBackupPatterns: ["select", "show", "explain"],
+        .map((t) => ({ action: t, skill: "snapshot", trigger: t })),
     });
     try { fn(config); } finally { fsM.rmSync(root, { recursive: true, force: true }); }
   }
   const sqlCtx = (sql: string) =>
     ({ tool_name: "mcp__postgres__execute_sql", tool_input: { sql } } as unknown as HookContext);
 
-  it("read-only SQL → skip (matches a Non-Backup-pattern, no trigger)", () => withPg((config) => {
+  it("read-only SQL → skip (no trigger matches; no-backup default)", () => withPg((config) => {
     for (const s of ["SELECT count(*) FROM orders", "  select * from t", "SHOW TABLES",
       "EXPLAIN SELECT 1", "WITH x AS (SELECT 1) SELECT * FROM x"]) {
       assert.equal(touchesOutsideWorkspace(sqlCtx(s), config), false, s);
@@ -92,6 +93,18 @@ describe("execute_sql backup decision via the per-server learned lists", () => {
     for (const s of ["DELETE FROM orders WHERE id<=30", "UPDATE t SET x=1", "DROP TABLE t",
       "WITH x AS (SELECT 1) INSERT INTO t SELECT * FROM x", "SELECT * FROM t FOR UPDATE"]) {
       assert.equal(touchesOutsideWorkspace(sqlCtx(s), config), true, s);
+    }
+  }));
+  it("triggers are whole-word: timestamp columns don't fire on explored servers", () => withPg((config) => {
+    // Regression: with a leading-only \b, trigger `create` prefix-matched
+    // `created_at` and every read touching a timestamp column paid a
+    // spurious subagent spawn (observed live: delete-old-orders ablation run,
+    // SELECT MIN(created_at) fired a second backup).
+    for (const s of ["SELECT MIN(created_at), MAX(created_at) FROM orders",
+      "SELECT * FROM orders WHERE updated_at > now() - interval '1 day'",
+      "SELECT id FROM users WHERE deleted_at IS NULL",
+      "SELECT * FROM inserted_rows_log"]) {
+      assert.equal(touchesOutsideWorkspace(sqlCtx(s), config), false, s);
     }
   }));
 });
@@ -141,44 +154,55 @@ describe("browser-affordance over-fire fix — nav/login clicks skip, mutations 
   }
 });
 
-describe("learned read-only patterns (from self-exploration) extend the skip-list", () => {
-  const fs = require("node:fs"), os = require("node:os"), pathM = require("node:path");
-  const { saveExperiences } = require("../src/explore/experiences.js");
+describe("destructive floor scans executable payloads (rawDesc) — unexplored servers", () => {
+  // NO experience file in any of these: the floor is the only line of defense.
+  const sqlCtx = (sql: string) =>
+    ({ tool_name: "mcp__postgres__execute_sql", tool_input: { sql } } as unknown as HookContext);
   const click = (element: string) =>
     ({ tool_name: "mcp__playwright__browser_click", tool_input: { element, ref: "e1" } } as unknown as HookContext);
 
-  function withLearned(noBackupPatterns: string[], fn: (config: any) => void) {
-    const root = fs.mkdtempSync(pathM.join(os.tmpdir(), "chats-learned-"));
-    const config = { backupDir: pathM.join(root, ".chats-sandbox", "backups") } as any;
-    // File it under server "reddit" but declare appliesTo:["playwright"] — a
-    // website's experience whose browser tool resolves to "playwright". The
-    // per-server gate resolves playwright→reddit via this appliesTo mapping
-    // (serverToExperienceMap / experienceNameForServer) and applies its list.
-    saveExperiences(config, { server: "reddit", appliesTo: ["playwright"], generated: "now", observed_tools: [], patterns: [], noBackupPatterns });
-    try { fn(config); } finally { fs.rmSync(root, { recursive: true, force: true }); }
+  // Blatant destruction inside a payload arg → floor fires with zero learning.
+  for (const s of [
+    "DELETE FROM orders WHERE status = 'cancelled'",
+    "DROP TABLE legacy_metrics",
+    "TRUNCATE audit_log",
+    "drop table if exists t2",
+  ]) {
+    it(`destructive SQL on unexplored server → backs up: ${s.slice(0, 40)}`, () =>
+      assert.equal(touchesOutsideWorkspace(sqlCtx(s)), true));
   }
 
-  it("a learned read-only pattern overrides the irreversible-verb floor", () => {
-    // "save search" trips the floor ("save" is irreversible) → would back up...
-    assert.equal(touchesOutsideWorkspace(click("save search filter")), true);
-    // ...but if the env learned it's read-only, it's skipped.
-    withLearned(["save search"], (config) => {
-      assert.equal(touchesOutsideWorkspace(click("save search filter"), config), false);
-    });
-  });
+  // Reads stay free: no floor verb, no learned trigger, no-backup default.
+  // rawDesc is NOT underscore-normalized, so identifiers carrying a floor
+  // verb as a fragment (dropped_items, deleted_at) cannot trip \b-bounded
+  // verbs — only a BARE verb token fires.
+  for (const s of [
+    "SELECT count(*) FROM orders",
+    "SELECT * FROM dropped_items WHERE deleted_at IS NULL",
+    "EXPLAIN SELECT 1",
+    "WITH x AS (SELECT 1) SELECT * FROM x",
+  ]) {
+    it(`read-only SQL on unexplored server → skips: ${s.slice(0, 40)}`, () =>
+      assert.equal(touchesOutsideWorkspace(sqlCtx(s)), false));
+  }
 
-  it("SAFETY: a poisoned learned pattern can NOT clear a destructive verb", () => {
-    withLearned(["delete submission"], (config) => {
-      // Even though "delete submission" is (maliciously) in the learned list,
-      // STRONG_MUTATING overrides — it still backs up.
-      assert.equal(touchesOutsideWorkspace(click("delete submission button"), config), true);
-    });
-  });
+  // The DELIBERATE floor gap: UPDATE/INSERT-class verbs are too common for an
+  // unsuppressible floor — covering them is what self-exploration is FOR.
+  it("UPDATE on unexplored server → NOT floored (needs exploration)", () =>
+    assert.equal(touchesOutsideWorkspace(sqlCtx("UPDATE users SET tier='x' WHERE tier='free'")), false));
 
-  it("no config / no learned file → uses the hardcoded floor (toggle ignored, delete backs up)", () => {
-    assert.equal(touchesOutsideWorkspace(click("join community widget")), false);
-    assert.equal(touchesOutsideWorkspace(click("delete the widget")), true);
-  });
+  // Accepted false positive: a bare floor verb in a read-only query's string
+  // literal forces a backup (the floor only ever errs TOWARD backing up).
+  it("bare floor verb in a string literal → backs up (accepted FP)", () =>
+    assert.equal(touchesOutsideWorkspace(sqlCtx("SELECT * FROM audit_log WHERE action = 'delete'")), true));
+
+  // The two pre-existing floor surfaces still work: verbs in tool names
+  // (underscore-normalized desc) and in browser UI fields.
+  it("verb in tool name still floors (delete_file)", () =>
+    assert.equal(touchesOutsideWorkspace(
+      { tool_name: "mcp__filesystem__delete_file", tool_input: { path: "/x" } } as unknown as HookContext), true));
+  it("verb in UI element still floors (browser delete link)", () =>
+    assert.equal(touchesOutsideWorkspace(click("Delete submission link")), true));
 });
 
 describe("touchesOutsideWorkspace — cloud/IaC/pkg CLIs (fail-safe)", () => {
@@ -316,9 +340,9 @@ describe("renderExperiencesForPrompt — only verified, fenced as data", () => {
   const exp = {
     server: "reddit",
     patterns: [
-      { action: "vote", easy_win: "toggle", verified: true },
-      { action: "delete", easy_win: "soft-delete", verified: undefined },
-      { action: "create", easy_win: "remove", verified: false },
+      { action: "vote", skill: "toggle", verified: true },
+      { action: "delete", skill: "soft-delete", verified: undefined },
+      { action: "create", skill: "remove", verified: false },
     ],
   } as Parameters<typeof renderExperiencesForPrompt>[0];
 
@@ -336,7 +360,112 @@ describe("renderExperiencesForPrompt — only verified, fenced as data", () => {
   });
 
   it("returns empty when nothing is verified", () => {
-    const none = { server: "x", patterns: [{ action: "a", easy_win: "b", verified: false }] } as typeof exp;
+    const none = { server: "x", patterns: [{ action: "a", skill: "b", verified: false }] } as typeof exp;
     assert.equal(renderExperiencesForPrompt(none), "");
+  });
+});
+
+describe("matchPattern: MIXED-tool ambiguity — verb decides, not first-pattern", () => {
+  const fsM = require("node:fs"), osM = require("node:os"), pathM = require("node:path");
+  const { saveExperiences, matchPattern } = require("../src/explore/experiences.js");
+
+  // Mirror the real postgres experience shape: SEVEN per-verb patterns, ALL
+  // sharing applies_to "execute_sql", each with its own capture_tools. The
+  // old tool-identity shortcut handed EVERY SQL call the first (insert)
+  // pattern — so a DROP's subagent got insert's toolset while its playbook
+  // instructed get_object_details (observed live: unverified backup deaths).
+  function withMixedPg(fn: (config: any) => void) {
+    const root = fsM.mkdtempSync(pathM.join(osM.tmpdir(), "chats-match-"));
+    const config = { backupDir: pathM.join(root, ".chats-sandbox", "backups") } as any;
+    const mk = (trigger: string, capture_tools: string[], extra: any = {}) =>
+      ({ action: trigger, skill: `${trigger} skill`, trigger, applies_to: "execute_sql", capture_tools, verified: true, ...extra });
+    saveExperiences(config, {
+      server: "postgres", generated: "now", observed_tools: ["execute_sql", "get_object_details"],
+      patterns: [
+        mk("insert",   ["execute_sql"]),
+        mk("update",   ["execute_sql"]),
+        mk("delete",   ["execute_sql"]),
+        mk("drop",     ["get_object_details", "execute_sql"]),
+        mk("truncate", ["execute_sql"]),
+        mk("alter",    ["execute_sql"]),
+        mk("create",   ["execute_sql"]),
+      ],
+    });
+    try { fn(config); } finally { fsM.rmSync(root, { recursive: true, force: true }); }
+  }
+
+  it("DROP through execute_sql gets the drop pattern (with get_object_details)", () => withMixedPg((config) => {
+    const p = matchPattern(config, "postgres", "mcp__postgres__execute_sql", "drop table legacy_metrics");
+    assert.equal(p?.trigger, "drop");
+    assert.deepEqual(p?.capture_tools, ["get_object_details", "execute_sql"]);
+  }));
+  it("DELETE through execute_sql gets the delete pattern", () => withMixedPg((config) => {
+    const p = matchPattern(config, "postgres", "mcp__postgres__execute_sql", "delete from orders where x=1");
+    assert.equal(p?.trigger, "delete");
+  }));
+  it("SELECT through execute_sql matches nothing", () => withMixedPg((config) => {
+    const p = matchPattern(config, "postgres", "mcp__postgres__execute_sql", "select count(*) from orders");
+    assert.equal(p, null);
+  }));
+
+  it("UNIQUE applies_to still wins by tool identity (filesystem move_file)", () => {
+    const root = fsM.mkdtempSync(pathM.join(osM.tmpdir(), "chats-match-fs-"));
+    const config = { backupDir: pathM.join(root, ".chats-sandbox", "backups") } as any;
+    saveExperiences(config, {
+      server: "filesystem", generated: "now", observed_tools: ["move_file", "write_file"],
+      patterns: [
+        { action: "write", skill: "w", trigger: "write", applies_to: "write_file", capture_tools: ["read_text_file"], verified: true },
+        { action: "move",  skill: "m", trigger: "move",  applies_to: "move_file", verified: true },
+      ],
+    });
+    try {
+      // tool identity resolves move_file even though rawDesc carries no verb
+      const p = matchPattern(config, "filesystem", "mcp__filesystem__move_file", "mcp__filesystem__move_file /a /b");
+      assert.equal(p?.trigger, "move");
+    } finally { fsM.rmSync(root, { recursive: true, force: true }); }
+  });
+});
+
+describe("reconcileCaptureTools: skill prose tools must be in capture_tools", () => {
+  const { reconcileCaptureTools } = require("../self-exploration/tree_generation.js");
+  const LIVE = ["execute_sql", "get_object_details", "list_directory", "list_directory_with_sizes"];
+
+  it("widens capture_tools with a live tool the recipe references", () => {
+    const p: any = { action: "drop", trigger: "drop", skill: "capture via get_object_details then execute_sql", capture_tools: ["execute_sql"] };
+    reconcileCaptureTools(p, LIVE);
+    assert.deepEqual(p.capture_tools, ["execute_sql", "get_object_details"]);
+  });
+  it("identifier boundaries: list_directory does NOT match inside list_directory_with_sizes", () => {
+    const p: any = { action: "x", skill: "use list_directory_with_sizes to scan", capture_tools: ["execute_sql"] };
+    reconcileCaptureTools(p, LIVE);
+    assert.deepEqual(p.capture_tools, ["execute_sql", "list_directory_with_sizes"]);
+  });
+  it("no capture_tools declared → no-op (subagent runs unfiltered)", () => {
+    const p: any = { action: "x", skill: "use get_object_details" };
+    reconcileCaptureTools(p, LIVE);
+    assert.equal(p.capture_tools, undefined);
+  });
+});
+
+describe("CHATS_SANDBOX_NAIVE_GATE: no-knowledge baseline escalates by default", () => {
+  const sqlCtx = (sql: string) =>
+    ({ tool_name: "mcp__postgres__execute_sql", tool_input: { sql } } as unknown as HookContext);
+  function withNaiveGate(fn: () => void) {
+    process.env.CHATS_SANDBOX_NAIVE_GATE = "1";
+    try { fn(); } finally { delete process.env.CHATS_SANDBOX_NAIVE_GATE; }
+  }
+
+  it("unknown-verb MCP tool escalates on EVERY call — even a SELECT (subagent judges)", () => withNaiveGate(() => {
+    assert.equal(touchesOutsideWorkspace(sqlCtx("SELECT count(*) FROM orders")), true);
+    assert.equal(touchesOutsideWorkspace(sqlCtx("DELETE FROM orders WHERE x=1")), true);
+  }));
+  it("read-only-by-NAME tools still skip", () => withNaiveGate(() => {
+    for (const t of ["mcp__postgres__list_schemas", "mcp__postgres__get_object_details",
+      "mcp__filesystem__read_text_file", "mcp__playwright__browser_snapshot"]) {
+      assert.equal(touchesOutsideWorkspace({ tool_name: t, tool_input: {} } as unknown as HookContext), false, t);
+    }
+  }));
+  it("knob off → learned/allowlist gate unchanged (SELECT skips without spawning)", () => {
+    assert.equal(touchesOutsideWorkspace(sqlCtx("SELECT count(*) FROM orders")), false);
   });
 });

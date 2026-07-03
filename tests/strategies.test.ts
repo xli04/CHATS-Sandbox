@@ -2,7 +2,7 @@
  * Tests for backup strategies (backup/strategies.ts).
  */
 
-import { describe, it, beforeEach } from "node:test";
+import { describe, it, beforeEach, after } from "node:test";
 import assert from "node:assert/strict";
 import * as fs from "node:fs";
 import * as path from "node:path";
@@ -14,8 +14,19 @@ function makeCtx(toolName: string, toolInput: Record<string, unknown>): HookCont
   return { hook_event: "PreToolUse", tool_name: toolName, tool_input: toolInput };
 }
 
+// Every tmpConfig dir is tracked and swept in after() — several tests snapshot
+// real repo state into these (up to ~100MB each), and leaking them filled the
+// host's root filesystem before this cleanup existed.
+const _tmpDirs: string[] = [];
+after(() => {
+  for (const d of _tmpDirs) {
+    try { fs.rmSync(d, { recursive: true, force: true }); } catch { /* best effort */ }
+  }
+});
+
 function tmpConfig(): SandboxConfig {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "chats-sandbox-test-"));
+  _tmpDirs.push(dir);
   return { ...DEFAULT_CONFIG, backupDir: path.join(dir, "backups"), maxActions: 5 };
 }
 
@@ -85,15 +96,28 @@ describe("backup strategies", () => {
   });
 
   it("unknown command falls back to git_snapshot", () => {
-    const config = tmpConfig();
-    const result = runBackup(makeCtx("Bash", { command: "make build" }), config);
-    const snapshot = result.artifacts.find((a) => a.strategy === "git_snapshot");
-    // git snapshot may or may not succeed depending on cwd state,
-    // but at minimum needsSubagent should be set if nothing worked
-    assert.ok(
-      snapshot || result.needsSubagent,
-      "Expected either git_snapshot or needsSubagent=true"
-    );
+    // Hermetic workspace: runBackup snapshots process.cwd(), and running this
+    // against the live (multi-GB) repo made the snapshot slow/flaky. A fresh
+    // one-file git repo makes the contract deterministic and lets us assert
+    // the snapshot STRICTLY instead of "snapshot or needsSubagent".
+    const { execSync } = require("node:child_process");
+    const ws = fs.mkdtempSync(path.join(os.tmpdir(), "chats-sandbox-ws-"));
+    const prevCwd = process.cwd();
+    try {
+      execSync(
+        'git init -q && git config user.email t@x && git config user.name t' +
+        ' && echo hi > f.txt && git add -A && git commit -qm init',
+        { cwd: ws },
+      );
+      process.chdir(ws);
+      const config = tmpConfig();
+      const result = runBackup(makeCtx("Bash", { command: "make build" }), config);
+      const snapshot = result.artifacts.find((a) => a.strategy === "git_snapshot");
+      assert.ok(snapshot, "Expected a git_snapshot artifact in a clean git workspace");
+    } finally {
+      process.chdir(prevCwd);
+      fs.rmSync(ws, { recursive: true, force: true });
+    }
   });
 
   it("writes metadata.json in action folder", () => {

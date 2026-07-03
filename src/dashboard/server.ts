@@ -906,7 +906,7 @@ function handleGetFile(
 }
 
 /**
- * GET /api/experiences — learned easy-win reversal patterns per MCP
+ * GET /api/experiences — learned backup skill (reversal patterns) per MCP
  * server (written by `chats-sandbox explore` into
  * .chats-sandbox/experiences/<server>.json), plus whether an explore
  * child process is currently running.

@@ -169,6 +169,34 @@ export function parseReadOnlyTools(raw: string, tools: string[]): string[] {
   return out;
 }
 
+/** GENERATION-TIME consistency invariant: every LIVE tool a pattern's own
+ *  skill/recipe prose references must appear in its capture_tools. The runtime
+ *  narrows the backup subagent's tool schema to capture_tools, so a recipe
+ *  step naming an excluded tool is an instruction the subagent physically
+ *  cannot follow (observed live: the DROP playbook told the subagent to call
+ *  get_object_details while tools.include held only execute_sql — it flailed
+ *  and died unverified). Matching is EXACT against the live tool list with
+ *  identifier boundaries (list_directory does not match inside
+ *  list_directory_with_sizes) — no free-text guessing. Only WIDENS
+ *  capture_tools, never removes; no-op when the pattern declares no
+ *  capture_tools (the subagent runs unfiltered — nothing to contradict). */
+export function reconcileCaptureTools(p: VerdictPattern, liveTools: string[]): void {
+  if (!p.capture_tools || !p.capture_tools.length) return;
+  const prose = `${p.skill ?? ""}\n${p.recipe ?? ""}`.toLowerCase();
+  if (!prose.trim()) return;
+  const have = new Set(p.capture_tools.map((t) => t.toLowerCase()));
+  for (const tool of liveTools) {
+    const lc = tool.toLowerCase();
+    if (lc.length < 3 || have.has(lc)) continue;
+    const esc = lc.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    if (new RegExp(`(^|[^a-z0-9_])${esc}([^a-z0-9_]|$)`).test(prose)) {
+      p.capture_tools.push(tool);
+      have.add(lc);
+      if (p.capture_tools.length >= 6) break;  // sanity bound, mirrors the parse cap
+    }
+  }
+}
+
 /** The parsed result of stage 1. */
 export interface Proposal {
   candidates: VerdictPattern[];
@@ -198,6 +226,9 @@ export function proposePatterns(
     candidates = proposalText ? parsePatterns(proposalText) : null;
     if (!candidates || !candidates.length) process.stderr.write(`  [${server}] stage-1 attempt ${attempt + 1} unparseable — retrying\n`);
   }
+  // Consistency invariant: capture_tools must cover every live tool the
+  // pattern's own skill/recipe prose instructs the subagent to use.
+  for (const c of candidates ?? []) reconcileCaptureTools(c, tools);
   return {
     candidates: candidates ?? [],
     // Read-only TOOLS: the explorer's pick of which provided tools never mutate

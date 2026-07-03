@@ -466,8 +466,13 @@ export function buildBackupGuidance(opts: BackupGuidanceOpts): string {
 
   // Inject the learned backup SKILL for this MCP server (from
   // `chats-sandbox explore`). Prefer-cheap-reversal guidance.
+  // ABLATION KNOB: CHATS_SANDBOX_NO_EXP_INJECT=1 suppresses ONLY this prompt
+  // block. Everything else the experience file drives — the gate's learned
+  // triggers, deterministic reverters, capture_tools tool-narrowing — stays
+  // active, so an ablation can isolate the value of the injected knowledge
+  // itself (arms differ in the subagent prompt and nothing else).
   let experienceBlock = "";
-  if (config) {
+  if (config && process.env.CHATS_SANDBOX_NO_EXP_INJECT !== "1") {
     try {
       const { loadExperiences, renderExperiencesForPrompt, serverToExperienceMap } =
         require("../explore/experiences.js");

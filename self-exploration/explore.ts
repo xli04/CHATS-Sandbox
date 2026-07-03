@@ -183,8 +183,6 @@ export function runExplore(
         server: expName, generated: nowIso, observed_tools: tools, patterns: mergedPatterns,
         ...(mergedReadOnlyTools.length ? { readOnlyTools: mergedReadOnlyTools } : {}),
         ...(appliesTo.length ? { appliesTo } : {}),
-        // PRESERVE learned fields this pipeline does not (re)produce.
-        ...(prior?.noBackupPatterns?.length ? { noBackupPatterns: prior.noBackupPatterns } : {}),
       };
       const playbook = assemblePlaybook(expName, mergedPatterns);
       if (playbook) data.skill = playbook;
